@@ -41,6 +41,7 @@ function costLine(u) {
 }
 
 let status = { hasKey: false };
+let isDesktop = false; // set from /api/settings — wording for "restart" differs in the desktop app
 
 // ------------------------------------------------------------------ toasts + undo
 
@@ -170,6 +171,7 @@ async function openSettings() {
   settingsDlg.showModal();
   $("#keyMsg").textContent = "";
   const s = await getJSON("/api/settings");
+  isDesktop = s.desktop;
   $("#settingsLocalOnly").classList.toggle("hidden", s.canEditSettings);
   $$("#settings input, #settings button:not(#closeSettings):not(#diagBtn)").forEach((el) => (el.disabled = !s.canEditSettings));
   $("#budgetInput").value = s.budget ?? "";
@@ -181,12 +183,14 @@ async function openSettings() {
     Google searches this month: <b>${s.groundedThisMonth}</b> of ${s.freeGrounded.toLocaleString()} free · AI model ${esc(s.model)}${s.fallbackModel ? `, backup ${esc(s.fallbackModel)}` : ""} · key ${s.hasKey ? "saved ✓" : "not set"}`;
   $("#shareMsg").innerHTML = s.shareActive
     ? `Sharing is on. On the other computer or phone open: ${s.lanUrls.map((u) => `<b>${esc(u)}</b>`).join(" or ")}`
-    : s.share ? `<span class="bad">Sharing is set but not active. Restart the bot (and make sure a PIN is saved).</span>` : "";
+    : s.share ? `<span class="bad">Sharing is set but not active. ${s.desktop ? "Quit and reopen the app" : "Restart the bot"} (and make sure a PIN is saved).</span>` : "";
+  $("#dataFolderBox").innerHTML = `Your data and settings: <code>${esc(s.dataFolder)}</code>`;
+  $("#openDataBtn").classList.toggle("hidden", !s.canEditSettings);
   loadHealth();
   getJSON("/api/version").then((v) => {
     const latest = (v.changelog.split(/\n(?=## )/)[1] || "").trim();
     $("#versionBox").innerHTML = `Card Research Bot <b>${esc(v.version)}</b>${latest ? `<details><summary>What's new</summary>${md(latest)}</details>` : ""}
-      <p class="small muted">To update: download the newest ZIP from GitHub and copy your <code>data</code> folder and <code>.env</code> file into it (or run <code>git pull</code> if you cloned it).</p>`;
+      <p class="small muted">To update: download and run the newest installer from <a href="https://github.com/Jdemasse-Urm/card-research-bot/releases/latest" target="_blank" rel="noopener">Releases</a> — your data and settings are kept.</p>`;
   });
 }
 async function loadHealth() {
@@ -204,7 +208,8 @@ $("#closeSettings").onclick = () => settingsDlg.close();
 async function saveSettings(body, msgEl) {
   const r = await fetch("/api/settings", json("POST", body));
   const j = await r.json();
-  msgEl.innerHTML = j.ok ? (j.restartNeeded ? "Saved ✓ — close the bot window and start it again to apply." : "Saved ✓") : `<span class="bad">${esc(j.error)}</span>`;
+  const restart = isDesktop ? "quit the app and open it again to apply." : "close the bot window and start it again to apply.";
+  msgEl.innerHTML = j.ok ? (j.restartNeeded ? `Saved ✓ — ${restart}` : "Saved ✓") : `<span class="bad">${esc(j.error)}</span>`;
   await refreshStatus();
   return j.ok;
 }
@@ -226,6 +231,7 @@ $("#restoreFile").onchange = async (e) => {
   }
   e.target.value = "";
 };
+$("#openDataBtn").onclick = () => fetch("/api/open-data-folder", { method: "POST" });
 $("#diagBtn").onclick = async () => {
   const text = await (await fetch("/api/diagnostics")).text();
   try { await navigator.clipboard.writeText(text); toast("Diagnostics copied — paste them in a message to get help (no keys included)."); }

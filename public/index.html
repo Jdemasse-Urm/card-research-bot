@@ -260,7 +260,7 @@
 
       <section class="set-block">
         <h3>Share on home network</h3>
-        <p class="small">Let your other computer or phone use this bot and its data in a browser. Needs a PIN; restart the bot after changing.</p>
+        <p class="small">Let your other computer or phone use this bot and its data in a browser. Needs a PIN; reopen the app after changing.</p>
         <div class="row" style="margin-top:.3rem">
           <label class="check" style="margin:0"><input type="checkbox" id="shareToggle" /> Share</label>
           <input id="pinInput" type="password" inputmode="numeric" maxlength="8" placeholder="4–8 digit PIN" style="width:150px" aria-label="PIN" />
@@ -277,10 +277,12 @@
       <section class="set-block">
         <h3>Backup &amp; help</h3>
         <p class="small muted" style="margin:.2rem 0">The bot also saves an automatic backup every day (last 14 kept) in <code>data/backups</code>.</p>
+        <p class="small" id="dataFolderBox" style="margin:.2rem 0"></p>
         <div class="row" style="margin-top:.3rem">
           <a class="button" href="/api/backup">⬇ Download backup</a>
           <label class="button" for="restoreFile">⬆ Restore from backup</label>
           <input type="file" id="restoreFile" accept="application/json,.json" hidden />
+          <button id="openDataBtn" class="ghost">📂 Open data folder</button>
           <button id="diagBtn" class="ghost">📋 Copy diagnostics</button>
         </div>
         <div id="restoreMsg" class="small" role="status"></div>

@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.1.0 — real desktop app
+- **Card Research Bot is now a desktop app**: its own window, Desktop / Start-menu / Dock icon, no browser tab and
+  no black console window. Windows installer (`.exe`) and Mac disk image (`.dmg`, Apple Silicon + Intel).
+- Your data and settings now live in your user folder (Windows `%APPDATA%\Card Research Bot`, Mac
+  `~/Library/Application Support/Card Research Bot`), so installing a new version keeps everything.
+  **Settings → Open data folder** shows it.
+- Links open in your normal browser; Help menu has "Open data folder" and "Releases".
+- Both apps are built and smoke-tested automatically on GitHub for every release.
+- The 3.0.1 zip downloads and their start scripts are retired — the installers replace them.
+
 ## 3.0.1 — one-click downloads
 - Separate **Windows** and **Mac** downloads on GitHub Releases, each with Node.js built in — nothing to install,
   just unzip and double-click. The Mac download runs on both Apple Silicon and Intel Macs (macOS 11+).

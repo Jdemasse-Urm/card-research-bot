@@ -1,12 +1,12 @@
-// Card Research Bot — local web app. Run `npm start`, then open http://localhost:3737
-import "dotenv/config";
+// Card Research Bot — the app's local web server. The desktop app (electron/main.js) runs it inside its
+// window; developers can also run `npm start` and open http://localhost:3737 in a browser.
+import { APP_DIR, ENV_PATH, HOME } from "./lib/env.js"; // first: loads settings for everything else
 import express from "express";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 
 import { hasKey, resetClient, explainError, MODEL, FALLBACK_MODEL, monthlyBudget, FREE_GROUNDED_PER_MONTH } from "./lib/ai.js";
 import { cardLookup, hotCards, ask, lotLookup, writeListing, slabCheck, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
@@ -18,8 +18,8 @@ import * as onepiece from "./lib/sources/onepiece.js";
 import * as psa from "./lib/sources/psa.js";
 import * as ebay from "./lib/sources/ebay.js";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const ENV_PATH = path.join(here, ".env");
+const here = APP_DIR;
+const DESKTOP = process.env.CARD_BOT_DESKTOP === "1";
 const VERSION = JSON.parse(fs.readFileSync(path.join(here, "package.json"), "utf8")).version;
 const WANT_PORT = Number(process.env.PORT) || 3737;
 let PORT = WANT_PORT;
@@ -259,8 +259,18 @@ app.get("/api/settings", (req, res) => {
     ebay: ebay.hasKeys(),
     dailyBrief: process.env.CARD_BOT_DAILY_BRIEF === "1",
     port: PORT,
+    desktop: DESKTOP,
+    dataFolder: HOME,
     canEditSettings: isLoopback(req.socket.remoteAddress),
   });
+});
+
+// Open the folder holding data/ and .env in Explorer / Finder (this computer only).
+app.post("/api/open-data-folder", (req, res) => {
+  if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
+  const opener = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+  execFile(opener, [HOME], () => {});
+  res.json({ ok: true, folder: HOME });
 });
 
 app.post("/api/settings", (req, res) => {
@@ -347,7 +357,8 @@ app.get("/api/diagnostics", (_req, res) => {
         `Card Research Bot ${VERSION}`,
         `Node ${process.version} · ${process.platform} ${os.release()} · ${os.arch()}`,
         `Model ${MODEL} (fallback ${FALLBACK_MODEL || "off"}) · Gemini key ${hasKey() ? "set" : "missing"} · PSA ${psa.hasToken() ? "set" : "no"} · eBay ${ebay.hasKeys() ? "set" : "no"}`,
-        `Port ${PORT} · sharing ${SHARE ? "on" : "off"} · uptime ${Math.round(process.uptime() / 60)} min`,
+        `Port ${PORT} · sharing ${SHARE ? "on" : "off"} · ${DESKTOP ? "desktop app" : "from source"} · uptime ${Math.round(process.uptime() / 60)} min`,
+        `Data folder ${HOME}`,
         `Data: ${JSON.stringify(counts)}`,
         "",
         "Recent log:",
@@ -948,16 +959,24 @@ setInterval(hourly, 3600000);
 
 // ---------------- start (tries the next port if 3737 is busy) ----------------
 
+// Resolves with the port once the server is listening (the desktop window waits for this).
+let markReady, markFailed;
+export const ready = new Promise((resolve, reject) => {
+  markReady = resolve;
+  markFailed = reject;
+});
+
 function start(port, triesLeft) {
   const server = app.listen(port, SHARE ? "0.0.0.0" : "127.0.0.1", () => {
     PORT = port;
+    markReady(PORT);
     const url = `http://localhost:${PORT}`;
     console.log(`\n  Card Research Bot ${VERSION} is running → ${url}`);
     if (PORT !== WANT_PORT) console.log(`  (port ${WANT_PORT} was busy — maybe the bot is already open in another window — so using ${PORT})`);
     if (SHARE) console.log(`  Shared on your home network (PIN required): ${lanUrls().join("  ")}`);
     if (process.env.SHARE_ON_NETWORK === "1" && !SHARE) console.log("  Network sharing is ON but no ACCESS_PIN is set — staying local only.");
-    console.log("  (leave this window open; close it to stop the bot)\n");
-    if (process.env.NO_BROWSER !== "1") {
+    if (!DESKTOP) console.log("  (leave this window open; close it to stop the bot)\n");
+    if (process.env.NO_BROWSER !== "1" && !DESKTOP) {
       const cmd = process.platform === "win32" ? `start "" "${url}"` : process.platform === "darwin" ? `open "${url}"` : `xdg-open "${url}"`;
       exec(cmd, () => {});
     }
@@ -966,7 +985,8 @@ function start(port, triesLeft) {
     if (err.code === "EADDRINUSE" && triesLeft > 0) start(port + 1, triesLeft - 1);
     else {
       console.error(`Couldn't start the web server: ${err.message}`);
-      process.exit(1);
+      markFailed(err);
+      if (!DESKTOP) process.exit(1);
     }
   });
 }

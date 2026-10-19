@@ -1,0 +1,76 @@
+# Builds the desktop apps when a version tag (v*) is pushed, smoke-tests each packaged app,
+# and attaches the Windows installer + Mac .dmg to that tag's GitHub Release.
+# The Mac app must be built on a Mac (signing + .dmg), which is why this runs on GitHub's runners.
+name: Desktop release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v3.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Create the release if it doesn't exist yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Card Research Bot ${TAG#v}" --notes-file .github/release-notes.md --latest
+
+  build:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+            app: dist/win-unpacked/Card Research Bot.exe
+            files: dist/*.exe
+          - os: macos-latest
+            target: --mac
+            app: dist/mac-universal/Card Research Bot.app/Contents/MacOS/Card Research Bot
+            files: dist/*.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: npx electron-builder ${{ matrix.target }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Smoke test the packaged app
+        shell: bash
+        run: |
+          "${{ matrix.app }}" --smoke-test
+      - name: Check the Mac app is signed (ad-hoc) so Apple Silicon will open it
+        if: runner.os == 'macOS'
+        run: |
+          codesign --verify --deep --strict --verbose=2 "dist/mac-universal/Card Research Bot.app"
+          codesign -dv "dist/mac-universal/Card Research Bot.app" 2>&1 | grep -E "Signature|Format"
+          lipo -archs "dist/mac-universal/Card Research Bot.app/Contents/MacOS/Card Research Bot"
+      - name: Attach to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" ${{ matrix.files }} --clobber

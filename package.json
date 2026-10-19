@@ -1,22 +1,75 @@
 {
   "name": "card-research-bot",
-  "version": "3.0.1",
+  "productName": "Card Research Bot",
+  "version": "3.1.0",
   "description": "AI trading card research bot: drop a card photo, get recent sold prices, grading math, and the hottest cards by day/week/month.",
+  "author": "Joseph DeMasse",
   "private": true,
   "type": "module",
-  "main": "server.js",
+  "main": "electron/main.js",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
+    "app": "electron .",
     "start": "node server.js",
     "check": "node scripts/check-sources.js",
-    "selftest": "node lib/selftest.js"
+    "selftest": "node lib/selftest.js",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:mac": "electron-builder --mac --publish never"
   },
   "dependencies": {
     "@google/genai": "^2.30.0",
     "cheerio": "^1.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "electron": "44.5.0",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "com.cardresearchbot.app",
+    "productName": "Card Research Bot",
+    "copyright": "Card Research Bot",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "server.js",
+      "lib/**",
+      "electron/**",
+      "public/**",
+      "CHANGELOG.md",
+      "package.json"
+    ],
+    "asar": true,
+    "publish": null,
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Card Research Bot",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "CardResearchBot-Setup-${version}-Windows.${ext}"
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["universal"] }],
+      "category": "public.app-category.business",
+      "icon": "build/icon.png",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "artifactName": "CardResearchBot-${version}-Mac.${ext}",
+      "title": "Card Research Bot"
+    }
   }
 }

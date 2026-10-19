@@ -43,36 +43,39 @@ Covers baseball, basketball, football, Yu-Gi-Oh and One Piece — plus Pokémon,
 | Live listings for the deal finder (optional) | eBay Browse API |
 | Every card in a set | SportsCardsPro.com / PriceCharting.com set pages |
 
-## Download (easiest)
+## Download
 
 Go to **[Releases](../../releases/latest)** and download the one for your computer:
 
-- **Windows:** `CardResearchBot-x.y.z-Windows.zip` → right-click → **Extract All** → open the folder →
-  double-click **`start-windows.bat`**. (If Windows says "Windows protected your PC": **More info → Run anyway**.)
-- **Mac:** `CardResearchBot-x.y.z-Mac.zip` → double-click to unzip → open the folder → **right-click
-  `start-mac.command` → Open → Open** (first time only; after that a double-click works). Works on Apple Silicon and
-  Intel Macs, macOS 11 or newer.
+- **Windows:** `CardResearchBot-Setup-x.y.z-Windows.exe` → double-click. If Windows says "Windows protected your PC":
+  **More info → Run anyway**. It installs in seconds and adds **Card Research Bot** to your Desktop and Start menu.
+- **Mac** (Apple Silicon or Intel, macOS 11+): `CardResearchBot-x.y.z-Mac.dmg` → double-click → drag
+  **Card Research Bot** into **Applications**. First time: **right-click the app → Open → Open**. If macOS says it
+  "is damaged", run `xattr -cr "/Applications/Card Research Bot.app"` in Terminal and open it again.
 
-Node.js is built into both downloads — **nothing else to install.** Each zip has a `README-FIRST.txt`.
-
-Then get a **free Gemini API key** at <https://aistudio.google.com/apikey> (sign in with Google → **Create API key**)
-and paste it in the app's **⚙ Settings**.
+Then get a **free Gemini API key** at <https://aistudio.google.com/apikey> (sign in with Google → **Create API key**),
+paste it in the app's **⚙ Settings**, and click **🩺 Run self-test**.
 
 *(Optional)* **PSA token** — free at <https://www.psacard.com/publicapi/documentation> — for slab checks, population
 and grading progress. **eBay keys** — free at <https://developer.ebay.com/my/keys> (Production keyset: App ID +
 Cert ID) — for the deal finder. Paste them in **Settings → Optional connections**.
 
-## Running from source (developers)
+**Updating:** install the new version over the old one — your data and settings are kept. They live in
+`%APPDATA%\Card Research Bot` (Windows) or `~/Library/Application Support/Card Research Bot` (Mac);
+**Settings → Open data folder** takes you there.
 
-Install Node.js 20+ from <https://nodejs.org>, clone this repo, then double-click `start-windows.bat` /
-`start-mac.command` (they run `npm install` the first time) or run `npm install && npm start`.
-To build the release zips: `python scripts/build_release.py <folder with verified Node.js downloads> dist`.
+## For developers
 
-## First start
+```
+npm install
+npm run app        # desktop app from source
+npm start          # just the server; open http://localhost:3737 in a browser
+npm run selftest   # data sources + Gemini key + Google Search + one full lookup
+npm run dist:win   # build the Windows installer into dist/
+```
 
-Your browser opens **http://localhost:3737** (if that port is busy, the next free one).
-Click **⚙ Settings**, paste your Gemini key, then click **🩺 Run self-test** to confirm everything works. Keep the black terminal window open while you use the bot; close it
-to stop.
+Releases: push a tag like `v3.2.0` — GitHub Actions (`.github/workflows/release.yml`) builds the Windows installer on
+Windows and the Mac `.dmg` on macOS, smoke-tests both packaged apps, and attaches them to the release.
 
 ## Cost
 
@@ -110,22 +113,13 @@ shows on the phone, enter the PIN, then use **Share → Add to Home Screen** (iP
   backups automatically in `data/backups`.
 - Something wrong? **Settings → Copy diagnostics** and paste it in a message (it never includes your keys).
 
-## Options (`.env` file)
+## Options (`.env` file in your data folder)
 
-See `.env.example`: port, model (e.g. `gemini-3.5-flash-lite` for faster/cheaper), monthly budget, sharing.
+See `.env.example`: port, model (e.g. `gemini-3.5-flash-lite` for faster/cheaper), monthly budget, sharing,
+morning brief. Most of these are also in **Settings**.
 
 ## Your data
 
-Everything stays on your computer in the `data/` folder. The API key is in `.env`. Neither is uploaded to GitHub.
-
-## Check that everything works
-
-```
-npm run selftest     # data sources + Gemini key + Google Search + one full lookup
-npm run check        # just the free data sources
-```
-
-## Updating
-
-Download the newest ZIP, then copy your old `data` folder and `.env` file into the new folder (or `git pull` if you
-cloned it). See `CHANGELOG.md` for what changed.
+Everything stays on your computer in your data folder (**Settings → Open data folder**): `data/` holds your
+inventory, lookups, watchlist and backups, `.env` holds your keys. Your inventory and keys never leave your computer;
+card searches go to the price sites (and PSA/eBay if connected), and photos/questions go to Google Gemini for research.

@@ -3,6 +3,7 @@
 "use strict";
 
 const STATUS_LABEL = { in_stock: "In stock", listed: "Listed", grading: "At grading", sold: "Sold" };
+window.STATUS_LABEL = STATUS_LABEL;
 const SELL_PLATFORMS = ["eBay", "TCGplayer", "Whatnot", "Facebook", "Card show", "Local / cash", "Other"];
 const EXPENSE_KINDS = ["Supplies", "Shipping", "Grading", "Card show / table", "Fees", "Travel", "Software", "Other"];
 const COMPANIES = ["PSA", "BGS", "SGC", "CGC", "TAG", "Other"];
@@ -32,10 +33,25 @@ function lineChart(points, { valueKey = "value", costKey = "cost", label = "Port
 // ------------------------------------------------------------------ HOME dashboard
 
 async function loadDashboard() {
-  const d = await getJSON("/api/dashboard");
+  const [d, att, adv] = await Promise.all([getJSON("/api/dashboard"), getJSON("/api/attention").catch(() => null), getJSON("/api/advice").catch(() => null)]);
   const p = d.portfolio;
   const unreal = p.value - p.cost;
-  $("#dash").innerHTML = `
+  const steps = [
+    ["Add your free Gemini key", status.hasKey, () => openSettings()],
+    ["Run the self-test", store.get("selftestDone"), () => { openSettings(); setTimeout(() => $("#selftestBtn")?.scrollIntoView(), 300); }],
+    ["Research your first card", d.recent.length > 0, () => goTab("lookup")],
+    ["Add a card to inventory", p.cards > 0, () => openItemEditor()],
+  ];
+  const welcome = !store.get("welcomeDone") && steps.some(([, done]) => !done)
+    ? `<div class="panel welcome"><div class="row space" style="margin:0"><h2 style="margin:0">Welcome 👋 — four steps to get going</h2><button class="ghost small" id="welcomeDismiss">Hide</button></div>
+       <ol class="steps">${steps.map(([t, done], i) => `<li class="${done ? "done" : ""}"><button class="ghost" data-step="${i}">${done ? "✓" : i + 1 + "."} ${esc(t)}</button></li>`).join("")}</ol></div>` : "";
+  const attention = att && (att.items.length || att.unpriced || att.staleValues)
+    ? `<div class="panel"><h3 style="margin-top:0">Needs attention</h3>
+       ${att.items.slice(0, 8).map((it) => `<div class="att-row"><span class="chip ${it.type === "value_drop" ? "bad" : "warn"}">${esc({ stale_listing: "Stale listing", unlisted_long: "Not listed", value_drop: "Value drop" }[it.type])}</span><span><b>${esc(it.name)}</b> <span class="muted small">${esc(it.grade)}</span><div class="small">${esc(it.text)}</div></span>${it.suggested ? `<button class="small" data-drop="${esc(it.id)}" data-price="${it.suggested}">Set ${usd(it.suggested)}</button>` : ""}</div>`).join("")}
+       ${att.unpriced ? `<div class="att-row"><span class="chip">Unpriced</span><span>${att.unpriced} card${att.unpriced > 1 ? "s" : ""} without a sales page — they never get valued.</span><button class="small" data-findprices>Find prices</button></div>` : ""}
+       ${att.staleValues ? `<div class="att-row"><span class="chip">Stale</span><span>${att.staleValues} value${att.staleValues > 1 ? "s" : ""} older than a week.</span><button class="small" data-revalue>Re-value</button></div>` : ""}
+     </div>` : "";
+  $("#dash").innerHTML = welcome + attention + `
     <div class="totals">
       <div><span>Inventory value</span><b>${usd(p.value)}</b><span>${p.cards} cards · paid ${usd(p.cost)}</span></div>
       <div><span>Unrealized profit</span><b class="${unreal >= 0 ? "pos" : "neg"}">${usd(unreal)}</b><span>${p.change30 != null ? `30-day change ${usd(p.change30)}` : "&nbsp;"}</span></div>
@@ -65,6 +81,10 @@ async function loadDashboard() {
           : `<p class="small muted">No scan yet. Open <b>Hottest</b> and run one — or turn on the <b>morning brief</b> in Settings.</p>`}
       </div>
       <div class="panel">
+        <div class="row space" style="margin:0"><h3 style="margin:0">Inventory plan</h3><button class="ghost small" data-go="ask">${adv ? "Refresh →" : "Get advice →"}</button></div>
+        ${adv ? `<div class="small muted">${esc(when(adv.at))}</div><div data-advice></div>` : `<p class="small muted">Ask the AI what to sell, hold, list, grade or re-price — based on what you actually own.</p>`}
+      </div>
+      <div class="panel">
         <h3 style="margin-top:0">Watchlist movers (7 days)</h3>
         ${d.movers.length ? `<table>${d.movers.map((m) => `<tr><td class="small">${esc(m.name)}</td><td class="num">${usd(m.to)}</td><td class="num">${pct(m.pct)}</td></tr>`).join("")}</table>` : `<p class="small muted">Nothing moving yet — add cards to the watchlist.</p>`}
       </div>
@@ -78,6 +98,12 @@ async function loadDashboard() {
       </div>
     </div>`;
   $$("#dash [data-go]").forEach((b) => (b.onclick = () => goTab(b.dataset.go)));
+  if (adv && $("#dash [data-advice]")) renderAdvice(adv, $("#dash [data-advice]"), { compact: true });
+  if ($("#welcomeDismiss")) $("#welcomeDismiss").onclick = () => { store.set("welcomeDone", true); loadDashboard(); };
+  $$("#dash [data-step]").forEach((b) => (b.onclick = () => steps[+b.dataset.step][2]()));
+  $$("#dash [data-drop]").forEach((b) => (b.onclick = async () => { await fetch("/api/inventory/" + b.dataset.drop, json("PATCH", { listPrice: b.dataset.price })); toast(`List price set to ${usd(+b.dataset.price)} — update it on the marketplace too`); loadDashboard(); }));
+  if ($("#dash [data-findprices]")) $("#dash [data-findprices]").onclick = () => findPricesBulk(loadDashboard);
+  if ($("#dash [data-revalue]")) $("#dash [data-revalue]").onclick = async (e) => { e.target.disabled = true; await fetch("/api/inventory/refresh", { method: "POST" }); toast("Values refreshed"); loadDashboard(); };
   $("#dash [data-lot]").onclick = () => { goTab("lookup"); $('#lookupMode [data-v="lot"]').click(); };
   $("#dash [data-addinv]").onclick = () => { invView = "stock"; goTab("inventory"); setTimeout(() => openItemEditor(), 50); };
   $("#dash [data-expense]").onclick = () => { invView = "expenses"; goTab("inventory"); };
@@ -102,6 +128,7 @@ async function loadInventory() {
   if (invView === "grading") return loadGrading();
   if (invView === "sales") return loadSales();
   if (invView === "expenses") return loadExpenses();
+  if (invView === "want") return loadWant();
 }
 TAB_LOADERS.inventory = loadInventory;
 
@@ -115,11 +142,13 @@ async function loadStock() {
     <button data-a="add">＋ Add card</button>
     <button data-a="import">⬆ Import CSV</button>
     <button data-a="revalue">↻ Re-value</button>
+    <button data-a="findprices" title="Link unpriced cards to their sales pages so they get valued">💲 Find prices</button>
     <button data-a="labels">🏷 Print labels</button>
     <a class="button" href="/api/export/inventory.csv">⬇ CSV</a>`;
   $("#invActions [data-a=add]").onclick = () => openItemEditor();
   $("#invActions [data-a=import]").onclick = openImport;
   $("#invActions [data-a=labels]").onclick = printLabels;
+  $("#invActions [data-a=findprices]").onclick = () => findPricesBulk(loadStock);
   $("#invActions [data-a=revalue]").onclick = async (e) => {
     e.target.disabled = true; e.target.textContent = "Re-valuing…";
     const r = await (await fetch("/api/inventory/refresh", { method: "POST" })).json();
@@ -172,7 +201,7 @@ function drawStock() {
           <td><b>${esc(r.name)}</b><div class="small muted">${esc(r.sku || "")}${r.location ? " · 📍" + esc(r.location) : ""}${(r.tags || []).length ? " · " + r.tags.map((t) => "#" + esc(t)).join(" ") : ""}${r.priceUrl ? " · " + link(r.priceUrl, "sales") : ""}${r.addedBy ? " · " + esc(r.addedBy) : ""}</div></td>
           <td class="small">${esc(r.grade)}</td><td class="num">${esc(r.qty)}</td>
           <td class="num">${usd(r.cost)}</td>
-          <td class="num">${r.status === "sold" ? `sold ${usd(r.soldPrice)}` : usd(r.value)}<div class="small muted">${r.status === "sold" ? esc(r.soldOn || "") : esc(when(r.valuedAt))}</div></td>
+          <td class="num">${r.status === "sold" ? `sold ${usd(r.soldPrice)}` : r.priceUrl ? usd(r.value) : `<button class="small" data-findprice title="Link to a sales page so this card gets valued">💲 Find price</button>`}<div class="small muted">${r.status === "sold" ? esc(r.soldOn || "") : r.priceUrl ? `${esc(when(r.valuedAt))}${!r.valuedAt || Date.now() - Date.parse(r.valuedAt) > 7 * 86400000 ? ` <span class="chip warn" title="Older than a week">stale</span> <button class="ghost small" data-revalue aria-label="Re-value now">↻</button>` : ""}` : ""}</div></td>
           <td class="num ${pl == null ? "" : pl >= 0 ? "pos" : "neg"}">${usd(pl)}</td>
           <td><span class="chip st-${r.status}">${esc(STATUS_LABEL[r.status])}</span>${r.status === "listed" && r.listedOn ? `<div class="small muted">${esc(r.listedOn)} ${usd(r.listPrice)}</div>` : ""}</td>
           <td class="actions nowrap">${r.status !== "sold" ? `<button class="small" data-sell>Sold</button>` : ""}<button class="small ghost" data-edit aria-label="Edit">✎</button><button class="small ghost" data-del aria-label="Remove">🗑</button></td></tr>`;
@@ -199,6 +228,10 @@ function drawStock() {
   $$("#invBody tr[data-id]").forEach((tr) => {
     const row = invRows.find((r) => r.id === tr.dataset.id);
     $("[data-edit]", tr).onclick = () => openItemEditor(row);
+    const fp = $("[data-findprice]", tr);
+    if (fp) fp.onclick = () => openFindPrice(row, loadStock);
+    const rv = $("[data-revalue]", tr);
+    if (rv) rv.onclick = async () => { rv.disabled = true; const r = await fetch(`/api/inventory/${row.id}/revalue`, { method: "POST" }); if (!r.ok) toast((await r.json()).error, { error: true }); loadStock(); };
     $("[data-del]", tr).onclick = () => removeWithUndo("/api/inventory/" + row.id, row.name, loadStock);
     const sell = $("[data-sell]", tr);
     if (sell) sell.onclick = () => openSellDialog(row);
@@ -231,6 +264,20 @@ function openItemEditor(row = null) {
     const f = Object.fromEntries(new FormData(e.target));
     if (f.value === "") f.value = null;
     if (!f.sku) delete f.sku;
+    if (!row) {
+      const dup = await getJSON(`/api/inventory/duplicate?name=${encodeURIComponent(f.name)}&grade=${encodeURIComponent(f.grade || "Raw")}`).catch(() => null);
+      if (dup && !e.target.dataset.force) {
+        const choice = confirm(`You already have "${dup.name}" (${dup.grade}) in stock — qty ${dup.qty}, ${dup.sku || ""}.\n\nOK = add ${f.qty || 1} to that card's quantity.  Cancel = add it as a separate card.`);
+        if (choice) {
+          await fetch("/api/inventory/" + dup.id, json("PATCH", { qty: dup.qty + (parseInt(f.qty, 10) || 1) }));
+          modal.close();
+          toast(`Quantity updated to ${dup.qty + (parseInt(f.qty, 10) || 1)}`);
+          if ($("#tab-inventory").classList.contains("active")) loadStock();
+          return;
+        }
+        e.target.dataset.force = "1";
+      }
+    }
     const res = await fetch(row ? "/api/inventory/" + row.id : "/api/inventory", json(row ? "PATCH" : "POST", f));
     if (!res.ok) return toast((await res.json()).error || "Couldn't save", { error: true });
     modal.close();
@@ -408,9 +455,13 @@ function barChart(rows, key, label) {
   </svg><figcaption class="chart-legend"><span style="--c:#1f8a70">${esc(label)} by month</span></figcaption></figure>`;
 }
 
+let salesYear = "";
 async function loadSales() {
-  $("#invActions").innerHTML = `<a class="button" href="/api/export/sales.csv">⬇ Sales CSV</a>`;
-  const a = await getJSON("/api/analytics");
+  const a = await getJSON("/api/analytics" + (salesYear ? "?year=" + salesYear : ""));
+  $("#invActions").innerHTML = `<select id="salesYear" aria-label="Year"><option value="">All time</option>${(a.years || []).map((y) => `<option value="${y}"${y === salesYear ? " selected" : ""}>${y}</option>`).join("")}</select>
+    <a class="button" href="/api/export/sales.csv">⬇ Sales CSV</a>
+    <a class="button" href="/api/export/tax.csv?year=${encodeURIComponent(salesYear || new Date().getFullYear())}" title="Every sale and expense for the year, with totals — for your tax preparer">🧾 Tax summary ${esc(salesYear || new Date().getFullYear())}</a>`;
+  $("#salesYear").onchange = (e) => { salesYear = e.target.value; loadSales(); };
   const t = a.totals;
   const flipRow = (f) => `<tr><td>${esc(f.name)} <span class="muted small">${esc(f.grade)}</span></td><td class="num">${usd(f.cost)}</td><td class="num">${usd(f.sold)}</td><td class="num ${f.profit >= 0 ? "pos" : "neg"}">${usd(f.profit)}</td><td class="num">${pct(f.roi)}</td><td class="num">${f.days ?? "—"}</td></tr>`;
   const flipTable = (list) => `<div class="table-wrap"><table><tr><th>Card</th><th class="num">Cost</th><th class="num">Sold</th><th class="num">Profit</th><th class="num">ROI</th><th class="num">Days</th></tr>${list.map(flipRow).join("")}</table></div>`;
@@ -432,6 +483,104 @@ async function loadSales() {
     <div class="panel table-wrap"><h3 style="margin-top:0">By category</h3><table><tr><th>Category</th><th class="num">Sold</th><th class="num">Revenue</th><th class="num">Profit</th></tr>
       ${a.byCategory.map((c) => `<tr><td>${esc(CAT_LABEL[c.category] || c.category)}</td><td class="num">${c.sales}</td><td class="num">${usd(c.revenue)}</td><td class="num ${c.profit >= 0 ? "pos" : "neg"}">${usd(c.profit)}</td></tr>`).join("")}</table></div>`
     : `<div class="empty"><h2>No sales yet</h2><p>When a card sells, click <b>Sold</b> next to it in <b>Stock</b>. Profit, ROI, fees and days-to-sell show up here automatically.</p></div>`;
+}
+
+// ------------------------------------------------------------------ WANT LIST
+
+async function loadWant() {
+  $("#invActions").innerHTML = status.ebay ? `<button data-a="scan">🏷 Scan eBay for deals on these</button>` : "";
+  const list = await getJSON("/api/wantlist");
+  $("#invBody").innerHTML = `
+    <div class="panel">
+      <h3 style="margin-top:0">Add a card you're hunting</h3>
+      <form class="inline-form" data-form>
+        <input name="name" type="text" placeholder="Card (year, set, player, #, parallel)" required aria-label="Card" style="width:320px">
+        <input name="grade" type="text" placeholder="Grade (Raw, PSA 10…)" aria-label="Grade" style="width:150px">
+        <input name="maxPrice" type="number" min="0" step="1" placeholder="Pay up to $" aria-label="Max price">
+        <select name="category" aria-label="Category">${Object.keys(CAT_LABEL).map((c) => `<option value="${c}">${esc(CAT_LABEL[c])}</option>`).join("")}</select>
+        <input name="notes" type="text" placeholder="Notes" aria-label="Notes" style="width:180px">
+        <button class="primary">Add</button>
+      </form>
+      <p class="small muted">Want-list cards get flagged 🎯 in Quick price, reports, lot evaluations and the deal finder. Tip: from Quick price, click <b>🎯 Want</b> to add the exact card with its sales page linked.</p>
+    </div>
+    ${list.length ? `<div class="panel table-wrap"><table><tr><th>Card</th><th>Grade</th><th class="num">Pay up to</th><th>Notes</th><th></th></tr>
+      ${list.map((w) => `<tr data-id="${esc(w.id)}"><td><b>${esc(w.name)}</b><div class="small muted">${esc(CAT_LABEL[w.category] || "")}${w.priceUrl ? " · " + link(w.priceUrl, "sales") : ""}${w.addedBy ? " · " + esc(w.addedBy) : ""}</div></td>
+        <td class="small">${esc(w.grade)}</td><td class="num"><input type="number" min="0" step="1" data-max value="${esc(w.maxPrice ?? "")}" style="width:90px" aria-label="Max price"></td><td class="small">${esc(w.notes)}</td>
+        <td class="actions nowrap">${w.priceUrl && status.ebay ? `<button class="small" data-deals>🏷 Deals</button>` : ""}<button class="small ghost" data-del aria-label="Remove">🗑</button></td></tr>`).join("")}</table></div>`
+      : `<div class="empty"><h2>Want list is empty</h2><p>Add the cards you're hunting at shows and online. The bot will tell you when one shows up and whether the price beats your max.</p></div>`}`;
+  $("#invBody [data-form]").onsubmit = async (e) => {
+    e.preventDefault();
+    await fetch("/api/wantlist", json("POST", Object.fromEntries(new FormData(e.target))));
+    toast("Added to want list");
+    loadWant();
+  };
+  $$("#invBody tr[data-id]").forEach((tr) => {
+    const w = list.find((x) => x.id === tr.dataset.id);
+    $("[data-max]", tr).onchange = async (e) => { await fetch("/api/wantlist/" + w.id, json("PATCH", { maxPrice: e.target.value })); toast("Saved", { ms: 1200 }); };
+    $("[data-del]", tr).onclick = () => removeWithUndo("/api/wantlist/" + w.id, w.name, loadWant);
+    const dl = $("[data-deals]", tr);
+    if (dl) dl.onclick = () => openDeals({ url: w.priceUrl, grade: w.grade, name: w.name });
+  });
+  const scan = $("#invActions [data-a=scan]");
+  if (scan) scan.onclick = async () => {
+    const withUrl = list.filter((w) => w.priceUrl);
+    if (!withUrl.length) return toast("Add want-list cards from Quick price (🎯 Want) so they have a sales page to compare against.");
+    scan.disabled = true;
+    const hits = [];
+    for (const w of withUrl) {
+      scan.textContent = `Scanning ${hits.length ? hits.length + " found · " : ""}${w.name.slice(0, 30)}…`;
+      try {
+        const d = await getJSON(`/api/deals?url=${encodeURIComponent(w.priceUrl)}&grade=${encodeURIComponent(w.grade)}`);
+        for (const deal of d.deals) if (w.maxPrice == null || deal.total <= w.maxPrice) hits.push({ w, deal, value: d.value });
+      } catch {}
+    }
+    scan.disabled = false;
+    scan.textContent = "🏷 Scan eBay for deals on these";
+    openModal(`Want-list deals (${hits.length})`, hits.length
+      ? `<div class="table-wrap"><table>${hits.map(({ w, deal, value }) => `<tr><td><b>${esc(w.name)}</b> <span class="muted small">${esc(w.grade)} · sold value ${usd(value)}${w.maxPrice != null ? " · your max " + usd(w.maxPrice) : ""}</span><div class="small">${link(deal.url, deal.title)}</div></td><td class="num">${usd(deal.total)}<div class="small pos">${deal.discountPct}% under</div></td></tr>`).join("")}</table></div>`
+      : `<p class="muted">Nothing under sold value right now. Try again later — the bot re-checks when you click.</p>`, { wide: true });
+  };
+}
+
+// Link a card to its sales page: candidates from the free price database, pick one.
+async function openFindPrice(row, reload) {
+  const body = openModal(`Find price: ${row.name}`, `<p class="muted small">Searching sold-price database…</p>`, { wide: true });
+  try {
+    const r = await getJSON(`/api/inventory/${row.id}/find-price`);
+    body.innerHTML = `<p class="small">Searched for <b>${esc(r.query)}</b> (${esc(row.grade)}). Pick the exact card — parallels are separate entries.</p>
+      ${r.candidates.length ? r.candidates.map((c, i) => `<div class="mini-row" data-c="${i}" role="button" tabindex="0"><span><b>${esc(c.name)}</b> <span class="muted small">${esc(c.set)} · raw ${esc(c.ungraded || "—")}</span></span><span class="small ${c.coverage >= 0.8 ? "pos" : "muted"}">${Math.round(c.coverage * 100)}% match</span></div>`).join("") : `<p class="muted">No matches — edit the card name to be more specific (year, set, number) and try again.</p>`}
+      <div class="row"><input type="text" data-manual placeholder="…or paste a sportscardspro.com / pricecharting.com card URL" style="flex:1"><button data-attach>Link</button></div>`;
+    const attach = async (url) => {
+      const res = await fetch(`/api/inventory/${row.id}/attach-price`, json("POST", { url }));
+      if (!res.ok) return toast((await res.json()).error, { error: true });
+      modal.close();
+      toast("Linked — this card now gets valued daily");
+      reload();
+    };
+    $$("[data-c]", body).forEach((el) => { const go = () => attach(r.candidates[+el.dataset.c].url); el.onclick = go; el.onkeydown = (e) => e.key === "Enter" && go(); });
+    $("[data-attach]", body).onclick = () => attach($("[data-manual]", body).value.trim());
+  } catch (err) {
+    body.innerHTML = `<p class="error">${esc(err.message)}</p>`;
+  }
+}
+
+async function findPricesBulk(reload) {
+  toast("Finding sales pages for unpriced cards…", { ms: 3000 });
+  const r = await (await fetch("/api/inventory/find-prices", { method: "POST" })).json();
+  reload();
+  if (!r.review.length) return toast(`Linked ${r.attached.length} card${r.attached.length === 1 ? "" : "s"}${r.remaining ? ` (${r.remaining} more next run)` : ""}`);
+  const body = openModal(`Find prices: ${r.attached.length} linked, ${r.review.length} to check`, `
+    ${r.attached.length ? `<details><summary>${r.attached.length} linked automatically</summary><ul class="tight small">${r.attached.map((a) => `<li>${esc(a.name)} → ${esc(a.matched)}</li>`).join("")}</ul></details>` : ""}
+    <h3>Pick the right match</h3>
+    ${r.review.map((it, i) => `<div class="review-row"><b>${esc(it.name)}</b>${it.error ? `<div class="small bad">${esc(it.error)}</div>` : ""}<div class="row" style="margin:.3rem 0 .6rem">${it.candidates.map((c, j) => `<button class="small" data-pick="${i}:${j}">${esc(c.name)} <span class="muted">${esc(c.set)}</span></button>`).join("") || `<span class="muted small">no candidates — edit the name to include year/set/number</span>`}</div></div>`).join("")}`, { wide: true });
+  $$("[data-pick]", body).forEach((b) => (b.onclick = async () => {
+    const [i, j] = b.dataset.pick.split(":").map(Number);
+    const it = r.review[i];
+    b.disabled = true;
+    const res = await fetch(`/api/inventory/${it.id}/attach-price`, json("POST", { url: it.candidates[j].url }));
+    b.textContent = res.ok ? "✓ Linked" : "✗";
+    reload();
+  }));
 }
 
 // ------------------------------------------------------------------ EXPENSES

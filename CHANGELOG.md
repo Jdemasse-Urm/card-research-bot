@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.2.0 — the second 10-10
+
+**Major**
+- **Update checker**: a banner when a newer version is on GitHub, with the right download for your computer; Settings → Check for updates.
+- **Runs in the background**: closing the window keeps the bot in the tray / menu bar so daily re-pricing and price alerts keep working (Settings → Desktop app to change; "Start when I log in" too).
+- **AI inventory advisor** (Ask tab, Home): sell / hold / list / drop price / grade / buy-more plan from what you actually own, movers and the market.
+- **Find prices** for imported or hand-added cards: links each one to its sales page (automatic when the match is clear) so it gets valued every day.
+- **Want list**: cards you're hunting with a max price — flagged 🎯 in Quick price, reports, lot evaluations; "Scan eBay for deals on these".
+- **Trade evaluator** (Card Lookup → ⚖ Trade): my cards vs. theirs, sold values per grade, who comes out ahead.
+- **Needs attention** on Home: stale listings with a one-click suggested price drop, unlisted stock, value drops, unpriced and stale values.
+- **Year / tax summary**: year selector on Sales & profit and a tax CSV (every sale and expense with totals).
+- **PSA photo compare**: PSA's own photos of the cert next to your slab (report and cert checker).
+- **Save report as PDF** (desktop app; browsers use Print → Save as PDF).
+
+**Niche**
+- Search everything with Ctrl/⌘ + K · duplicate detection when adding a card · fix a misread card in a lot and re-price it without AI ·
+  watchlist sparklines · hover tooltips on price charts · "stale" value badge with per-row re-value · error toasts with Try again ·
+  window remembers size/position/zoom · "research is still running — quit anyway?" · first-run welcome checklist.
+
 ## 3.1.0 — real desktop app
 - **Card Research Bot is now a desktop app**: its own window, Desktop / Start-menu / Dock icon, no browser tab and
   no black console window. Windows installer (`.exe`) and Mac disk image (`.dmg`, Apple Silicon + Intel).

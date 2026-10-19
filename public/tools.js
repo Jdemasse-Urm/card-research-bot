@@ -109,9 +109,9 @@ function renderLot(lot) {
         ${lot.cards.map((c, i) => `<tr><td><b>${esc(c.name)}</b><div class="small muted">${esc(c.position)}${c.condition_note ? " · " + esc(c.condition_note) : ""}</div></td>
           <td class="small">${esc(c.grade)}</td>
           <td><span class="chip ${c.confidence === "high" ? "good" : c.confidence === "low" ? "bad" : "warn"}">${esc(c.confidence)}</span></td>
-          <td class="num">${usd(c.value)}</td>
+          <td class="num">${usd(c.value)}${(c.wanted || []).length ? `<div><span class="chip good" title="On your want list">🎯 want${c.wanted[0].maxPrice != null ? " ≤ " + usd(c.wanted[0].maxPrice) : ""}</span></div>` : ""}</td>
           <td class="small">${c.url ? link(c.url, c.matched) : `<span class="muted">no match — check by hand</span>`}${c.volume ? `<div class="muted">${esc(c.volume)}</div>` : ""}</td>
-          <td>${c.url ? `<button class="small" data-lwatch="${i}">★</button>` : ""}</td></tr>`).join("")}
+          <td class="actions nowrap">${c.url ? `<button class="small" data-lwatch="${i}">★</button>` : ""}<button class="small ghost" data-lfix="${i}" title="Wrong card? Fix the name and re-price (no AI)">✎</button></td></tr>`).join("")}
       </table></div>
       <div class="foot"><span>${esc(costLine(lot.usage))}</span>
         <span class="actions"><button data-addall>＋ Add priced cards to inventory</button></span></div>
@@ -128,6 +128,39 @@ function renderLot(lot) {
   };
   $$("[data-ask], [data-pct]", el).forEach((i) => (i.oninput = offer));
   offer();
+  $$("[data-lfix]", el).forEach((b) => (b.onclick = () => {
+    const i = +b.dataset.lfix, c = lot.cards[i];
+    const body = openModal("Fix this card", `<form data-form class="form-grid">
+      <label class="span2">Card name<input name="name" value="${esc(c.name)}" required></label>
+      <label>Grade<input name="grade" value="${esc(c.grade)}"></label>
+      <label>Category<select name="category">${Object.keys(CAT_LABEL).map((k) => `<option value="${k}"${k === c.category ? " selected" : ""}>${esc(CAT_LABEL[k])}</option>`).join("")}</select></label>
+      <div class="span2 row"><button class="primary">Re-price</button><span class="small muted">Uses the free sold-price database — no AI call.</span></div></form><div data-out></div>`);
+    $("[data-form]", body).onsubmit = async (e) => {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(e.target));
+      const res = await fetch("/api/lot/reprice", json("POST", f));
+      const r = await res.json();
+      if (!res.ok) return ($("[data-out]", body).innerHTML = `<p class="error">${esc(r.error)}</p>`);
+      const apply = (pick) => {
+        Object.assign(c, { name: f.name, grade: f.grade || "Raw", category: f.category, confidence: "high", value: pick.value, url: pick.url, matched: pick.matched, volume: pick.volume, wanted: r.wanted });
+        const priced = lot.cards.filter((x) => x.value != null);
+        lot.total = Math.round(priced.reduce((n, x) => n + x.value, 0) * 100) / 100;
+        lot.priced = priced.length;
+        modal.close();
+        renderLot(lot);
+      };
+      if (r.url) return apply(r);
+      $("[data-out]", body).innerHTML = `<p class="small">No clear match — pick one:</p>${r.candidates.map((k, j) => `<div class="mini-row" data-k="${j}" role="button" tabindex="0"><span><b>${esc(k.name)}</b> <span class="muted small">${esc(k.set)}</span></span><span class="small muted">${Math.round(k.coverage * 100)}%</span></div>`).join("") || `<p class="muted">Nothing found — try adding year, set and card number.</p>`}`;
+      $$("[data-k]", body).forEach((el) => (el.onclick = async () => {
+        const k = r.candidates[+el.dataset.k];
+        const d = await getJSON("/api/quick/card?url=" + encodeURIComponent(k.url));
+        const g = (f.grade || "Raw").toUpperCase();
+        const num = g.match(/(\d+(\.\d)?)$/)?.[1];
+        const value = /RAW|UNGRADED/.test(g) || !num ? d.priceGuide.Ungraded ?? null : d.priceGuide[g] ?? d.priceGuide[`PSA ${num}`] ?? d.priceGuide[`Grade ${num}`] ?? null;
+        apply({ value, url: d.url, matched: `${d.title} (${d.set})`, volume: Object.values(d.salesVolume || {})[0] || null });
+      }));
+    };
+  }));
   $$("[data-lwatch]", el).forEach((b) => (b.onclick = async () => {
     const c = lot.cards[+b.dataset.lwatch];
     const r = await fetch("/api/watchlist", json("POST", { url: c.url, name: c.matched, grade: c.grade }));
@@ -308,12 +341,88 @@ async function checkCert() {
     const { cert: c, population: pop } = await getJSON("/api/psa/cert/" + n);
     if (!c.found) return (out.innerHTML = `<span class="bad">PSA has no record of cert #${esc(n)}.</span> Double-check the number — if it's right, the slab may not be genuine.`);
     const popRow = pop?.byGrade ? Object.entries(pop.byGrade).sort((a, b) => parseFloat(b[0]) - parseFloat(a[0])).slice(0, 6).map(([g, k]) => `${g}: ${k.toLocaleString()}`).join(" · ") : "";
+    const imgs = await getJSON("/api/psa/images/" + n).catch(() => null);
     out.innerHTML = `<div class="callout ok-box" style="margin-top:.5rem"><b>${esc([c.year, c.brand, c.subject, c.cardNumber ? "#" + c.cardNumber : "", c.variety].filter(Boolean).join(" "))}</b><br>
       Grade: <b>${esc(c.gradeDescription || c.grade)}</b>${c.population != null ? ` · Pop ${c.population.toLocaleString()} (${c.populationHigher?.toLocaleString() ?? "?"} higher)` : ""}<br>
-      ${popRow ? `<span class="muted">By grade — ${esc(popRow)}</span><br>` : ""}${link(c.url, "View on PSA")} · compare the photo there with the slab in your hand.</div>`;
+      ${popRow ? `<span class="muted">By grade — ${esc(popRow)}</span><br>` : ""}${link(c.url, "View on PSA")} · compare the photo there with the slab in your hand.${psaPhotos(imgs)}</div>`;
   } catch (err) {
     out.innerHTML = `<span class="bad">${esc(err.message)}</span>`;
   }
 }
 $("#certBtn").onclick = checkCert;
 $("#certInput").addEventListener("keydown", (e) => e.key === "Enter" && checkCert());
+
+// ------------------------------------------------------------------ TRADE EVALUATOR
+
+const trade = { mine: [], theirs: [] };
+function renderTrade() {
+  const el = $("#lookupResult");
+  const side = (key, title, hint) => `<div class="panel trade-side" data-side="${key}">
+    <h3 style="margin-top:0">${title}</h3>
+    <div class="row" style="margin:0"><input type="search" data-q placeholder="${hint}" aria-label="${title} search" style="flex:1"><button data-search>Search</button>${key === "mine" ? `<button data-frominv>From inventory</button>` : ""}</div>
+    <div data-results class="trade-results"></div>
+    <div data-list></div>
+    <div class="trade-total">Total <b data-total>—</b></div>
+  </div>`;
+  el.innerHTML = `<article class="report"><h2 class="report-title">⚖ Trade evaluator</h2>
+    <p class="small muted">Add the cards on each side (searching the free sold-price database, or picking from your inventory). Values are recent <b>sold</b> prices for the chosen grade.</p>
+    <div class="grid2">${side("mine", "My side", "Card I'd give, e.g. wembanyama 2023 prizm 136")}${side("theirs", "Their side", "Card I'd get")}</div>
+    <div class="callout" data-verdict style="margin-top:1rem"></div>
+    <div class="row"><button class="primary" data-eval>Evaluate trade</button><button class="ghost" data-clear>Clear</button></div></article>`;
+  const drawLists = () => {
+    for (const key of ["mine", "theirs"]) {
+      const box = $(`[data-side=${key}] [data-list]`, el);
+      box.innerHTML = trade[key].map((it, i) => `<div class="mini-row"><span>${esc(it.name)} <span class="muted small">${esc(it.grade)}</span></span><span>${it.value != null ? usd(it.value) : "<span class='muted small'>evaluate</span>"} <button class="ghost small" data-rm="${key}:${i}" aria-label="Remove">×</button></span></div>`).join("") || `<p class="muted small" style="margin:.4rem 0">Nothing added yet.</p>`;
+      $(`[data-side=${key}] [data-total]`, el).textContent = usd(trade[key].reduce((n, it) => n + (it.value || 0), 0));
+    }
+    $$("[data-rm]", el).forEach((b) => (b.onclick = () => { const [k, i] = b.dataset.rm.split(":"); trade[k].splice(+i, 1); drawLists(); }));
+  };
+  for (const key of ["mine", "theirs"]) {
+    const sideEl = $(`[data-side=${key}]`, el);
+    const search = async () => {
+      const q = $("[data-q]", sideEl).value.trim();
+      if (!q) return;
+      const res = $("[data-results]", sideEl);
+      res.innerHTML = `<p class="muted small">Searching…</p>`;
+      try {
+        const j = await getJSON("/api/quick?q=" + encodeURIComponent(q));
+        res.innerHTML = j.results.slice(0, 6).map((r, i) => `<div class="mini-row"><span><b>${esc(r.name)}</b> <span class="muted small">${esc(r.set)}</span></span><span><select data-g="${i}" aria-label="Grade"><option>Raw</option><option>PSA 8</option><option>PSA 9</option><option>PSA 10</option><option>BGS 9.5</option><option>SGC 10</option><option>CGC 10</option></select> <button class="small" data-add="${i}">Add</button></span></div>`).join("") || `<p class="muted small">No matches.</p>`;
+        $$("[data-add]", res).forEach((b) => (b.onclick = () => {
+          const r = j.results[+b.dataset.add];
+          trade[key].push({ name: `${r.name} (${r.set})`, grade: $(`[data-g="${b.dataset.add}"]`, res).value, url: r.url, value: null });
+          res.innerHTML = "";
+          $("[data-q]", sideEl).value = "";
+          drawLists();
+        }));
+      } catch (err) {
+        res.innerHTML = `<p class="error">${esc(err.message)}</p>`;
+      }
+    };
+    $("[data-search]", sideEl).onclick = search;
+    $("[data-q]", sideEl).addEventListener("keydown", (e) => e.key === "Enter" && search());
+    const inv = $("[data-frominv]", sideEl);
+    if (inv) inv.onclick = async () => {
+      const rows = (await getJSON("/api/inventory")).filter((r) => r.status !== "sold");
+      const body = openModal("Pick from inventory", rows.length ? rows.map((r) => `<div class="mini-row" data-inv="${esc(r.id)}" role="button" tabindex="0"><span>${esc(r.name)} <span class="muted small">${esc(r.grade)}</span></span><b>${usd(r.value)}</b></div>`).join("") : `<p class="muted">No cards in inventory.</p>`);
+      $$("[data-inv]", body).forEach((d) => (d.onclick = () => { const r = rows.find((x) => x.id === d.dataset.inv); trade.mine.push({ name: r.name, grade: r.grade, inventoryId: r.id, url: r.priceUrl, value: r.value }); modal.close(); drawLists(); }));
+    };
+  }
+  $("[data-eval]", el).onclick = async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await (await fetch("/api/trade", json("POST", { mine: trade.mine, theirs: trade.theirs }))).json();
+      trade.mine = r.mine.rows.map((row, i) => ({ ...trade.mine[i], ...row }));
+      trade.theirs = r.theirs.rows.map((row, i) => ({ ...trade.theirs[i], ...row }));
+      drawLists();
+      const d = r.diff, pctDiff = r.mine.total ? Math.round((d / r.mine.total) * 100) : null;
+      $("[data-verdict]", el).innerHTML = `<div class="big">${d > 0 ? `<span class="pos">You come out ahead by ${usd(d)}</span>` : d < 0 ? `<span class="neg">You give up ${usd(-d)} more than you get</span>` : "Dead even"}${pctDiff != null ? ` <span class="muted small">(${pctDiff > 0 ? "+" : ""}${pctDiff}% on your side's ${usd(r.mine.total)})</span>` : ""}</div>
+        <div class="small muted">${r.mine.unpriced + r.theirs.unpriced ? `${r.mine.unpriced + r.theirs.unpriced} card(s) couldn't be priced and count as $0. ` : ""}Rule of thumb: fair trades land within ±10%; ask for a sweetener beyond that. Liquidity matters too — a slow-selling card is worth less to a reseller than its number.</div>`;
+    } catch (err) {
+      toast(err.message, { error: true });
+    } finally {
+      e.target.disabled = false;
+    }
+  };
+  $("[data-clear]", el).onclick = () => { trade.mine = []; trade.theirs = []; renderTrade(); };
+  drawLists();
+}

@@ -329,3 +329,25 @@ tr.best td { font-weight: 700; }
 }
 input:not([type]), input[type=date], input[type=email], input[type=url] { font: inherit; width: 100%; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); }
 .inline-form input:not([type]), .inline-form input[type=date] { width: auto; }
+
+
+/* ---------- v3.2 additions ---------- */
+.banner.update { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--ink); }
+.owned.want { background: color-mix(in srgb, var(--good) 12%, var(--panel)); }
+.psa-photos { margin-top: .5rem; display: flex; gap: .5rem; flex-wrap: wrap; align-items: flex-start; }
+.psa-photos > div { width: 100%; }
+.psa-photos img { height: 160px; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
+.chart-tip { position: fixed; z-index: 60; pointer-events: none; background: var(--ink); color: var(--bg); padding: .4rem .6rem; border-radius: 8px; font-size: .8rem; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.spark { width: 80px; height: 22px; display: block; margin-left: auto; }
+.welcome { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.steps { margin: .5rem 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .4rem; }
+.steps li.done button { color: var(--good); text-decoration: line-through; }
+.steps button { width: 100%; text-align: left; }
+.att-row { display: grid; grid-template-columns: auto 1fr auto; gap: .7rem; align-items: center; padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .92rem; }
+.att-row:last-child { border-bottom: 0; }
+.review-row { border-bottom: 1px solid var(--line); padding: .4rem 0; }
+.trade-side { margin-bottom: 0; }
+.trade-results { margin-top: .4rem; }
+.trade-total { text-align: right; margin-top: .5rem; font-size: 1.05rem; }
+#advisorBar { gap: .8rem; }
+@media (max-width: 700px) { .att-row { grid-template-columns: 1fr; } .psa-photos img { height: 120px; } }

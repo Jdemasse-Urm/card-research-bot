@@ -34,6 +34,7 @@
     </div>
   </header>
 
+  <div id="updateBanner" class="banner update hidden" role="status"></div>
   <div id="keyBanner" class="banner hidden" role="status">
     No Gemini API key yet. The free <b>Quick price</b>, <b>Sets</b> and <b>Inventory</b> work without one; AI research needs a key (also free).
     <button id="keyBannerBtn">Add key</button>
@@ -52,6 +53,7 @@
           <div class="pills" id="lookupMode" role="group" aria-label="What are you checking?">
             <button data-v="single" class="active" aria-pressed="true">One card</button>
             <button data-v="lot" aria-pressed="false">Lot / binder page</button>
+            <button data-v="trade" aria-pressed="false">⚖ Trade</button>
           </div>
           <div id="drop" class="drop" role="button" tabindex="0" aria-label="Add card photos: drop files here, or press Enter to choose files" style="margin-top:.7rem">
             <input type="file" id="fileInput" accept="image/*" multiple hidden />
@@ -152,6 +154,7 @@
             <button data-v="grading" aria-pressed="false">🏷 Grading</button>
             <button data-v="sales" aria-pressed="false">💵 Sales &amp; profit</button>
             <button data-v="expenses" aria-pressed="false">🧾 Expenses</button>
+            <button data-v="want" aria-pressed="false">🎯 Want list</button>
           </div>
           <div class="row" style="margin:0" id="invActions"></div>
         </div>
@@ -177,6 +180,13 @@
 
     <!-- ================= ASK ================= -->
     <section id="tab-ask" class="tab" aria-label="Ask">
+      <div class="panel row" id="advisorBar">
+        <button id="advisorBtn" class="primary">🧠 Advise me on my inventory</button>
+        <button id="advisorCancel" class="ghost hidden">✕ Cancel</button>
+        <span class="small muted">One AI pass over what you own + today's market → sell / hold / list / drop price / grade.</span>
+      </div>
+      <div id="advisorProgress" class="progress hidden" aria-live="polite"></div>
+      <div id="advisorOut"></div>
       <div id="askContext" class="panel hidden"></div>
       <div id="chat" class="chat" aria-live="polite">
         <div class="empty">
@@ -256,6 +266,12 @@
           <button id="saveBudget">Save cap</button>
         </div>
         <label class="check"><input type="checkbox" id="briefToggle" /> Morning brief: scan today's hottest cards automatically each morning while the bot is open</label>
+      </section>
+
+      <section class="set-block" id="desktopBlock" hidden>
+        <h3>Desktop app</h3>
+        <label class="check"><input type="checkbox" id="trayToggle" /> Keep running in the background when the window is closed (tray icon) — daily price checks and alerts keep working</label>
+        <label class="check"><input type="checkbox" id="loginToggle" /> Start automatically when I log in</label>
       </section>
 
       <section class="set-block">

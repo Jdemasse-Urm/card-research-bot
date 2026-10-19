@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 import { exec, execFile } from "node:child_process";
 
 import { hasKey, resetClient, explainError, MODEL, FALLBACK_MODEL, monthlyBudget, FREE_GROUNDED_PER_MONTH } from "./lib/ai.js";
-import { cardLookup, hotCards, ask, lotLookup, writeListing, slabCheck, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
+import { cardLookup, hotCards, ask, lotLookup, writeListing, slabCheck, adviseInventory, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
 import { runSelfTest } from "./lib/selftest.js";
 import * as store from "./lib/store.js";
 import * as pricecharting from "./lib/sources/pricecharting.js";
@@ -129,6 +129,7 @@ const log = (req, text) => store.logActivity(who(req), text);
 
 // Streams progress lines (NDJSON) while a job runs, then one {type:"done"} or {type:"error"} line.
 // Closing the page / pressing Cancel aborts the job so it stops spending.
+let busyJobs = 0; // AI jobs in flight (the desktop app asks before quitting)
 function streamJob(req, res, work) {
   res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
@@ -141,6 +142,7 @@ function streamJob(req, res, work) {
     if (!res.writableEnded) res.write(JSON.stringify(obj) + "\n");
   };
   const ping = setInterval(() => send({ type: "ping" }), 15000);
+  busyJobs++;
   work(send, ctrl.signal)
     .then((payload) => send({ type: "done", ...payload }))
     .catch((err) => {
@@ -149,6 +151,7 @@ function streamJob(req, res, work) {
       send({ type: "error", message: explainError(err) });
     })
     .finally(() => {
+      busyJobs--;
       finished = true;
       clearInterval(ping);
       res.end();
@@ -238,6 +241,8 @@ app.get("/api/status", (req, res) => {
     unseenAlerts: store.alerts().filter((a) => !a.seen).length,
     psa: psa.hasToken(),
     ebay: ebay.hasKeys(),
+    busy: busyJobs,
+    desktop: DESKTOP,
   });
 });
 
@@ -393,6 +398,7 @@ app.post("/api/lot", (req, res) => {
   if (!images.length) return res.status(400).json({ error: "Drop a photo of the lot or binder page." });
   streamJob(req, res, async (send, signal) => {
     const lot = await lotLookup({ images, text: String(req.body?.text || "").slice(0, 1000) }, { onEvent: send, signal });
+    for (const c of lot.cards) c.wanted = wantMatches(c.url, c.grade, c.name);
     log(req, `valued a lot of ${lot.cards.length} cards ($${lot.total})`);
     return { lot };
   });
@@ -426,10 +432,14 @@ app.get("/api/quick/card", async (req, res) => {
   }
 });
 
-// "Do we already own this?" — inventory rows on the same price page.
+// "Do we already own this?" / "Is this on the want list?" — by price page (+ grade for the want list).
 app.get("/api/owned", (req, res) => {
-  const url = String(req.query.url || "");
-  res.json(url ? store.inventory().filter((r) => r.priceUrl === url && r.status !== "sold") : []);
+  const url = store.clean.url(req.query.url);
+  const grade = store.clean.str(req.query.grade, 30) || "Raw";
+  res.json({
+    owned: url ? store.inventory().filter((r) => r.priceUrl === url && r.status !== "sold") : [],
+    wanted: wantMatches(url, grade, store.clean.str(req.query.name)),
+  });
 });
 
 // ---------------- sets ----------------
@@ -789,10 +799,13 @@ const feeFor = (r) => {
   return r.soldPrice ? Math.round((r.soldPrice * r.qty * p / 100 + f) * 100) / 100 : 0;
 };
 
-app.get("/api/analytics", (_req, res) => {
+app.get("/api/analytics", (req, res) => {
   const inv = store.inventory();
-  const sold = inv.filter((r) => r.status === "sold" && r.soldPrice != null);
-  const exps = store.expenses();
+  const allSold = inv.filter((r) => r.status === "sold" && r.soldPrice != null);
+  const years = [...new Set([...allSold.map((r) => (r.soldDate || r.added).slice(0, 4)), ...store.expenses().map((e) => e.date.slice(0, 4))])].sort().reverse();
+  const year = /^\d{4}$/.test(String(req.query.year || "")) ? String(req.query.year) : null; // null = all time
+  const sold = year ? allSold.filter((r) => (r.soldDate || r.added).startsWith(year)) : allSold;
+  const exps = year ? store.expenses().filter((e) => e.date.startsWith(year)) : store.expenses();
   const months = {};
   const bucket = (m) => (months[m] ||= { month: m, revenue: 0, cogs: 0, fees: 0, expenses: 0, sales: 0 });
   for (const r of sold) {
@@ -829,6 +842,8 @@ app.get("/api/analytics", (_req, res) => {
       avgRoi: flips.length ? Math.round((sum(flips, (f) => f.roi) / flips.filter((f) => f.roi != null).length || 0) * 10) / 10 : null,
       avgDaysToSell: withDays.length ? Math.round(sum(withDays, (f) => f.days) / withDays.length) : null,
     },
+    year,
+    years,
     monthly,
     byCategory: Object.values(byCat).sort((a, b) => b.profit - a.profit),
     best: [...flips].sort((a, b) => b.profit - a.profit).slice(0, 5),
@@ -914,6 +929,276 @@ app.post("/api/restore", (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// Year summary for taxes: every sale line, then every expense line, then totals.
+app.get("/api/export/tax.csv", (req, res) => {
+  const year = /^\d{4}$/.test(String(req.query.year || "")) ? String(req.query.year) : new Date().getFullYear().toString();
+  const sold = store.inventory().filter((r) => r.status === "sold" && r.soldPrice != null && (r.soldDate || r.added).startsWith(year));
+  const exps = store.expenses().filter((e) => e.date.startsWith(year));
+  const lines = [
+    ...sold.map((r) => ({ date: r.soldDate, type: "Sale", item: `${r.name} (${r.grade}) x${r.qty}`, where: r.soldOn || "", gross: r.soldPrice * r.qty, cogs: (r.cost || 0) * r.qty, fees: feeFor(r), expense: "" })),
+    ...exps.map((e) => ({ date: e.date, type: "Expense", item: `${e.kind}${e.note ? " — " + e.note : ""}`, where: "", gross: "", cogs: "", fees: "", expense: e.amount })),
+  ].sort((a, b) => (a.date < b.date ? -1 : 1));
+  const sum = (f) => lines.reduce((n, l) => n + (Number(l[f]) || 0), 0);
+  lines.push({ date: "", type: "TOTAL", item: `Year ${year}`, where: "", gross: sum("gross"), cogs: sum("cogs"), fees: sum("fees"), expense: sum("expense") });
+  lines.push({ date: "", type: "NET", item: "Gross − cost of cards − fees − expenses", where: "", gross: "", cogs: "", fees: "", expense: (sum("gross") - sum("cogs") - sum("fees") - sum("expense")).toFixed(2) });
+  sendCsv(res, `tax-summary-${year}`, csv(lines, [["Date", (l) => l.date], ["Type", (l) => l.type], ["Item", (l) => l.item], ["Where", (l) => l.where], ["Gross sale", (l) => l.gross], ["Cost of card", (l) => l.cogs], ["Fees", (l) => l.fees], ["Expense", (l) => l.expense]]));
+});
+
+// ---------------- matching cards to price pages (free) ----------------
+
+const stripGrade = (s) => String(s || "").replace(/\b(PSA|BGS|SGC|CGC|TAG|HGA|Beckett)\s*\d+(\.5)?\b/gi, " ").replace(/\b(RC|rookie|raw|graded|gem mint|mint|card)\b/gi, " ").replace(/[#()\[\],]/g, " ").replace(/\s+/g, " ").trim();
+const nameWords = (s) => stripGrade(s).toLowerCase().split(" ").filter((w) => w.length > 1 || /\d/.test(w));
+function coverage(name, cand) {
+  const hay = ` ${`${cand.name} ${cand.set}`.toLowerCase().replace(/[#\[\]()]/g, " ")} `;
+  const ws = nameWords(name);
+  return ws.length ? ws.filter((w) => hay.includes(w)).length / ws.length : 0;
+}
+// Candidates for a card name; `auto` is set only when the top match is clear (all/most words present,
+// and the base card wins a tie over a parallel the name didn't mention).
+async function findPricePage(name, category) {
+  const query = stripGrade(name);
+  const candidates = (await pricecharting.search(query, 8, kindOf(category)))
+    .map((c) => ({ ...c, coverage: Math.round(coverage(name, c) * 100) / 100 }))
+    .sort((a, b) => b.coverage - a.coverage || a.name.length - b.name.length);
+  const [top, second] = candidates;
+  const auto = top && top.coverage >= 0.8 && (!second || second.coverage < top.coverage || top.name.length < second.name.length) ? top : null;
+  return { query, candidates, auto };
+}
+
+async function attachPrice(row, url) {
+  const data = await pricecharting.card(url);
+  const value = pricecharting.valueAtGrade(data, row.grade);
+  return store.updateInventory(row.id, { priceUrl: url, value, valuedAt: value != null ? new Date().toISOString() : null, ...(row.category === "other" ? { category: categoryFromUrl(url) } : {}) });
+}
+
+app.get("/api/inventory/:id/find-price", async (req, res) => {
+  const row = store.inventory().find((r) => r.id === req.params.id);
+  if (!row) return res.status(404).json({ error: "not found" });
+  try {
+    res.json(await findPricePage(row.name, row.category));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.post("/api/inventory/:id/attach-price", async (req, res) => {
+  const row = store.inventory().find((r) => r.id === req.params.id);
+  const url = store.clean.url(req.body?.url);
+  if (!row || !url) return res.status(400).json({ error: "Need a card and a price page." });
+  try {
+    const updated = await attachPrice(row, url);
+    log(req, `linked ${row.name} to its sales page`);
+    res.json(updated);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.post("/api/inventory/:id/revalue", async (req, res) => {
+  const row = store.inventory().find((r) => r.id === req.params.id);
+  if (!row?.priceUrl) return res.status(400).json({ error: "This card has no sales page linked yet — use Find price first." });
+  try {
+    res.json(await attachPrice(row, row.priceUrl));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Link every unpriced card whose match is clear; the rest are returned for a human to pick.
+app.post("/api/inventory/find-prices", async (req, res) => {
+  const rows = store.inventory().filter((r) => !r.priceUrl && r.status !== "sold").slice(0, 40);
+  const attached = [], review = [];
+  for (const row of rows) {
+    try {
+      const { auto, candidates } = await findPricePage(row.name, row.category);
+      if (auto) {
+        await attachPrice(row, auto.url);
+        attached.push({ id: row.id, name: row.name, matched: `${auto.name} (${auto.set})` });
+      } else review.push({ id: row.id, name: row.name, candidates: candidates.slice(0, 5) });
+    } catch (err) {
+      review.push({ id: row.id, name: row.name, error: err.message, candidates: [] });
+    }
+  }
+  if (attached.length) log(req, `auto-linked ${attached.length} cards to sales pages`);
+  res.json({ attached, review, remaining: Math.max(0, store.inventory().filter((r) => !r.priceUrl && r.status !== "sold").length - review.length) });
+});
+
+// Duplicate check for hand-added cards: same name + grade already in stock?
+app.get("/api/inventory/duplicate", (req, res) => {
+  const name = stripGrade(req.query.name).toLowerCase(), grade = String(req.query.grade || "Raw").toUpperCase();
+  const hit = name && store.inventory().find((r) => r.status !== "sold" && stripGrade(r.name).toLowerCase() === name && String(r.grade).toUpperCase() === grade);
+  res.json(hit || null);
+});
+
+// Lot: a card was misread — re-price it from a corrected name without re-running the AI.
+app.post("/api/lot/reprice", async (req, res) => {
+  const name = store.clean.str(req.body?.name), grade = store.clean.str(req.body?.grade, 30) || "Raw", category = store.clean.str(req.body?.category, 20) || "other";
+  if (!name) return res.status(400).json({ error: "Type the card name." });
+  try {
+    const { candidates, auto } = await findPricePage(name, category);
+    let value = null, url = null, matched = null, volume = null;
+    if (auto) {
+      const d = await pricecharting.card(auto.url);
+      value = pricecharting.valueAtGrade(d, grade);
+      url = d.url;
+      matched = `${d.title} (${d.set})`;
+      volume = Object.values(d.salesVolume || {})[0] || null;
+    }
+    res.json({ name, grade, category, value, url, matched, volume, candidates: candidates.slice(0, 5), wanted: wantMatches(url, grade, name) });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// ---------------- want list ----------------
+
+function wantMatches(url, grade, name) {
+  const g = String(grade || "Raw").toUpperCase();
+  return store.wantlist().filter((w) => {
+    const gradeOk = String(w.grade || "Raw").toUpperCase() === g;
+    if (url && w.priceUrl) return w.priceUrl === url && gradeOk;
+    return Boolean(name) && gradeOk && coverage(w.name, { name, set: "" }) >= 0.8;
+  });
+}
+
+app.get("/api/wantlist", (_req, res) => res.json(store.wantlist()));
+app.post("/api/wantlist", (req, res) => {
+  const w = store.addWant({ ...(req.body || {}), addedBy: who(req) });
+  log(req, `added ${w.name} (${w.grade}) to the want list${w.maxPrice != null ? ` — max $${w.maxPrice}` : ""}`);
+  res.json(w);
+});
+app.patch("/api/wantlist/:id", (req, res) => {
+  const w = store.updateWant(req.params.id, req.body || {});
+  w ? res.json(w) : res.status(404).json({ error: "not found" });
+});
+app.delete("/api/wantlist/:id", (req, res) => okDelete(res, store.deleteWant(req.params.id)));
+
+// ---------------- trade evaluator (free: sold values on both sides) ----------------
+
+app.post("/api/trade", async (req, res) => {
+  const side = async (items) => {
+    const rows = [];
+    for (const it of (Array.isArray(items) ? items : []).slice(0, 25)) {
+      const inv = it.inventoryId ? store.inventory().find((r) => r.id === it.inventoryId) : null;
+      const url = store.clean.url(it.url || inv?.priceUrl);
+      const grade = store.clean.str(it.grade || inv?.grade, 30) || "Raw";
+      let value = inv?.value ?? null, name = inv?.name || store.clean.str(it.name);
+      if (url) {
+        try {
+          const d = await pricecharting.card(url);
+          value = pricecharting.valueAtGrade(d, grade);
+          name = name || `${d.title} (${d.set})`;
+        } catch {}
+      }
+      rows.push({ name, grade, url, value, cost: inv?.cost ?? null });
+    }
+    return { rows, total: Math.round(rows.reduce((n, r) => n + (r.value || 0), 0) * 100) / 100, unpriced: rows.filter((r) => r.value == null).length };
+  };
+  const [mine, theirs] = await Promise.all([side(req.body?.mine), side(req.body?.theirs)]);
+  res.json({ mine, theirs, diff: Math.round((theirs.total - mine.total) * 100) / 100 });
+});
+
+// ---------------- needs attention (deterministic, free) ----------------
+
+app.get("/api/attention", (_req, res) => {
+  const days = (iso) => (iso ? Math.round((Date.now() - Date.parse(iso)) / 86400000) : null);
+  const items = [];
+  for (const r of store.inventory()) {
+    if (r.status === "sold") continue;
+    const base = r.listPrice ?? r.value;
+    if (r.status === "listed") {
+      const d = days(r.listedAt || r.added);
+      if (d >= 21 && base) {
+        const suggested = Math.round(Math.min(base * 0.93, r.value != null ? r.value * 0.97 : Infinity) * 100) / 100;
+        items.push({ type: "stale_listing", id: r.id, name: r.name, grade: r.grade, days: d, current: base, suggested, text: `Listed ${d} days without selling — try ${usdText(suggested)}` });
+      }
+    } else if (r.status === "in_stock") {
+      const d = days(r.purchased ? r.purchased + "T12:00:00" : r.added);
+      if (d >= 60 && (r.value ?? r.cost) >= 20) items.push({ type: "unlisted_long", id: r.id, name: r.name, grade: r.grade, days: d, text: `In stock ${d} days and not listed (worth ${usdText(r.value ?? r.cost)})` });
+    }
+    if (r.value != null && r.cost > 0 && r.value < r.cost * 0.85) items.push({ type: "value_drop", id: r.id, name: r.name, grade: r.grade, pct: Math.round((1 - r.value / r.cost) * 100), text: `Worth ${Math.round((1 - r.value / r.cost) * 100)}% less than you paid (${usdText(r.cost)} → ${usdText(r.value)})` });
+  }
+  const unpriced = store.inventory().filter((r) => !r.priceUrl && r.status !== "sold").length;
+  const stale = store.inventory().filter((r) => r.priceUrl && r.status !== "sold" && (!r.valuedAt || days(r.valuedAt) > 7)).length;
+  res.json({ items: items.slice(0, 30), unpriced, staleValues: stale });
+});
+const usdText = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString("en-US", { maximumFractionDigits: n < 100 ? 2 : 0 }));
+
+// ---------------- PSA photos ----------------
+
+app.get("/api/psa/images/:n", async (req, res) => {
+  try {
+    res.json(await psa.images(req.params.n));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------- global search ----------------
+
+app.get("/api/search", (req, res) => {
+  const q = String(req.query.q || "").trim().toLowerCase();
+  if (q.length < 2) return res.json({ inventory: [], lookups: [], watchlist: [], wantlist: [] });
+  const has = (...fields) => fields.some((f) => String(f || "").toLowerCase().includes(q));
+  res.json({
+    inventory: store.inventory().filter((r) => has(r.name, r.sku, r.location, (r.tags || []).join(" "), r.notes)).slice(0, 8).map((r) => ({ id: r.id, name: r.name, grade: r.grade, status: r.status, value: r.value, sku: r.sku })),
+    lookups: store.load("lookups", []).filter((r) => has(r.card?.name, r.card?.player_or_character)).slice(0, 8).map((r) => ({ id: r.id, name: r.card?.name, value: r.pricing?.estimated_value_usd, at: r.at })),
+    watchlist: store.watchlist().filter((w) => has(w.card?.name)).slice(0, 5).map((w) => ({ id: w.id, name: w.card?.name })),
+    wantlist: store.wantlist().filter((w) => has(w.name)).slice(0, 5).map((w) => ({ id: w.id, name: w.name, grade: w.grade, maxPrice: w.maxPrice })),
+  });
+});
+
+// ---------------- AI inventory advisor ----------------
+
+app.post("/api/advisor", (req, res) => {
+  streamJob(req, res, async (send, signal) => {
+    const days = (iso) => (iso ? Math.round((Date.now() - Date.parse(iso)) / 86400000) : null);
+    const inventory = store.inventory().filter((r) => r.status !== "sold")
+      .sort((a, b) => (b.value ?? b.cost ?? 0) * b.qty - (a.value ?? a.cost ?? 0) * a.qty)
+      .map((r) => ({ card: `${r.name} (${r.grade})`, qty: r.qty, paid: r.cost, value: r.value, status: r.status, days_held: days(r.purchased ? r.purchased + "T12:00:00" : r.added), ...(r.status === "listed" ? { listed_on: r.listedOn, list_price: r.listPrice, listed_days: days(r.listedAt || r.added) } : {}) }));
+    if (!inventory.length) throw new Error("Add some cards to Inventory first — the advisor works from what you own.");
+    const hot = store.load("hot", {});
+    const recentSales = store.inventory().filter((r) => r.status === "sold").slice(-10).map((r) => ({ card: r.name, paid: r.cost, sold: r.soldPrice, on: r.soldOn, date: r.soldDate }));
+    const result = await adviseInventory({ inventory, movers: { week: store.movers(7).slice(0, 10), month: store.movers(30).slice(0, 10) }, hot: hot["all:weekly"] || hot["all:daily"] || null, recentSales }, { onEvent: send, signal });
+    const advice = { at: new Date().toISOString(), by: who(req), cards: inventory.length, ...result };
+    store.saveAdvice(advice);
+    log(req, "asked the advisor for an inventory plan");
+    return { advice };
+  });
+});
+app.get("/api/advice", (_req, res) => res.json(store.advice()));
+
+// ---------------- update check (GitHub Releases) ----------------
+
+const REPO = "Jdemasse-Urm/card-research-bot";
+let updateCache = null;
+const semver = (v) => String(v || "").replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
+const newer = (a, b) => { const x = semver(a), y = semver(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+app.get("/api/update-check", async (req, res) => {
+  if (updateCache && !req.query.force && Date.now() - updateCache.at < 6 * 3600000) return res.json(updateCache.value);
+  let value;
+  try {
+    const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { "user-agent": "card-research-bot", accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(15000) });
+    if (r.status === 404) value = { current: VERSION, latest: null, private: true, url: `https://github.com/${REPO}/releases/latest` };
+    else if (!r.ok) throw new Error(`GitHub answered ${r.status}`);
+    else {
+      const j = await r.json();
+      value = {
+        current: VERSION,
+        latest: String(j.tag_name || "").replace(/^v/, ""),
+        available: newer(j.tag_name, VERSION),
+        url: j.html_url,
+        notes: String(j.body || "").slice(0, 2000),
+        assets: (j.assets || []).map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size })).filter((a) => /\.(exe|dmg)$/i.test(a.name)),
+      };
+    }
+  } catch (err) {
+    value = { current: VERSION, latest: null, error: err.message, url: `https://github.com/${REPO}/releases/latest` };
+  }
+  updateCache = { at: Date.now(), value };
+  res.json(value);
 });
 
 // ---------------- background: daily re-price, backups, PSA progress, optional morning brief ----------------

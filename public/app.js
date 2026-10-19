@@ -105,6 +105,7 @@ $("#themeBtn").onclick = () => {
 };
 
 const SHORTCUTS = [
+  ["Ctrl/⌘ + K", "Search everything (inventory, reports, watchlist, want list)"],
   ["/", "Jump to the card search box"],
   ["Ctrl/⌘ + Enter", "Research with AI"],
   ["Esc", "Cancel a running job / close a window"],
@@ -114,6 +115,7 @@ const SHORTCUTS = [
 $("#helpBtn").onclick = () => openModal("Keyboard shortcuts", `<table>${SHORTCUTS.map(([k, d]) => `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(d)}</td></tr>`).join("")}</table>`);
 document.addEventListener("keydown", (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openSearch(); return; }
   if (e.key === "Escape") {
     lookupCtrl?.abort(); hotCtrl?.abort(); askCtrl?.abort(); window.lotCtrl?.abort();
     return;
@@ -189,9 +191,18 @@ async function openSettings() {
   loadHealth();
   getJSON("/api/version").then((v) => {
     const latest = (v.changelog.split(/\n(?=## )/)[1] || "").trim();
-    $("#versionBox").innerHTML = `Card Research Bot <b>${esc(v.version)}</b>${latest ? `<details><summary>What's new</summary>${md(latest)}</details>` : ""}
+    $("#versionBox").innerHTML = `Card Research Bot <b>${esc(v.version)}</b> <button class="small" id="checkUpdBtn">Check for updates</button><div id="updateBox" class="small" role="status"></div>${latest ? `<details><summary>What's new</summary>${md(latest)}</details>` : ""}
       <p class="small muted">To update: download and run the newest installer from <a href="https://github.com/Jdemasse-Urm/card-research-bot/releases/latest" target="_blank" rel="noopener">Releases</a> — your data and settings are kept.</p>`;
+    $("#checkUpdBtn").onclick = () => { $("#updateBox").textContent = "Checking…"; checkUpdates(true, true); };
   });
+  if (window.desktop) {
+    $("#desktopBlock").hidden = false;
+    const prefs = await window.desktop.getPrefs();
+    $("#trayToggle").checked = prefs.closeToTray !== false;
+    $("#loginToggle").checked = Boolean(prefs.openAtLogin);
+    $("#trayToggle").onchange = () => window.desktop.setPrefs({ closeToTray: $("#trayToggle").checked });
+    $("#loginToggle").onchange = () => window.desktop.setPrefs({ openAtLogin: $("#loginToggle").checked });
+  }
 }
 async function loadHealth() {
   $("#healthBox").textContent = "Checking…";
@@ -242,6 +253,7 @@ $("#selftestBtn").onclick = async () => {
   b.disabled = true;
   try {
     const { selftest } = await streamPost("/api/selftest", { full: true }, $("#selftestOut"));
+    if (selftest.ok) store.set("selftestDone", true);
     toast(selftest.ok ? "Self-test passed ✓" : "Self-test found problems — see the list", { error: !selftest.ok });
   } catch (err) {
     toast(err.message, { error: true });
@@ -408,8 +420,9 @@ document.addEventListener("paste", (e) => {
   if (files.length && $("#tab-lookup").classList.contains("active")) addFiles(files);
 });
 
-function alertBox(el, msg) {
-  el.innerHTML = `<div class="report" role="alert"><div class="error">⚠ ${esc(msg)}</div></div>`;
+function alertBox(el, msg, retry) {
+  el.innerHTML = `<div class="report" role="alert"><div class="error">⚠ ${esc(msg)}</div>${retry ? `<div class="row"><button data-retry>↻ Try again</button></div>` : ""}</div>`;
+  if (retry) $("[data-retry]", el).onclick = retry;
 }
 
 $("#clearBtn").onclick = () => {
@@ -425,6 +438,8 @@ pillGroup("#lookupMode", (v) => {
   $("#dropTitle").textContent = v === "lot" ? "Drop a photo of the lot / binder page" : "Drag & drop card photos here";
   $("#dropHint").textContent = v === "lot" ? "up to 6 photos · lay cards flat, good light, fronts up" : "or click to choose · or paste (Ctrl/⌘+V) · front + back works best";
   $("#researchBtn").textContent = v === "lot" ? "🔎 Value this lot" : "🔎 Research with AI";
+  $("#researchBtn").disabled = v === "trade";
+  if (v === "trade") renderTrade();
 });
 
 // ------------------------------------------------------------------ AI lookup (single + batch)
@@ -449,7 +464,7 @@ $("#researchBtn").onclick = async () => {
     if (batch) await runBatch(text);
     else renderReport(await runLookup(photos, text, photos[0]?.thumb || null), $("#lookupResult"));
   } catch (err) {
-    alertBox($("#lookupResult"), err.message);
+    alertBox($("#lookupResult"), err.message, err.message === "Cancelled." ? null : () => $("#researchBtn").click());
   } finally {
     $("#researchBtn").disabled = false;
     $("#cancelBtn").classList.add("hidden");
@@ -507,7 +522,7 @@ function priceChart(history, { label = "Monthly sold-price history" } = {}) {
   const years = [];
   for (let y = new Date(t0).getFullYear() + 1; y <= new Date(t1).getFullYear(); y++) years.push(Date.UTC(y, 0, 1));
   return `<figure style="margin:0">
-    <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}: ${esc(keys.join(", "))}">
+    <svg class="chart" data-chart="${esc(JSON.stringify({ keys, series: Object.fromEntries(keys.map((k) => [k, history[k]])), W, H, L, R, T, B, t0, t1, y0, y1 }))}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}: ${esc(keys.join(", "))}">
       ${ticks.map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${usd(v)}</text>`).join("")}
       ${years.map((t) => `<text x="${X(t)}" y="${H - 8}" text-anchor="middle">${new Date(t).getUTCFullYear()}</text>`).join("")}
       ${keys.map((k, i) => `<polyline fill="none" stroke="${SERIES_COLORS[i]}" stroke-width="2.2" points="${history[k].map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ")}"/>`).join("")}
@@ -644,17 +659,38 @@ function slabPanel(slab) {
     ${c.found ? `<p class="small">PSA record #${esc(c.certNumber)}: ${esc([c.year, c.brand, c.subject, c.cardNumber ? "#" + c.cardNumber : "", c.variety].filter(Boolean).join(" "))} — <b>${esc(c.gradeDescription || c.grade)}</b>
       ${c.population != null ? ` · Pop ${c.population.toLocaleString()} at this grade, ${c.populationHigher?.toLocaleString() ?? "?"} higher` : ""} · ${link(c.url, "view on PSA")}</p>` : ""}
     ${popRow ? `<p class="small muted">Population by grade — ${esc(popRow)}${pop.total ? ` · total graded ${pop.total.toLocaleString()}` : ""}</p>` : ""}
+    ${psaPhotos(slab.images)}
   </div>`;
 }
 
-async function ownedBanner(url, el) {
-  if (!url || !el) return;
+async function ownedBanner(url, grade, el, name) {
+  if (!el || (!url && !name)) return;
   try {
-    const rows = await getJSON("/api/owned?url=" + encodeURIComponent(url));
-    if (!rows.length) return;
-    const qty = rows.reduce((n, r) => n + r.qty, 0);
-    el.innerHTML = `<div class="owned">📦 You already own <b>${qty}</b> of this card: ${rows.map((r) => `${esc(r.grade)} (paid ${usd(r.cost)}${r.location ? ", " + esc(r.location) : ""})`).join(" · ")}</div>`;
+    const { owned, wanted } = await getJSON(`/api/owned?url=${encodeURIComponent(url || "")}&grade=${encodeURIComponent(grade || "Raw")}&name=${encodeURIComponent(name || "")}`);
+    let html = "";
+    if (owned.length) {
+      const qty = owned.reduce((n, r) => n + r.qty, 0);
+      html += `<div class="owned">📦 You already own <b>${qty}</b> of this card: ${owned.map((r) => `${esc(r.grade)} (paid ${usd(r.cost)}${r.location ? ", " + esc(r.location) : ""})`).join(" · ")}</div>`;
+    }
+    if (wanted.length) {
+      const w = wanted[0];
+      html += `<div class="owned want">🎯 On your want list${w.maxPrice != null ? ` — pay up to <b>${usd(w.maxPrice)}</b>` : ""}${w.notes ? ` · ${esc(w.notes)}` : ""}</div>`;
+    }
+    el.innerHTML = html;
   } catch {}
+}
+
+function psaPhotos(images) {
+  const urls = [images?.front, images?.back].filter(safeUrl);
+  if (!urls.length) return "";
+  return `<div class="psa-photos"><div class="small muted">PSA's own photos of this cert — compare with the slab in your hand:</div>${urls.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="PSA photo of the slab" loading="lazy"></a>`).join("")}</div>`;
+}
+
+function savePdf(title, btn) {
+  if (window.desktop?.savePDF) {
+    btn.disabled = true;
+    window.desktop.savePDF(title).then((r) => { btn.disabled = false; if (r?.saved) toast(`Saved ${r.path}`); else if (r?.error) toast(r.error, { error: true }); });
+  } else window.print(); // browsers: choose "Save as PDF" as the printer
 }
 
 function renderReport(r, el) {
@@ -770,6 +806,7 @@ function renderReport(r, el) {
         ${r.id ? `<button data-act="listing">📝 Write listing</button><button data-act="ask">💬 Ask about it</button>` : ""}
         <button data-act="rerun" title="Research again with fresh prices">↻ Re-run</button>
         <button data-act="copy">📋 Copy summary</button>
+        <button data-act="pdf">📄 Save PDF</button>
         <button data-act="print">🖨 Print</button>
       </span>
     </div>
@@ -783,7 +820,7 @@ function renderReport(r, el) {
 
   profitCalc(r, $("[data-profit]", el));
   if ($("[data-grading]", el)) gradingCalc(r, $("[data-grading]", el));
-  ownedBanner(p.pricecharting_url, $("[data-owned]", el));
+  ownedBanner(p.pricecharting_url, gradeLabel, $("[data-owned]", el), c.name);
 
   const act = (name, fn) => { const b = $(`[data-act=${name}]`, el); if (b) b.onclick = () => fn(b); };
   act("watch", async (b) => {
@@ -811,6 +848,7 @@ function renderReport(r, el) {
     try { await navigator.clipboard.writeText(summaryText(r)); b.textContent = "✓ Copied"; } catch { b.textContent = "Copy failed"; }
   });
   act("print", () => window.print());
+  act("pdf", (b) => savePdf(c.name, b));
 }
 
 // ------------------------------------------------------------------ quick (free) price
@@ -856,6 +894,7 @@ function renderQuickCard(d, el = $("#quickCard")) {
       <button data-q="watch">★ Watch</button>
       <button data-q="inv">＋ Inventory</button>
       <button data-q="deals">🏷 Find deals</button>
+      <button data-q="want" title="Add to your want list">🎯 Want</button>
     </div>
     <form class="inline-form hidden" data-qinv>
       <label class="small">Paid each $ <input type="number" step="0.01" min="0" name="cost" required></label>
@@ -885,8 +924,18 @@ function renderQuickCard(d, el = $("#quickCard")) {
     show(b.dataset.g);
   }));
   if (grades.length) show(grades[0]);
-  ownedBanner(d.url, $("[data-owned]", el));
   const grade = () => $("[data-grade]", el).value;
+  const refreshOwned = () => ownedBanner(d.url, grade(), $("[data-owned]", el), `${d.title} ${d.set}`);
+  refreshOwned();
+  $("[data-grade]", el).onchange = refreshOwned;
+  $("[data-q=want]", el).onclick = async (e) => {
+    const max = prompt("Pay up to $ (optional):");
+    if (max === null) return;
+    const r = await fetch("/api/wantlist", json("POST", { name, grade: grade(), priceUrl: d.url, maxPrice: max, category: categoryOfUrl(d.url) }));
+    e.target.textContent = r.ok ? "🎯 Wanted" : "Couldn't add";
+    e.target.disabled = true;
+    refreshOwned();
+  };
   const name = `${d.title} (${d.set})`;
   $("[data-q=watch]", el).onclick = async (e) => {
     const r = await fetch("/api/watchlist", json("POST", { url: d.url, name, grade: grade() }));
@@ -928,7 +977,7 @@ async function runHot(refresh) {
     renderHot(hot);
     $("#hotRefresh").classList.remove("hidden");
   } catch (err) {
-    alertBox($("#hotResult"), err.message);
+    alertBox($("#hotResult"), err.message, err.message === "Cancelled." ? null : () => runHot(refresh));
   } finally {
     $("#hotBtn").disabled = $("#hotRefresh").disabled = false;
     $("#hotCancel").classList.add("hidden");
@@ -1015,7 +1064,7 @@ async function loadWatch() {
         const badge = vsAvg == null ? "" : vsAvg <= -15 ? ` <span class="chip good" title="Well below its 12-month average">Dip</span>` : vsAvg >= 25 ? ` <span class="chip warn" title="Well above its 12-month average">Peak</span>` : "";
         return `<tr data-id="${esc(w.id)}"><td><b>${esc(w.card?.name)}</b><div class="small muted">${esc(CAT_LABEL[w.category] || "")} ${w.pricechartingUrl ? "· " + link(w.pricechartingUrl, "sales") : "· no price source (won't auto-update)"}${w.addedBy ? " · " + esc(w.addedBy) : ""}</div></td>
           <td class="small">${esc(w.card?.grading_company ? `${w.card.grading_company} ${w.card.grade}` : "Raw")}</td>
-          <td class="num">${usd(first)}</td><td class="num">${usd(last)}<div class="small muted">${pts.length ? esc(when(pts[pts.length - 1].at)) : ""}</div></td><td class="num">${pct(ch)}</td>
+          <td class="num">${usd(first)}</td><td class="num">${usd(last)}<div class="small muted">${pts.length ? esc(when(pts[pts.length - 1].at)) : ""}</div></td><td class="num">${pct(ch)}${sparkline(pts.map((s) => s.value))}</td>
           <td class="num">${pct(vsAvg)}${badge}</td>
           <td class="targets small">≥ <input type="number" min="0" step="1" data-t="targetAbove" value="${esc(w.targetAbove ?? "")}" aria-label="Alert when price rises to"> ≤ <input type="number" min="0" step="1" data-t="targetBelow" value="${esc(w.targetBelow ?? "")}" aria-label="Alert when price falls to"></td>
           <td><button class="ghost small" data-del aria-label="Remove from watchlist">Remove</button></td></tr>`;
@@ -1105,7 +1154,9 @@ async function doAsk(question) {
     $$(".msg.a:last-child .followups button").forEach((b) => (b.onclick = () => doAsk(b.textContent)));
     $("#askProgress").classList.add("hidden");
   } catch (err) {
-    chat.insertAdjacentHTML("beforeend", `<div class="msg a error" role="alert">⚠ ${esc(err.message)}</div>`);
+    chat.insertAdjacentHTML("beforeend", `<div class="msg a error" role="alert">⚠ ${esc(err.message)} ${err.message === "Cancelled." ? "" : `<button class="small" data-retry>↻ Try again</button>`}</div>`);
+    const rb = $(".msg.a.error:last-child [data-retry]", chat);
+    if (rb) rb.onclick = () => { rb.closest(".msg").remove(); doAsk(question); };
   } finally {
     $("#askBtn").disabled = false;
     $("#askCancel").classList.add("hidden");
@@ -1152,4 +1203,148 @@ refreshStatus().then(() => {
   const t = store.get("tab", "home");
   goTab($(`#tabs button[data-tab="${t}"]`) ? t : "home");
   if (!store.get("who")) setTimeout(() => $("#whoBtn").click(), 400);
+  checkUpdates();
 });
+
+// ------------------------------------------------------------------ v3.2: search, updates, tooltips, advisor, errors
+
+const categoryOfUrl = (url) => { const m = String(url || "").match(/\/game\/(baseball|basketball|football|hockey|soccer)-cards|\/game\/(yugioh|one-piece|pokemon)/); return m ? (m[1] || (m[2] === "one-piece" ? "onepiece" : m[2])) : "other"; };
+
+function sparkline(values) {
+  const v = values.filter((x) => x != null);
+  if (v.length < 2) return "";
+  const W = 80, H = 22, lo = Math.min(...v), hi = Math.max(...v);
+  const pts = v.map((y, i) => `${(i / (v.length - 1)) * W},${H - 2 - (hi === lo ? H / 2 : ((y - lo) / (hi - lo)) * (H - 4))}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><polyline fill="none" stroke="${v[v.length - 1] >= v[0] ? "#1f8a70" : "#c2341b"}" stroke-width="1.6" points="${pts}"/></svg>`;
+}
+
+// Hover tooltip for every price chart on the page (nearest month per series).
+const chartTip = document.createElement("div");
+chartTip.className = "chart-tip hidden";
+document.body.appendChild(chartTip);
+document.addEventListener("mousemove", (e) => {
+  const svg = e.target.closest?.("svg.chart[data-chart]");
+  if (!svg) return chartTip.classList.add("hidden");
+  let d;
+  try { d = JSON.parse(svg.dataset.chart); } catch { return; }
+  const r = svg.getBoundingClientRect();
+  const vx = ((e.clientX - r.left) / r.width) * d.W;
+  const t = d.t0 + ((vx - d.L) / Math.max(1, d.W - d.L - d.R)) * (d.t1 - d.t0);
+  const rows = d.keys.map((k, i) => {
+    const pts = d.series[k];
+    let best = pts[0];
+    for (const p of pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+    return { k, p: best, color: SERIES_COLORS[i] };
+  });
+  const month = new Date(rows[0].p[0]).toLocaleDateString([], { month: "short", year: "numeric" });
+  chartTip.innerHTML = `<b>${esc(month)}</b>${rows.map((x) => `<div><span style="color:${x.color}">●</span> ${esc(x.k)}: ${usd(x.p[1])}</div>`).join("")}`;
+  chartTip.style.left = Math.min(window.innerWidth - 190, e.clientX + 14) + "px";
+  chartTip.style.top = e.clientY + 14 + "px";
+  chartTip.classList.remove("hidden");
+});
+
+function openSearch() {
+  const body = openModal("Search everything", `<input id="gsInput" type="search" placeholder="Card, player, SKU, location, tag…" aria-label="Search"><div id="gsOut" style="margin-top:.6rem"></div>`);
+  const input = $("#gsInput", body);
+  input.focus();
+  let timer;
+  input.oninput = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const q = input.value.trim();
+      const out = $("#gsOut", body);
+      if (q.length < 2) return (out.innerHTML = "");
+      const r = await getJSON("/api/search?q=" + encodeURIComponent(q));
+      const sec = (key, title, items, fn) => (items.length ? `<h3>${title}</h3>${items.map((it, i) => `<div class="mini-row" data-s="${key}:${i}" role="button" tabindex="0"><span>${fn(it)}</span></div>`).join("")}` : "");
+      out.innerHTML =
+        sec("inventory", "Inventory", r.inventory, (it) => `${esc(it.name)} <span class="muted small">${esc(it.grade)} · ${esc((window.STATUS_LABEL || {})[it.status] || it.status)}${it.sku ? " · " + esc(it.sku) : ""} · ${usd(it.value)}</span>`) +
+        sec("lookups", "Reports", r.lookups, (it) => `${esc(it.name)} <span class="muted small">${usd(it.value)} · ${esc(when(it.at))}</span>`) +
+        sec("watchlist", "Watchlist", r.watchlist, (it) => esc(it.name)) +
+        sec("wantlist", "Want list", r.wantlist, (it) => `${esc(it.name)} <span class="muted small">${esc(it.grade)}${it.maxPrice != null ? " · max " + usd(it.maxPrice) : ""}</span>`) ||
+        `<p class="muted small">No matches.</p>`;
+      $$("[data-s]", out).forEach((el) => {
+        const [key, i] = el.dataset.s.split(":");
+        const it = r[key][+i];
+        const go = async () => {
+          modal.close();
+          if (key === "inventory") { invFilter.q = it.name; invFilter.status = "all"; invView = "stock"; goTab("inventory"); }
+          else if (key === "lookups") { const list = await getJSON("/api/lookups"); const rep = list.find((x) => x.id === it.id); if (rep) { goTab("lookup"); renderReport(rep, $("#lookupResult")); } }
+          else if (key === "watchlist") goTab("watch");
+          else { invView = "want"; goTab("inventory"); }
+        };
+        el.onclick = go;
+        el.onkeydown = (e) => e.key === "Enter" && go();
+      });
+    }, 200);
+  };
+}
+
+async function checkUpdates(force = false, show = false) {
+  try {
+    const u = await getJSON("/api/update-check" + (force ? "?force=1" : ""));
+    const plat = (window.desktop?.platform || navigator.platform || "").toLowerCase();
+    const want = /win/.test(plat) ? /\.exe$/i : /mac|darwin/.test(plat) ? /\.dmg$/i : null;
+    const asset = want ? (u.assets || []).find((a) => want.test(a.name)) : null;
+    const banner = $("#updateBanner");
+    if (u.available && store.get("dismissedUpdate") !== u.latest) {
+      banner.innerHTML = `⬆ Version <b>${esc(u.latest)}</b> is available (you have ${esc(u.current)}). ${asset ? `<a class="button" href="${esc(asset.url)}" target="_blank" rel="noopener">Download ${esc(asset.name)}</a>` : `<a class="button" href="${esc(u.url)}" target="_blank" rel="noopener">Open download page</a>`} <button class="ghost" id="dismissUpdate">Later</button>`;
+      banner.classList.remove("hidden");
+      $("#dismissUpdate").onclick = () => { store.set("dismissedUpdate", u.latest); banner.classList.add("hidden"); };
+    } else banner.classList.add("hidden");
+    if (show && $("#updateBox")) {
+      $("#updateBox").innerHTML = u.error ? `<span class="bad">Couldn't check: ${esc(u.error)}</span>`
+        : u.private ? `Couldn't check automatically (the GitHub project is private). ${link(u.url, "Open the releases page")} and sign in to GitHub there.`
+        : u.available ? `<span class="ok">Version ${esc(u.latest)} is available.</span> ${asset ? link(asset.url, "Download " + asset.name) : link(u.url, "Open download page")} — install it over this one; your data is kept.`
+        : `<span class="ok">✓ You're on the latest version (${esc(u.current)}).</span>`;
+    }
+    return u;
+  } catch (err) {
+    if (show && $("#updateBox")) $("#updateBox").innerHTML = `<span class="bad">${esc(err.message)}</span>`;
+  }
+}
+
+// ---- AI inventory advisor ----
+let advisorCtrl = null;
+const ACTION_LABEL = { sell_now: ["Sell now", "bad"], list_it: ["List it", "good"], drop_price: ["Drop price", "warn"], hold: ["Hold", ""], grade_it: ["Grade it", "good"], buy_more: ["Buy more", "good"], watch: ["Watch", ""] };
+function renderAdvice(a, el, { compact = false } = {}) {
+  if (!a) return (el.innerHTML = "");
+  const actions = compact ? (a.actions || []).slice(0, 4) : a.actions || [];
+  el.innerHTML = `<div class="${compact ? "" : "panel"}">
+    ${compact ? "" : `<div class="row space" style="margin:0"><h2 style="margin:0">Inventory plan</h2><span class="small muted">${esc(when(a.at))} · ${a.cards} cards · ${esc(a.by || "")}</span></div>`}
+    <p class="${compact ? "small" : "summary"}">${esc(a.summary)}</p>
+    <div class="table-wrap"><table>${actions.map((x) => `<tr><td><span class="chip ${ACTION_LABEL[x.action]?.[1] || ""}">${esc(ACTION_LABEL[x.action]?.[0] || x.action)}</span></td><td><b>${esc(x.card)}</b>${compact ? "" : `<div class="small">${esc(x.reasoning)}</div>`}</td><td class="num">${usd(x.target_price)}</td><td class="small muted">${esc(x.urgency?.replace("_", " "))}</td></tr>`).join("")}</table></div>
+    ${compact ? `<button class="ghost small" data-go="ask" style="margin-top:.4rem">Full plan →</button>` : `
+      ${(a.market_notes || []).length ? `<h3>Market notes</h3><ul class="tight small">${a.market_notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+      ${(a.risks || []).length ? `<h3>Risks</h3><ul class="tight small">${a.risks.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+      ${(a.sources || []).length ? `<h3>Sources</h3><div class="sources">${a.sources.map((s) => link(s.url, s.title)).join("")}</div></div>` : ""}
+      <div class="small muted" style="margin-top:.5rem">${esc(costLine(a.usage))}</div>`}
+  </div>`;
+  const go = $("[data-go]", el);
+  if (go) go.onclick = () => goTab("ask");
+}
+async function loadAdvice() {
+  try { renderAdvice(await getJSON("/api/advice"), $("#advisorOut")); } catch {}
+}
+$("#advisorBtn").onclick = async () => {
+  if (needKey()) return;
+  $("#advisorBtn").disabled = true;
+  $("#advisorCancel").classList.remove("hidden");
+  advisorCtrl = new AbortController();
+  try {
+    const { advice } = await streamPost("/api/advisor", {}, $("#advisorProgress"), advisorCtrl);
+    renderAdvice(advice, $("#advisorOut"));
+    $("#advisorProgress").classList.add("hidden");
+  } catch (err) {
+    toast(err.message, { error: true });
+    $("#advisorProgress").classList.add("hidden");
+  } finally {
+    $("#advisorBtn").disabled = false;
+    $("#advisorCancel").classList.add("hidden");
+  }
+};
+$("#advisorCancel").onclick = () => advisorCtrl?.abort();
+TAB_LOADERS.ask = loadAdvice;
+
+// ---- unexpected errors become a toast instead of silence ----
+window.addEventListener("unhandledrejection", (e) => toast(String(e.reason?.message || e.reason || "Something went wrong"), { error: true }));
+window.addEventListener("error", (e) => { if (e.message && !/ResizeObserver/.test(e.message)) toast(e.message, { error: true }); });

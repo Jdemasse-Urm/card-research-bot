@@ -1,6 +1,6 @@
 {
   "name": "card-research-bot",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "AI trading card research bot: drop a card photo, get recent sold prices, grading math, and the hottest cards by day/week/month.",
   "private": true,
   "type": "module",

@@ -43,24 +43,34 @@ Covers baseball, basketball, football, Yu-Gi-Oh and One Piece — plus Pokémon,
 | Live listings for the deal finder (optional) | eBay Browse API |
 | Every card in a set | SportsCardsPro.com / PriceCharting.com set pages |
 
-## Setup (once per computer)
+## Download (easiest)
 
-1. **Install Node.js (LTS)** from <https://nodejs.org>. Windows: the `.msi`. Mac: the `.pkg` (macOS Ventura 13+ is fine).
-2. **Get a free Gemini API key** at <https://aistudio.google.com/apikey> → sign in with Google → **Create API key**.
-3. *(Optional)* **PSA token** — free at <https://www.psacard.com/publicapi/documentation> — for slab checks, population
-   and grading progress. **eBay keys** — free at <https://developer.ebay.com/my/keys> (Production keyset: App ID +
-   Cert ID) — for the deal finder. Paste them in **Settings → Optional connections**.
-4. **Download this folder** (GitHub → green **Code** button → **Download ZIP**, then unzip), or `git clone` it.
+Go to **[Releases](../../releases/latest)** and download the one for your computer:
 
-## Start it
+- **Windows:** `CardResearchBot-x.y.z-Windows.zip` → right-click → **Extract All** → open the folder →
+  double-click **`start-windows.bat`**. (If Windows says "Windows protected your PC": **More info → Run anyway**.)
+- **Mac:** `CardResearchBot-x.y.z-Mac.zip` → double-click to unzip → open the folder → **right-click
+  `start-mac.command` → Open → Open** (first time only; after that a double-click works). Works on Apple Silicon and
+  Intel Macs, macOS 11 or newer.
 
-- **Windows:** double-click **`start-windows.bat`**
-- **Mac:** double-click **`start-mac.command`**
-  - If macOS says it can't be opened: right-click it → **Open** → **Open**.
-  - If it says you don't have permission: open Terminal, type `chmod +x ` (with a space), drag the file into the
-    Terminal window, press Enter, then double-click it again.
+Node.js is built into both downloads — **nothing else to install.** Each zip has a `README-FIRST.txt`.
 
-The first start installs what it needs (about a minute), then your browser opens **http://localhost:3737**.
+Then get a **free Gemini API key** at <https://aistudio.google.com/apikey> (sign in with Google → **Create API key**)
+and paste it in the app's **⚙ Settings**.
+
+*(Optional)* **PSA token** — free at <https://www.psacard.com/publicapi/documentation> — for slab checks, population
+and grading progress. **eBay keys** — free at <https://developer.ebay.com/my/keys> (Production keyset: App ID +
+Cert ID) — for the deal finder. Paste them in **Settings → Optional connections**.
+
+## Running from source (developers)
+
+Install Node.js 20+ from <https://nodejs.org>, clone this repo, then double-click `start-windows.bat` /
+`start-mac.command` (they run `npm install` the first time) or run `npm install && npm start`.
+To build the release zips: `python scripts/build_release.py <folder with verified Node.js downloads> dist`.
+
+## First start
+
+Your browser opens **http://localhost:3737** (if that port is busy, the next free one).
 Click **⚙ Settings**, paste your Gemini key, then click **🩺 Run self-test** to confirm everything works. Keep the black terminal window open while you use the bot; close it
 to stop.
 

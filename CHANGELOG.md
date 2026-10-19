@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.1 — one-click downloads
+- Separate **Windows** and **Mac** downloads on GitHub Releases, each with Node.js built in — nothing to install,
+  just unzip and double-click. The Mac download runs on both Apple Silicon and Intel Macs (macOS 11+).
+- Launchers use the built-in Node.js when it's there and fall back to an installed one (for git clones).
+
 ## 3.0.0 — the 20-20 update
 
 **Big new things**

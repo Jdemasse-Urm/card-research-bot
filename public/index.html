@@ -2,45 +2,71 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Card Research Bot</title>
+  <meta name="theme-color" content="#141416" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Card Bot" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <header class="top">
-    <div class="brand"><span class="logo" aria-hidden="true">◆</span> Card Research Bot</div>
+    <div class="brand"><img src="/icon.svg" alt="" class="brand-icon"> Card Research Bot</div>
     <nav class="tabs" id="tabs" aria-label="Sections">
-      <button data-tab="lookup" class="active" aria-current="page">Card Lookup</button>
-      <button data-tab="hot">Hottest Cards</button>
+      <button data-tab="home" class="active" aria-current="page">Home</button>
+      <button data-tab="lookup">Card Lookup</button>
+      <button data-tab="hot">Hottest</button>
+      <button data-tab="sets">Sets</button>
       <button data-tab="inventory">Inventory</button>
-      <button data-tab="watch">Watchlist <span id="alertBadge" class="badge hidden" aria-label="new price alerts"></span></button>
+      <button data-tab="watch">Watchlist <span id="alertBadge" class="badge hidden" aria-label="new alerts"></span></button>
       <button data-tab="ask">Ask</button>
       <button data-tab="history">History</button>
     </nav>
-    <button class="ghost" id="settingsBtn">⚙ Settings</button>
+    <div class="top-right">
+      <button class="ghost who" id="whoBtn" title="Who's using the app (shown in the activity feed)">👤 <span id="whoName">Me</span></button>
+      <button class="ghost icon-btn" id="themeBtn" title="Light / dark mode" aria-label="Switch light or dark mode">◐</button>
+      <button class="ghost icon-btn" id="helpBtn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+      <button class="ghost" id="settingsBtn">⚙ Settings</button>
+    </div>
   </header>
 
   <div id="keyBanner" class="banner hidden" role="status">
-    No Gemini API key yet. The free <b>Quick price</b> search works without one, but AI research needs a key (also free).
+    No Gemini API key yet. The free <b>Quick price</b>, <b>Sets</b> and <b>Inventory</b> work without one; AI research needs a key (also free).
     <button id="keyBannerBtn">Add key</button>
   </div>
 
   <main id="main">
+    <!-- ================= HOME ================= -->
+    <section id="tab-home" class="tab active" aria-label="Home dashboard">
+      <div id="dash"></div>
+    </section>
+
     <!-- ================= LOOKUP ================= -->
-    <section id="tab-lookup" class="tab active" aria-label="Card lookup">
+    <section id="tab-lookup" class="tab" aria-label="Card lookup">
       <div class="lookup-grid">
         <div class="panel">
-          <div id="drop" class="drop" role="button" tabindex="0" aria-label="Add card photos: drop files here, or press Enter to choose files">
+          <div class="pills" id="lookupMode" role="group" aria-label="What are you checking?">
+            <button data-v="single" class="active" aria-pressed="true">One card</button>
+            <button data-v="lot" aria-pressed="false">Lot / binder page</button>
+          </div>
+          <div id="drop" class="drop" role="button" tabindex="0" aria-label="Add card photos: drop files here, or press Enter to choose files" style="margin-top:.7rem">
             <input type="file" id="fileInput" accept="image/*" multiple hidden />
+            <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden />
             <div class="drop-inner">
               <div class="drop-icon" aria-hidden="true">⬇</div>
-              <div><b>Drag &amp; drop card photos here</b></div>
-              <div class="muted">or click to choose · or paste (Ctrl/⌘+V) · front + back works best</div>
+              <div><b id="dropTitle">Drag &amp; drop card photos here</b></div>
+              <div class="muted" id="dropHint">or click to choose · or paste (Ctrl/⌘+V) · front + back works best</div>
             </div>
             <div id="thumbs" class="thumbs"></div>
           </div>
-          <label class="check"><input type="checkbox" id="batchMode" /> Batch mode: each photo is a <b>different</b> card</label>
+          <div class="row" style="margin-top:.5rem">
+            <button id="cameraBtn" class="ghost">📷 Take photo</button>
+            <label class="check" style="margin:0" id="batchWrap"><input type="checkbox" id="batchMode" /> Batch: each photo is a <b>different</b> card</label>
+          </div>
           <label class="lbl" for="lookupText">Card name or extra details <span class="muted">(optional with a photo)</span></label>
           <input id="lookupText" type="text" placeholder="e.g. 2018 Prizm Luka Doncic silver PSA 10 · Blue-Eyes LOB-001 1st · Luffy OP05-119 manga" />
           <div class="row">
@@ -49,8 +75,17 @@
             <button id="cancelBtn" class="ghost hidden">✕ Cancel</button>
             <button id="clearBtn" class="ghost">Clear</button>
           </div>
+          <label class="check"><input type="checkbox" id="freshMode" /> Ignore saved identification (re-read the photo)</label>
           <div id="lookupProgress" class="progress hidden" aria-live="polite"></div>
           <div id="batchQueue" class="hidden"></div>
+          <details class="psa-box">
+            <summary>Check a PSA cert number</summary>
+            <div class="row" style="margin-top:.4rem">
+              <input id="certInput" type="text" inputmode="numeric" placeholder="e.g. 43120873" aria-label="PSA cert number" style="flex:1" />
+              <button id="certBtn">Check</button>
+            </div>
+            <div id="certOut" class="small" aria-live="polite"></div>
+          </details>
         </div>
         <div id="lookupResult" class="result">
           <div class="empty">
@@ -58,7 +93,8 @@
             <p>The bot reads the card from the photo (player, year, set, number, parallel, grade), pulls the most recent
               <b>sold</b> prices for every grade, searches Google for news and price moves, and tells you whether to
               grade it, hold it or sell it.</p>
-            <p class="muted">Covers baseball, basketball, football, Yu-Gi-Oh and One Piece.</p>
+            <p class="muted">Baseball, basketball, football, hockey, soccer, Yu-Gi-Oh, One Piece and Pokémon.
+              Got a whole lot or binder page? Switch to <b>Lot / binder page</b>.</p>
           </div>
         </div>
       </div>
@@ -74,6 +110,9 @@
           <button data-v="football" aria-pressed="false">🏈 Football</button>
           <button data-v="yugioh" aria-pressed="false">🃏 Yu-Gi-Oh</button>
           <button data-v="onepiece" aria-pressed="false">🏴‍☠️ One Piece</button>
+          <button data-v="pokemon" aria-pressed="false">⚡ Pokémon</button>
+          <button data-v="hockey" aria-pressed="false">🏒 Hockey</button>
+          <button data-v="soccer" aria-pressed="false">⚽ Soccer</button>
         </div>
         <div class="row">
           <div class="pills" id="hotPeriods" role="group" aria-label="Time period">
@@ -90,28 +129,34 @@
       <div id="hotResult"></div>
     </section>
 
+    <!-- ================= SETS ================= -->
+    <section id="tab-sets" class="tab" aria-label="Set browser">
+      <div class="panel">
+        <h2>Set browser</h2>
+        <p class="muted small" style="margin-top:0">Every card in a set with current values — find the chase cards. Free, no AI.</p>
+        <div class="row" style="margin-top:.4rem">
+          <input id="setSearch" type="search" placeholder="e.g. 2023 Prizm basketball · 2024 Topps Chrome · One Piece Romance Dawn · Legend of Blue Eyes" aria-label="Search for a set" style="flex:1" />
+          <button id="setSearchBtn" class="primary">Find set</button>
+        </div>
+        <div id="setList" class="set-list"></div>
+      </div>
+      <div id="setResult"></div>
+    </section>
+
     <!-- ================= INVENTORY ================= -->
     <section id="tab-inventory" class="tab" aria-label="Inventory">
       <div class="panel">
         <div class="row space">
-          <div><h2>Inventory</h2><div class="muted">What you own, what you paid, and what it's worth today. Values re-check daily (free).</div></div>
-          <div class="row" style="margin:0">
-            <button id="invAddBtn">＋ Add card</button>
-            <button id="invRefresh">↻ Re-value</button>
-            <a class="button" href="/api/export/inventory.csv">⬇ Export CSV</a>
+          <div class="pills" id="invView" role="group" aria-label="Inventory view">
+            <button data-v="stock" class="active" aria-pressed="true">📦 Stock</button>
+            <button data-v="grading" aria-pressed="false">🏷 Grading</button>
+            <button data-v="sales" aria-pressed="false">💵 Sales &amp; profit</button>
+            <button data-v="expenses" aria-pressed="false">🧾 Expenses</button>
           </div>
+          <div class="row" style="margin:0" id="invActions"></div>
         </div>
-        <form id="invForm" class="inv-form hidden">
-          <input name="name" type="text" placeholder="Card name" required aria-label="Card name" />
-          <input name="grade" type="text" placeholder="Grade (Raw, PSA 10…)" aria-label="Grade" />
-          <input name="qty" type="number" min="1" value="1" aria-label="Quantity" />
-          <input name="cost" type="number" min="0" step="0.01" placeholder="Paid each $" aria-label="Paid each" />
-          <input name="value" type="number" min="0" step="0.01" placeholder="Value each $ (optional)" aria-label="Current value each" />
-          <button class="primary">Save</button>
-        </form>
       </div>
-      <div id="invTotals" class="totals"></div>
-      <div id="invList"></div>
+      <div id="invBody"></div>
     </section>
 
     <!-- ================= WATCHLIST ================= -->
@@ -121,7 +166,7 @@
           <div><h2>Watchlist</h2><div class="muted">Cards you're tracking. Prices re-check daily while the app is open (free). Set targets to get alerts.</div></div>
           <div class="row" style="margin:0">
             <button id="watchRefresh">↻ Re-check prices now</button>
-            <a class="button" href="/api/export/watchlist.csv">⬇ Export CSV</a>
+            <a class="button" href="/api/export/watchlist.csv">⬇ CSV</a>
           </div>
         </div>
       </div>
@@ -143,7 +188,7 @@
       <div class="panel ask-bar">
         <input id="askInput" type="text" placeholder="Ask a question…" aria-label="Your question" />
         <button id="askBtn" class="primary">Ask</button>
-        <button id="askCancel" class="ghost hidden">✕</button>
+        <button id="askCancel" class="ghost hidden" aria-label="Cancel">✕</button>
       </div>
       <div id="askProgress" class="progress hidden" aria-live="polite"></div>
     </section>
@@ -158,13 +203,19 @@
     </section>
   </main>
 
+  <!-- generic modal used by tools (deals, listing, centering, edit, labels...) -->
+  <dialog id="modal" aria-labelledby="modalTitle">
+    <div class="modal-head"><h2 id="modalTitle"></h2><button class="ghost" id="modalClose" aria-label="Close">✕</button></div>
+    <div id="modalBody"></div>
+  </dialog>
+
   <dialog id="settings" aria-labelledby="settingsTitle">
     <div class="settings">
-      <div class="row space"><h2 id="settingsTitle">Settings</h2><button class="ghost" id="closeSettings" aria-label="Close settings">✕</button></div>
+      <div class="modal-head"><h2 id="settingsTitle">Settings</h2><button class="ghost" id="closeSettings" aria-label="Close settings">✕</button></div>
       <div id="settingsLocalOnly" class="muted hidden">Settings can only be changed on the computer running the bot.</div>
 
       <section class="set-block">
-        <h3>Gemini API key</h3>
+        <h3>Gemini API key <span class="muted small">(required for AI)</span></h3>
         <p class="small">Free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>
           (sign in with Google → Create API key). Saved only on this computer, in the app's <code>.env</code> file.</p>
         <div class="row" style="margin-top:.3rem">
@@ -172,6 +223,28 @@
           <button id="saveKey" class="primary">Save</button>
         </div>
         <div id="keyMsg" class="small muted" role="status"></div>
+        <div class="row" style="margin-top:.4rem"><button id="selftestBtn">🩺 Run self-test</button><span class="small muted">checks prices, the key, Google Search and a full lookup (~1 min)</span></div>
+        <div id="selftestOut" class="progress hidden" aria-live="polite"></div>
+      </section>
+
+      <section class="set-block">
+        <h3>Optional connections</h3>
+        <p class="small"><b>PSA</b> (verify slabs, population, grading progress): free token at
+          <a href="https://www.psacard.com/publicapi/documentation" target="_blank" rel="noopener">psacard.com/publicapi</a>.
+          <span id="psaState" class="muted"></span></p>
+        <div class="row" style="margin-top:.2rem">
+          <input id="psaInput" type="password" placeholder="PSA API token" autocomplete="off" aria-label="PSA API token" style="flex:1" />
+          <button id="savePsa">Save</button>
+        </div>
+        <p class="small" style="margin-top:.7rem"><b>eBay</b> (deal finder — live listings under sold value): free keys at
+          <a href="https://developer.ebay.com/my/keys" target="_blank" rel="noopener">developer.ebay.com</a> → Production keyset.
+          <span id="ebayState" class="muted"></span></p>
+        <div class="row" style="margin-top:.2rem">
+          <input id="ebayIdInput" type="password" placeholder="App ID (Client ID)" autocomplete="off" aria-label="eBay App ID" style="flex:1" />
+          <input id="ebaySecretInput" type="password" placeholder="Cert ID (Client Secret)" autocomplete="off" aria-label="eBay Cert ID" style="flex:1" />
+          <button id="saveEbay">Save</button>
+        </div>
+        <div id="connMsg" class="small" role="status"></div>
       </section>
 
       <section class="set-block">
@@ -182,11 +255,12 @@
           <input id="budgetInput" type="number" min="0" step="1" placeholder="none" style="width:110px" />
           <button id="saveBudget">Save cap</button>
         </div>
+        <label class="check"><input type="checkbox" id="briefToggle" /> Morning brief: scan today's hottest cards automatically each morning while the bot is open</label>
       </section>
 
       <section class="set-block">
         <h3>Share on home network</h3>
-        <p class="small">Let your other computer (e.g. the Mac) use this bot and its data in a browser. Needs a PIN; restart the bot after changing.</p>
+        <p class="small">Let your other computer or phone use this bot and its data in a browser. Needs a PIN; restart the bot after changing.</p>
         <div class="row" style="margin-top:.3rem">
           <label class="check" style="margin:0"><input type="checkbox" id="shareToggle" /> Share</label>
           <input id="pinInput" type="password" inputmode="numeric" maxlength="8" placeholder="4–8 digit PIN" style="width:150px" aria-label="PIN" />
@@ -201,18 +275,27 @@
       </section>
 
       <section class="set-block">
-        <h3>Backup</h3>
+        <h3>Backup &amp; help</h3>
+        <p class="small muted" style="margin:.2rem 0">The bot also saves an automatic backup every day (last 14 kept) in <code>data/backups</code>.</p>
         <div class="row" style="margin-top:.3rem">
           <a class="button" href="/api/backup">⬇ Download backup</a>
           <label class="button" for="restoreFile">⬆ Restore from backup</label>
           <input type="file" id="restoreFile" accept="application/json,.json" hidden />
+          <button id="diagBtn" class="ghost">📋 Copy diagnostics</button>
         </div>
         <div id="restoreMsg" class="small" role="status"></div>
       </section>
-      <p class="muted small" id="modelInfo"></p>
+      <section class="set-block">
+        <h3>Version</h3>
+        <div id="versionBox" class="small"></div>
+      </section>
     </div>
   </dialog>
 
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
   <script src="app.js"></script>
+  <script src="business.js"></script>
+  <script src="tools.js"></script>
 </body>
 </html>

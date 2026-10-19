@@ -1,4 +1,6 @@
-// Card Research Bot — front end (plain JS, no build step).
+// Card Research Bot — core front end (plain JS, no build step).
+// business.js (dashboard, inventory, grading, sales, expenses) and tools.js (sets, lots, centering,
+// deals, listings, PSA) load after this file and use the helpers defined here.
 "use strict";
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -7,21 +9,124 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const safeUrl = (u) => (/^https?:\/\//i.test(String(u || "")) ? String(u) : null);
 const link = (u, text) => (safeUrl(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(text ?? u)}</a>` : esc(text ?? ""));
 const usd = (n) => (n == null || isNaN(n) ? "—" : (n < 0 ? "-" : "") + "$" + Math.abs(Number(n)).toLocaleString("en-US", { minimumFractionDigits: Math.abs(n) < 100 ? 2 : 0, maximumFractionDigits: Math.abs(n) < 100 ? 2 : 0 }));
-const pct = (n) => (n == null ? "—" : `<span class="${n > 0 ? "pos" : n < 0 ? "neg" : ""}">${n > 0 ? "+" : ""}${n}%</span>`);
+const pct = (n) => (n == null || isNaN(n) ? "—" : `<span class="${n > 0 ? "pos" : n < 0 ? "neg" : ""}">${n > 0 ? "+" : ""}${n}%</span>`);
 const when = (iso) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
-const CAT_LABEL = { baseball: "⚾ Baseball", basketball: "🏀 Basketball", football: "🏈 Football", yugioh: "🃏 Yu-Gi-Oh", onepiece: "🏴‍☠️ One Piece", other: "Other" };
+const day = (iso) => (iso ? new Date(iso.length === 10 ? iso + "T12:00:00" : iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "");
+const CAT_LABEL = { baseball: "⚾ Baseball", basketball: "🏀 Basketball", football: "🏈 Football", hockey: "🏒 Hockey", soccer: "⚽ Soccer", yugioh: "🃏 Yu-Gi-Oh", onepiece: "🏴‍☠️ One Piece", pokemon: "⚡ Pokémon", other: "Other" };
 const json = (method, body) => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const getJSON = async (url) => {
+  const r = await fetch(url);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `Error ${r.status}`);
+  return j;
+};
+const store = {
+  get: (k, d) => { try { const v = localStorage.getItem("cardbot." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem("cardbot." + k, JSON.stringify(v)); } catch {} },
+};
+
+// Every request carries who is using this browser (for the activity feed).
+const _fetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => {
+  const headers = new Headers(opts.headers || {});
+  if (store.get("who")) headers.set("x-user", store.get("who"));
+  return _fetch(url, { ...opts, headers });
+};
 
 function costLine(u) {
   if (!u) return "";
   const free = u.freeGrounded ? ` · Google searches this month: ${u.groundedThisMonth}/${u.freeGrounded} free` : "";
-  return `AI: ${u.calls || 0} calls, ≈ $${(u.usd || 0).toFixed(3)} on paid tier ($0 on free tier)${free}`;
+  const models = u.models?.length ? ` · ${u.models.join(", ")}` : "";
+  return `AI: ${u.calls || 0} calls, ≈ $${(u.usd || 0).toFixed(3)} on paid tier ($0 on free tier)${models}${free}`;
 }
 
 let status = { hasKey: false };
 
+// ------------------------------------------------------------------ toasts + undo
+
+function toast(msg, { undo, ms = 6000, error = false } = {}) {
+  const el = document.createElement("div");
+  el.className = "toast" + (error ? " error" : "");
+  el.setAttribute("role", error ? "alert" : "status");
+  el.innerHTML = `<span>${esc(msg)}</span>${undo ? `<button>Undo</button>` : ""}`;
+  $("#toasts").appendChild(el);
+  const close = () => el.remove();
+  if (undo) $("button", el).onclick = async () => { close(); await undo(); };
+  setTimeout(close, ms);
+}
+
+/** DELETE something; show "Removed · Undo" instead of an "are you sure?" pop-up. */
+async function removeWithUndo(url, label, reload) {
+  const r = await fetch(url, { method: "DELETE" });
+  const j = await r.json().catch(() => ({}));
+  reload();
+  if (j.undo) toast(`Removed ${label}`, { undo: async () => { await fetch("/api/undo/" + j.undo, { method: "POST" }); reload(); toast("Restored"); } });
+}
+
+// ------------------------------------------------------------------ generic modal
+
+const modal = $("#modal");
+function openModal(title, html, { wide = false } = {}) {
+  $("#modalTitle").textContent = title;
+  $("#modalBody").innerHTML = html;
+  modal.classList.toggle("wide", wide);
+  if (!modal.open) modal.showModal();
+  return $("#modalBody");
+}
+$("#modalClose").onclick = () => modal.close();
+
+// ------------------------------------------------------------------ who / theme / shortcuts
+
+function renderWho() {
+  $("#whoName").textContent = store.get("who") || "Who's this?";
+}
+$("#whoBtn").onclick = () => {
+  const body = openModal("Who's using this browser?", `
+    <p class="small muted">Shown next to things you add or sell, so you can tell who did what.</p>
+    <div class="row">${["Joseph", "Dad"].map((n) => `<button data-n="${n}">${n}</button>`).join("")}</div>
+    <div class="row"><input id="whoInput" type="text" placeholder="Or type a name" value="${esc(store.get("who") || "")}" style="flex:1" maxlength="40"><button id="whoSave" class="primary">Save</button></div>`);
+  const set = (n) => { store.set("who", n.trim().slice(0, 40)); renderWho(); modal.close(); };
+  $$("[data-n]", body).forEach((b) => (b.onclick = () => set(b.dataset.n)));
+  $("#whoSave", body).onclick = () => $("#whoInput", body).value.trim() && set($("#whoInput", body).value);
+};
+
+function applyTheme() {
+  const t = store.get("theme", "auto");
+  if (t === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", t);
+  $("#themeBtn").title = `Theme: ${t} (click to change)`;
+}
+$("#themeBtn").onclick = () => {
+  const order = ["auto", "light", "dark"];
+  store.set("theme", order[(order.indexOf(store.get("theme", "auto")) + 1) % 3]);
+  applyTheme();
+  toast(`Theme: ${store.get("theme")}`, { ms: 1500 });
+};
+
+const SHORTCUTS = [
+  ["/", "Jump to the card search box"],
+  ["Ctrl/⌘ + Enter", "Research with AI"],
+  ["Esc", "Cancel a running job / close a window"],
+  ["1 – 8", "Switch tabs (Home, Lookup, Hottest, Sets, Inventory, Watchlist, Ask, History)"],
+  ["?", "Show this list"],
+];
+$("#helpBtn").onclick = () => openModal("Keyboard shortcuts", `<table>${SHORTCUTS.map(([k, d]) => `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(d)}</td></tr>`).join("")}</table>`);
+document.addEventListener("keydown", (e) => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
+  if (e.key === "Escape") {
+    lookupCtrl?.abort(); hotCtrl?.abort(); askCtrl?.abort(); window.lotCtrl?.abort();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); goTab("lookup"); $("#researchBtn").click(); return; }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || modal.open || $("#settings").open) return;
+  if (e.key === "/") { e.preventDefault(); goTab("lookup"); $("#lookupText").focus(); }
+  else if (e.key === "?") $("#helpBtn").click();
+  else if (/^[1-8]$/.test(e.key)) goTab($$("#tabs button")[+e.key - 1].dataset.tab);
+});
+
 // ------------------------------------------------------------------ tabs
 
+const TAB_LOADERS = {};
 function goTab(name) {
   $$("#tabs button").forEach((x) => {
     const on = x.dataset.tab === name;
@@ -29,25 +134,30 @@ function goTab(name) {
     on ? x.setAttribute("aria-current", "page") : x.removeAttribute("aria-current");
   });
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + name));
-  if (name === "watch") loadWatch();
-  if (name === "history") loadHistory();
-  if (name === "hot") loadHotCached();
-  if (name === "inventory") loadInventory();
+  TAB_LOADERS[name]?.();
+  store.set("tab", name);
   window.scrollTo({ top: 0 });
 }
 $$("#tabs button").forEach((b) => b.addEventListener("click", () => goTab(b.dataset.tab)));
+
+function pillGroup(sel, onPick) {
+  $$(sel + " button").forEach((b) => (b.onclick = () => {
+    $$(sel + " button").forEach((x) => { x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", x === b); });
+    onPick(b.dataset.v ?? b.dataset.g);
+  }));
+}
 
 // ------------------------------------------------------------------ status / alerts badge
 
 let lastAlertCount = 0;
 async function refreshStatus() {
-  status = await (await fetch("/api/status")).json();
+  status = await getJSON("/api/status");
   $("#keyBanner").classList.toggle("hidden", status.hasKey);
   const n = status.unseenAlerts || 0;
   $("#alertBadge").textContent = n;
   $("#alertBadge").classList.toggle("hidden", !n);
   if (n > lastAlertCount && "Notification" in window && Notification.permission === "granted") {
-    new Notification("Card Research Bot", { body: `${n} new price alert${n > 1 ? "s" : ""} on your watchlist` });
+    new Notification("Card Research Bot", { body: `${n} new alert${n > 1 ? "s" : ""} on your watchlist` });
   }
   lastAlertCount = n;
 }
@@ -59,23 +169,30 @@ const settingsDlg = $("#settings");
 async function openSettings() {
   settingsDlg.showModal();
   $("#keyMsg").textContent = "";
-  const s = await (await fetch("/api/settings")).json();
+  const s = await getJSON("/api/settings");
   $("#settingsLocalOnly").classList.toggle("hidden", s.canEditSettings);
-  $$("#settings input, #settings button:not(#closeSettings)").forEach((el) => (el.disabled = !s.canEditSettings));
-  $("#modelInfo").textContent = `AI model: ${s.model} · key ${s.hasKey ? "saved ✓" : "not set"}`;
+  $$("#settings input, #settings button:not(#closeSettings):not(#diagBtn)").forEach((el) => (el.disabled = !s.canEditSettings));
   $("#budgetInput").value = s.budget ?? "";
   $("#shareToggle").checked = s.share;
+  $("#briefToggle").checked = s.dailyBrief;
+  $("#psaState").innerHTML = s.psa ? `<span class="ok">✓ connected</span>` : "";
+  $("#ebayState").innerHTML = s.ebay ? `<span class="ok">✓ connected</span>` : "";
   $("#usageBox").innerHTML = `Estimated AI cost this month: <b>${usd(s.spendThisMonth)}</b> <span class="muted">(only charged if you turned on billing in Google AI Studio; the free tier is $0)</span><br>
-    Google searches this month: <b>${s.groundedThisMonth}</b> of ${s.freeGrounded.toLocaleString()} free`;
+    Google searches this month: <b>${s.groundedThisMonth}</b> of ${s.freeGrounded.toLocaleString()} free · AI model ${esc(s.model)}${s.fallbackModel ? `, backup ${esc(s.fallbackModel)}` : ""} · key ${s.hasKey ? "saved ✓" : "not set"}`;
   $("#shareMsg").innerHTML = s.shareActive
-    ? `Sharing is on. On the other computer open: ${s.lanUrls.map((u) => `<b>${esc(u)}</b>`).join(" or ")}`
+    ? `Sharing is on. On the other computer or phone open: ${s.lanUrls.map((u) => `<b>${esc(u)}</b>`).join(" or ")}`
     : s.share ? `<span class="bad">Sharing is set but not active. Restart the bot (and make sure a PIN is saved).</span>` : "";
   loadHealth();
+  getJSON("/api/version").then((v) => {
+    const latest = (v.changelog.split(/\n(?=## )/)[1] || "").trim();
+    $("#versionBox").innerHTML = `Card Research Bot <b>${esc(v.version)}</b>${latest ? `<details><summary>What's new</summary>${md(latest)}</details>` : ""}
+      <p class="small muted">To update: download the newest ZIP from GitHub and copy your <code>data</code> folder and <code>.env</code> file into it (or run <code>git pull</code> if you cloned it).</p>`;
+  });
 }
 async function loadHealth() {
   $("#healthBox").textContent = "Checking…";
   try {
-    const h = await (await fetch("/api/health")).json();
+    const h = await getJSON("/api/health");
     $("#healthBox").innerHTML = h.results.map((r) => `<div><span class="${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✗"}</span> ${esc(r.name)} <span class="muted">${r.ok ? r.ms + " ms" : esc(r.error || "no results")}</span></div>`).join("");
   } catch {
     $("#healthBox").textContent = "Couldn't check.";
@@ -91,10 +208,11 @@ async function saveSettings(body, msgEl) {
   await refreshStatus();
   return j.ok;
 }
-$("#saveKey").onclick = async () => {
-  if (await saveSettings({ apiKey: $("#keyInput").value }, $("#keyMsg"))) $("#keyInput").value = "";
-};
+$("#saveKey").onclick = async () => { if (await saveSettings({ apiKey: $("#keyInput").value }, $("#keyMsg"))) $("#keyInput").value = ""; };
+$("#savePsa").onclick = async () => { if (await saveSettings({ psaToken: $("#psaInput").value }, $("#connMsg"))) { $("#psaInput").value = ""; openSettings(); } };
+$("#saveEbay").onclick = async () => { if (await saveSettings({ ebayId: $("#ebayIdInput").value, ebaySecret: $("#ebaySecretInput").value }, $("#connMsg"))) { $("#ebayIdInput").value = $("#ebaySecretInput").value = ""; openSettings(); } };
 $("#saveBudget").onclick = () => saveSettings({ budget: $("#budgetInput").value }, $("#keyMsg"));
+$("#briefToggle").onchange = () => saveSettings({ dailyBrief: $("#briefToggle").checked }, $("#keyMsg"));
 $("#saveShare").onclick = () => saveSettings({ share: $("#shareToggle").checked, pin: $("#pinInput").value || undefined }, $("#shareMsg"));
 $("#restoreFile").onchange = async (e) => {
   const f = e.target.files[0];
@@ -107,6 +225,23 @@ $("#restoreFile").onchange = async (e) => {
     $("#restoreMsg").innerHTML = `<span class="bad">That file isn't a valid backup.</span>`;
   }
   e.target.value = "";
+};
+$("#diagBtn").onclick = async () => {
+  const text = await (await fetch("/api/diagnostics")).text();
+  try { await navigator.clipboard.writeText(text); toast("Diagnostics copied — paste them in a message to get help (no keys included)."); }
+  catch { openModal("Diagnostics", `<pre class="diag">${esc(text)}</pre>`, { wide: true }); }
+};
+$("#selftestBtn").onclick = async () => {
+  const b = $("#selftestBtn");
+  b.disabled = true;
+  try {
+    const { selftest } = await streamPost("/api/selftest", { full: true }, $("#selftestOut"));
+    toast(selftest.ok ? "Self-test passed ✓" : "Self-test found problems — see the list", { error: !selftest.ok });
+  } catch (err) {
+    toast(err.message, { error: true });
+  } finally {
+    b.disabled = false;
+  }
 };
 
 function needKey() {
@@ -165,9 +300,9 @@ async function streamPost(url, body, progressEl, controller) {
   return final;
 }
 
-// ------------------------------------------------------------------ images (drop / pick / paste)
+// ------------------------------------------------------------------ images (drop / pick / paste / camera)
 
-let photos = []; // { mediaType, data(base64), url }
+let photos = []; // { mediaType, data(base64), url, thumb, img, rotation, warn }
 const MAX_SIDE = 1600;
 
 function readAsImage(file) {
@@ -180,24 +315,56 @@ function readAsImage(file) {
   });
 }
 
-function scaled(img, maxSide, quality) {
+function drawScaled(img, maxSide, rotation = 0) {
   const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.round(img.naturalWidth * scale), h = Math.round(img.naturalHeight * scale);
   const c = document.createElement("canvas");
-  c.width = Math.round(img.naturalWidth * scale);
-  c.height = Math.round(img.naturalHeight * scale);
-  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-  return c.toDataURL("image/jpeg", quality);
+  const sideways = rotation % 180 !== 0;
+  c.width = sideways ? h : w;
+  c.height = sideways ? w : h;
+  const ctx = c.getContext("2d");
+  ctx.translate(c.width / 2, c.height / 2);
+  ctx.rotate((rotation * Math.PI) / 180);
+  ctx.drawImage(img, -w / 2, -h / 2, w, h);
+  return c;
+}
+
+// Quick photo check: too dark, too blurry, or too small to read card details.
+function photoWarning(img) {
+  if (Math.max(img.naturalWidth, img.naturalHeight) < 600) return "Small photo — details may be unreadable";
+  const c = drawScaled(img, 256);
+  const { data, width: w, height: h } = c.getContext("2d").getImageData(0, 0, c.width, c.height);
+  const g = new Float32Array(w * h);
+  let sum = 0;
+  for (let i = 0; i < w * h; i++) { g[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2]; sum += g[i]; }
+  if (sum / (w * h) < 55) return "Photo looks dark — more light helps";
+  let lapSum = 0, lapSq = 0, n = 0;
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = y * w + x;
+    const l = g[i - 1] + g[i + 1] + g[i - w] + g[i + w] - 4 * g[i];
+    lapSum += l; lapSq += l * l; n++;
+  }
+  const variance = lapSq / n - (lapSum / n) ** 2;
+  return variance < 40 ? "Photo looks blurry — hold steady / tap to focus" : null;
+}
+
+function encodePhoto(p) {
+  const big = drawScaled(p.img, MAX_SIDE, p.rotation).toDataURL("image/jpeg", 0.9);
+  p.data = big.split(",")[1];
+  p.url = big;
+  p.thumb = drawScaled(p.img, 160, p.rotation).toDataURL("image/jpeg", 0.7);
 }
 
 async function addFiles(files) {
-  const limit = $("#batchMode").checked ? 40 : 4;
+  const limit = $("#batchMode").checked ? 40 : lookupMode === "lot" ? 6 : 4;
   for (const f of files) {
     if (!f.type.startsWith("image/") && !/\.(heic|heif)$/i.test(f.name)) continue;
-    if (photos.length >= limit) break;
+    if (photos.length >= limit) { toast(`Up to ${limit} photos here.`); break; }
     try {
       const { img, url } = await readAsImage(f);
-      const dataUrl = scaled(img, MAX_SIDE, 0.9);
-      photos.push({ mediaType: "image/jpeg", data: dataUrl.split(",")[1], url: dataUrl, thumb: scaled(img, 160, 0.7) });
+      const p = { mediaType: "image/jpeg", img, rotation: 0, warn: photoWarning(img) };
+      encodePhoto(p);
+      photos.push(p);
       URL.revokeObjectURL(url);
     } catch (err) {
       alertBox($("#lookupResult"), err.message);
@@ -208,9 +375,14 @@ async function addFiles(files) {
 
 function renderThumbs() {
   $("#thumbs").innerHTML = photos
-    .map((p, i) => `<div class="thumb"><img src="${p.thumb}" alt="card photo ${i + 1}"><button data-i="${i}" aria-label="Remove photo ${i + 1}">×</button></div>`)
+    .map((p, i) => `<div class="thumb"><img src="${p.thumb}" alt="card photo ${i + 1}">
+      <button class="x" data-i="${i}" aria-label="Remove photo ${i + 1}">×</button>
+      <div class="thumb-tools"><button data-rot="${i}" title="Rotate" aria-label="Rotate photo ${i + 1}">⟳</button><button data-center="${i}" title="Measure centering" aria-label="Measure centering of photo ${i + 1}">⌖</button></div>
+      ${p.warn ? `<div class="thumb-warn" title="${esc(p.warn)}">⚠ ${esc(p.warn)}</div>` : ""}</div>`)
     .join("");
-  $$("#thumbs button").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); photos.splice(+b.dataset.i, 1); renderThumbs(); }));
+  $$("#thumbs [data-i]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); photos.splice(+b.dataset.i, 1); renderThumbs(); }));
+  $$("#thumbs [data-rot]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const p = photos[+b.dataset.rot]; p.rotation = (p.rotation + 90) % 360; encodePhoto(p); renderThumbs(); }));
+  $$("#thumbs [data-center]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); openCentering(photos[+b.dataset.center]); }));
   $(".drop-inner").classList.toggle("hidden", photos.length > 0);
 }
 
@@ -218,6 +390,8 @@ const drop = $("#drop");
 drop.onclick = () => $("#fileInput").click();
 drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#fileInput").click(); } };
 $("#fileInput").onchange = (e) => { addFiles([...e.target.files]); e.target.value = ""; };
+$("#cameraBtn").onclick = () => $("#cameraInput").click();
+$("#cameraInput").onchange = (e) => { addFiles([...e.target.files]); e.target.value = ""; };
 ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", (e) => { e.stopPropagation(); addFiles([...e.dataTransfer.files]); });
@@ -235,19 +409,30 @@ function alertBox(el, msg) {
 $("#clearBtn").onclick = () => {
   photos = []; renderThumbs(); $("#lookupText").value = "";
   $("#lookupProgress").classList.add("hidden");
+  $("#batchQueue").classList.add("hidden");
 };
+
+let lookupMode = "single";
+pillGroup("#lookupMode", (v) => {
+  lookupMode = v;
+  $("#batchWrap").classList.toggle("hidden", v === "lot");
+  $("#dropTitle").textContent = v === "lot" ? "Drop a photo of the lot / binder page" : "Drag & drop card photos here";
+  $("#dropHint").textContent = v === "lot" ? "up to 6 photos · lay cards flat, good light, fronts up" : "or click to choose · or paste (Ctrl/⌘+V) · front + back works best";
+  $("#researchBtn").textContent = v === "lot" ? "🔎 Value this lot" : "🔎 Research with AI";
+});
 
 // ------------------------------------------------------------------ AI lookup (single + batch)
 
 let lookupCtrl = null;
-$("#cancelBtn").onclick = () => lookupCtrl?.abort();
+$("#cancelBtn").onclick = () => { lookupCtrl?.abort(); window.lotCtrl?.abort(); };
 
 async function runLookup(images, text, thumb) {
-  return (await streamPost("/api/lookup", { images: images.map(({ mediaType, data }) => ({ mediaType, data })), text, thumb }, $("#lookupProgress"), lookupCtrl)).report;
+  return (await streamPost("/api/lookup", { images: images.map(({ mediaType, data }) => ({ mediaType, data })), text, thumb, fresh: $("#freshMode").checked }, $("#lookupProgress"), lookupCtrl)).report;
 }
 
 $("#researchBtn").onclick = async () => {
   if (needKey()) return;
+  if (lookupMode === "lot") return runLot();
   const text = $("#lookupText").value;
   if (!photos.length && !text.trim()) return alertBox($("#lookupResult"), "Drop a card photo or type a card name first.");
   const batch = $("#batchMode").checked && photos.length > 1;
@@ -264,7 +449,7 @@ $("#researchBtn").onclick = async () => {
     $("#cancelBtn").classList.add("hidden");
   }
 };
-$("#lookupText").addEventListener("keydown", (e) => { if (e.key === "Enter") (status.hasKey || photos.length ? $("#researchBtn") : $("#quickBtn")).click(); });
+$("#lookupText").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) (status.hasKey || photos.length ? $("#researchBtn") : $("#quickBtn")).click(); });
 
 async function runBatch(text) {
   const items = photos.map((p, i) => ({ p, i, state: "waiting", report: null, error: null }));
@@ -298,12 +483,12 @@ async function runBatch(text) {
 
 const SERIES_PREF = ["Ungraded", "Grade 9", "PSA 10"];
 const SERIES_COLORS = ["#1f8a70", "#c58b00", "#5b5bd6"];
-function priceChart(history) {
+function priceChart(history, { label = "Monthly sold-price history" } = {}) {
   if (!history) return "";
   let keys = SERIES_PREF.filter((k) => history[k]);
   if (!keys.length) keys = Object.keys(history).slice(0, 3);
   if (!keys.length) return "";
-  const W = 640, H = 220, L = 54, R = 10, T = 10, B = 26;
+  const W = 640, H = 220, L = 58, R = 10, T = 10, B = 26;
   const all = keys.flatMap((k) => history[k]);
   const t0 = Math.min(...all.map((p) => p[0])), t1 = Math.max(...all.map((p) => p[0]));
   const vMin = Math.max(0.5, Math.min(...all.map((p) => p[1]))), vMax = Math.max(...all.map((p) => p[1]));
@@ -316,13 +501,29 @@ function priceChart(history) {
   const years = [];
   for (let y = new Date(t0).getFullYear() + 1; y <= new Date(t1).getFullYear(); y++) years.push(Date.UTC(y, 0, 1));
   return `<figure style="margin:0">
-    <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly sold-price history, ${esc(keys.join(", "))}">
+    <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}: ${esc(keys.join(", "))}">
       ${ticks.map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${usd(v)}</text>`).join("")}
       ${years.map((t) => `<text x="${X(t)}" y="${H - 8}" text-anchor="middle">${new Date(t).getUTCFullYear()}</text>`).join("")}
       ${keys.map((k, i) => `<polyline fill="none" stroke="${SERIES_COLORS[i]}" stroke-width="2.2" points="${history[k].map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ")}"/>`).join("")}
     </svg>
     <figcaption class="chart-legend">${keys.map((k, i) => `<span style="--c:${SERIES_COLORS[i]}">${esc(k)}</span>`).join("")}<span style="--c:transparent">monthly, log scale</span></figcaption>
   </figure>`;
+}
+
+// ------------------------------------------------------------------ liquidity
+
+// "3 sales per week" -> sales per day
+function salesPerDay(text) {
+  const m = String(text || "").match(/(\d+(?:\.\d+)?)\s+sales?\s+per\s+(day|week|month|year)/i);
+  if (!m) return /rare/i.test(text) ? 0.002 : null;
+  return parseFloat(m[1]) / { day: 1, week: 7, month: 30, year: 365 }[m[2].toLowerCase()];
+}
+function liquidity(volumeText) {
+  const r = salesPerDay(volumeText);
+  if (r == null) return null;
+  const level = r >= 1 ? "High" : r >= 1 / 7 ? "Medium" : r >= 1 / 30 ? "Low" : "Very low";
+  const days = Math.max(1, Math.round(1 / r / 2)); // a fairly priced copy usually sells within ~half the gap between sales
+  return { level, days: days > 365 ? "months+" : `~${days} day${days > 1 ? "s" : ""}`, cls: { High: "good", Medium: "", Low: "warn", "Very low": "bad" }[level] };
 }
 
 // ------------------------------------------------------------------ profit + grading calculators
@@ -345,13 +546,13 @@ function profitCalc(r, el) {
   const calc = () => {
     const g = (k) => parseFloat($(`[data-k=${k}]`, el).value) || 0;
     const sale = g("sale"), cost = g("cost"), ship = g("ship");
-    $("[data-out]", el).innerHTML = `<table><tr><th>Platform</th><th class="num">Fees</th><th class="num">You keep</th><th class="num">Profit</th></tr>
+    $("[data-out]", el).innerHTML = `<div class="table-wrap"><table><tr><th>Platform</th><th class="num">Fees</th><th class="num">You keep</th><th class="num">Profit</th></tr>
       ${PLATFORMS.map((p) => {
         const fees = sale ? sale * p.pct / 100 + p.fixed : 0;
         const net = sale - fees - (p.name.startsWith("Local") ? 0 : ship);
         const profit = net - cost;
         return `<tr><td>${p.name}</td><td class="num">${usd(fees)}</td><td class="num">${usd(net)}</td><td class="num ${profit >= 0 ? "pos" : "neg"}">${usd(profit)}${cost ? ` <span class="muted small">(${Math.round((profit / cost) * 100)}%)</span>` : ""}</td></tr>`;
-      }).join("")}</table><div class="small muted">Fee rates are approximate; local sales assume no shipping.</div>`;
+      }).join("")}</table></div><div class="small muted">Fee rates are approximate; local sales assume no shipping.</div>`;
   };
   $$("input", el).forEach((i) => (i.oninput = calc));
   calc();
@@ -363,8 +564,9 @@ function gradeValue(r, re) {
 
 function gradingCalc(r, el) {
   const o = r.grade_odds || {};
-  const raw = gradeValue(r, /^(raw|ungraded)$/i) ?? r.pricing?.estimated_value_usd;
-  const v10 = gradeValue(r, /^PSA 10$/i), v9 = gradeValue(r, /^(PSA 9|Grade 9)$/i), v8 = gradeValue(r, /^(PSA 8|Grade 8)$/i);
+  const guide = r.price_guide || {};
+  const raw = guide.Ungraded ?? gradeValue(r, /^(raw|ungraded)$/i) ?? r.pricing?.estimated_value_usd;
+  const v10 = guide["PSA 10"] ?? gradeValue(r, /^PSA 10$/i), v9 = guide["Grade 9"] ?? gradeValue(r, /^(PSA 9|Grade 9)$/i), v8 = guide["Grade 8"] ?? gradeValue(r, /^(PSA 8|Grade 8)$/i);
   el.innerHTML = `<div class="calc">
       <label>PSA 10 chance %<input type="number" min="0" max="100" data-k="p10" value="${esc(o.psa10_pct ?? 10)}"></label>
       <label>PSA 9 chance %<input type="number" min="0" max="100" data-k="p9" value="${esc(o.psa9_pct ?? 40)}"></label>
@@ -388,6 +590,22 @@ function gradingCalc(r, el) {
   calc();
 }
 
+// Which grading company pays best for a 10 / 9.5 on this card. Fees are typical bulk/value tiers
+// (Oct 2026, approximate) — edit here when they change.
+const COMPANY_FEES = { PSA: 25, BGS: 22, SGC: 18, CGC: 18, TAG: 20 };
+function companyCompare(guide) {
+  if (!guide) return "";
+  const rows = Object.keys(COMPANY_FEES)
+    .map((c) => ({ c, ten: guide[`${c} 10`] ?? null, black: c === "BGS" ? guide["BGS 10 Black"] ?? null : c === "CGC" ? guide["CGC 10 Pristine"] ?? null : null, fee: COMPANY_FEES[c] }))
+    .filter((r) => r.ten != null);
+  if (rows.length < 2) return "";
+  const best = rows.reduce((a, b) => (b.ten - b.fee > a.ten - a.fee ? b : a));
+  return `<h3>Which company to grade with</h3>
+    <div class="table-wrap"><table><tr><th>Company</th><th class="num">"10" sells for</th><th class="num">Top label</th><th class="num">Typical fee</th><th class="num">Net on a 10</th></tr>
+    ${rows.map((r) => `<tr${r === best ? ' class="best"' : ""}><td>${r.c}${r === best ? " ★" : ""}</td><td class="num">${usd(r.ten)}</td><td class="num">${usd(r.black)}</td><td class="num">${usd(r.fee)}</td><td class="num">${usd(r.ten - r.fee)}</td></tr>`).join("")}
+    </table></div><p class="small muted">Based on recent sold prices for this card. Fees are typical value-tier prices and change often; slower/cheaper tiers and declared value change the math.</p>`;
+}
+
 // ------------------------------------------------------------------ report
 
 const recClass = { grade_it: "good", maybe: "warn", dont_grade: "bad", already_graded: "" };
@@ -402,13 +620,41 @@ function summaryText(r) {
     `Value: ${usd(p.estimated_value_usd)}${p.value_range_low != null ? ` (range ${usd(p.value_range_low)}–${usd(p.value_range_high)})` : ""}`,
     `Call: ${String(bs.verdict || "").toUpperCase()} · max buy ${usd(bs.max_buy_price)} · list at ${usd(bs.list_price)}`,
     `Grading: ${recLabel[r.grading?.recommendation] || ""}`,
+    r.slab ? `PSA cert: ${r.slab.verified ? "verified" : "DOES NOT MATCH — check it"}` : "",
     r.summary,
     p.pricecharting_url ? `Sales: ${p.pricecharting_url}` : "",
   ].filter(Boolean).join("\n");
 }
 
+function slabPanel(slab) {
+  if (!slab) return "";
+  const c = slab.cert || {};
+  const pop = slab.population;
+  const popRow = pop?.byGrade ? Object.entries(pop.byGrade).sort((a, b) => parseFloat(b[0]) - parseFloat(a[0])).slice(0, 6).map(([g, n]) => `${g}: ${n.toLocaleString()}`).join(" · ") : "";
+  return `<div class="callout ${slab.verified ? "ok-box" : "bad-box"}" style="margin-top:1rem">
+    <div class="big">${slab.verified ? "✅ PSA cert verified" : "⚠ PSA cert check failed"}</div>
+    ${slab.warning ? `<p class="small">${esc(slab.warning)}</p>` : ""}
+    ${(slab.mismatches || []).length ? `<ul class="tight small">${slab.mismatches.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
+    ${c.found ? `<p class="small">PSA record #${esc(c.certNumber)}: ${esc([c.year, c.brand, c.subject, c.cardNumber ? "#" + c.cardNumber : "", c.variety].filter(Boolean).join(" "))} — <b>${esc(c.gradeDescription || c.grade)}</b>
+      ${c.population != null ? ` · Pop ${c.population.toLocaleString()} at this grade, ${c.populationHigher?.toLocaleString() ?? "?"} higher` : ""} · ${link(c.url, "view on PSA")}</p>` : ""}
+    ${popRow ? `<p class="small muted">Population by grade — ${esc(popRow)}${pop.total ? ` · total graded ${pop.total.toLocaleString()}` : ""}</p>` : ""}
+  </div>`;
+}
+
+async function ownedBanner(url, el) {
+  if (!url || !el) return;
+  try {
+    const rows = await getJSON("/api/owned?url=" + encodeURIComponent(url));
+    if (!rows.length) return;
+    const qty = rows.reduce((n, r) => n + r.qty, 0);
+    el.innerHTML = `<div class="owned">📦 You already own <b>${qty}</b> of this card: ${rows.map((r) => `${esc(r.grade)} (paid ${usd(r.cost)}${r.location ? ", " + esc(r.location) : ""})`).join(" · ")}</div>`;
+  } catch {}
+}
+
 function renderReport(r, el) {
   const c = r.card || {}, p = r.pricing || {}, m = r.market || {}, g = r.grading || {}, bs = r.buy_sell || {};
+  const vol = r.sales_volume_raw ? Object.values(r.sales_volume_raw)[c.grading_company ? Object.keys(r.sales_volume_raw).length - 1 : 0] : null;
+  const liq = liquidity(vol);
   const chips = [
     CAT_LABEL[c.category] || c.category,
     c.rookie && "RC",
@@ -418,9 +664,11 @@ function renderReport(r, el) {
     c.grading_company && c.grade && `${c.grading_company} ${c.grade}`,
     !c.grading_company && "Raw",
   ].filter(Boolean);
+  const gradeLabel = c.grading_company && c.grade ? `${c.grading_company} ${c.grade}` : "Raw";
 
   el.innerHTML = `
   <article class="report">
+    <div data-owned></div>
     <div class="report-head">
       <div style="display:flex;gap:1rem;align-items:flex-start">
         ${r.thumb ? `<img src="${esc(r.thumb)}" alt="" class="hist-thumb" style="width:64px;height:auto">` : ""}
@@ -429,6 +677,7 @@ function renderReport(r, el) {
           <div class="chips">${chips.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}
             <span class="chip ${c.identification_confidence === "high" ? "good" : c.identification_confidence === "low" ? "bad" : "warn"}">ID: ${esc(c.identification_confidence)} confidence</span>
             <span class="chip ${demandClass[m.demand] || ""}">Demand: ${esc(m.demand)}</span>
+            ${liq ? `<span class="chip ${liq.cls}" title="How fast this card sells, from recent sales volume">Liquidity: ${esc(liq.level)} · sells in ${esc(liq.days)}</span>` : ""}
           </div>
         </div>
       </div>
@@ -439,6 +688,7 @@ function renderReport(r, el) {
       </div>
     </div>
     <p class="summary">${esc(r.summary)}</p>
+    ${slabPanel(r.slab)}
 
     <div class="grid2" style="margin-top:1rem">
       <div class="callout">
@@ -464,18 +714,18 @@ function renderReport(r, el) {
     <div class="grid2">
       <div>
         <h3>Value by grade</h3>
-        <table><tr><th>Grade</th><th class="num">Value</th></tr>
+        <div class="table-wrap"><table><tr><th>Grade</th><th class="num">Value</th></tr>
           ${(p.grade_values || []).map((x) => `<tr><td>${esc(x.grade)}</td><td class="num">${usd(x.value)}</td></tr>`).join("") || `<tr><td colspan=2 class="muted">No grade data found</td></tr>`}
-        </table>
+        </table></div>
         <h3>Trend</h3>
         <p class="small">${esc(p.trend_summary)}</p>
         <p class="small muted"><b>Volume:</b> ${esc(m.sales_volume)}</p>
       </div>
       <div>
         <h3>Recent sold</h3>
-        <table><tr><th>Date</th><th>Grade</th><th class="num">Price</th></tr>
+        <div class="table-wrap"><table><tr><th>Date</th><th>Grade</th><th class="num">Price</th></tr>
           ${(p.recent_sales || []).map((s) => `<tr title="${esc(s.title)}"><td>${esc(s.date)}</td><td>${esc(s.grade)} <span class="muted small">${esc(s.source)}</span></td><td class="num">${usd(s.price)}</td></tr>`).join("") || `<tr><td colspan=3 class="muted">No recent sales found</td></tr>`}
-        </table>
+        </table></div>
         <p class="small muted">${esc(p.basis)} ${p.pricecharting_url ? "· " + link(p.pricecharting_url, "sales source") : ""}</p>
       </div>
     </div>
@@ -484,6 +734,7 @@ function renderReport(r, el) {
       <div><h3>Profit calculator</h3><div data-profit></div></div>
       ${c.grading_company ? "" : `<div><h3>Should I grade it? (expected value)</h3><div data-grading></div></div>`}
     </div>
+    <div class="calc-block">${c.grading_company ? "" : companyCompare(r.price_guide)}</div>
 
     <div class="grid2">
       <div>
@@ -499,7 +750,7 @@ function renderReport(r, el) {
 
     <h3>Card details</h3>
     <div class="kv small">
-      ${[["Player / character", c.player_or_character], ["Year", c.year], ["Set", c.brand_set], ["Number", c.card_number], ["Parallel / variant", c.parallel_or_variant], ["Team", c.team], ["How it was identified", c.identification_notes]]
+      ${[["Player / character", c.player_or_character], ["Year", c.year], ["Set", c.brand_set], ["Number", c.card_number], ["Parallel / variant", c.parallel_or_variant], ["Team", c.team], ["Cert #", c.cert_number], ["How it was identified", c.identification_notes], ["Researched by", r.by]]
         .filter(([, v]) => v).map(([k, v]) => `<span class="muted">${esc(k)}</span><span>${esc(v)}</span>`).join("")}
     </div>
 
@@ -508,7 +759,9 @@ function renderReport(r, el) {
     <div class="foot">
       <span>${r.at ? "Researched " + esc(when(r.at)) : ""} · ${esc(costLine(r.usage))}</span>
       <span class="actions">
-        ${r.id ? `<button data-act="watch">★ Watchlist</button><button data-act="inv">＋ Inventory</button><button data-act="ask">💬 Ask about it</button>` : ""}
+        ${r.id ? `<button data-act="watch">★ Watchlist</button><button data-act="inv">＋ Inventory</button>` : ""}
+        ${p.pricecharting_url ? `<button data-act="deals" title="Live eBay listings below recent sold value">🏷 Find deals</button>` : ""}
+        ${r.id ? `<button data-act="listing">📝 Write listing</button><button data-act="ask">💬 Ask about it</button>` : ""}
         <button data-act="rerun" title="Research again with fresh prices">↻ Re-run</button>
         <button data-act="copy">📋 Copy summary</button>
         <button data-act="print">🖨 Print</button>
@@ -517,12 +770,14 @@ function renderReport(r, el) {
     <form class="inline-form hidden" data-invform>
       <label class="small">Paid each $ <input type="number" step="0.01" min="0" name="cost" required></label>
       <label class="small">Qty <input type="number" min="1" value="1" name="qty" style="width:70px"></label>
+      <label class="small">Location <input type="text" name="location" placeholder="Box 3" style="width:110px"></label>
       <button class="primary">Add to inventory</button>
     </form>
   </article>`;
 
   profitCalc(r, $("[data-profit]", el));
   if ($("[data-grading]", el)) gradingCalc(r, $("[data-grading]", el));
+  ownedBanner(p.pricecharting_url, $("[data-owned]", el));
 
   const act = (name, fn) => { const b = $(`[data-act=${name}]`, el); if (b) b.onclick = () => fn(b); };
   act("watch", async (b) => {
@@ -534,14 +789,15 @@ function renderReport(r, el) {
   $("[data-invform]", el).onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    const res = await fetch("/api/inventory", json("POST", { lookupId: r.id, cost: f.get("cost"), qty: f.get("qty") }));
+    const res = await fetch("/api/inventory", json("POST", { lookupId: r.id, cost: f.get("cost"), qty: f.get("qty"), location: f.get("location") }));
     e.target.innerHTML = res.ok ? `<span class="ok">Added to inventory ✓</span>` : `<span class="bad">Couldn't add</span>`;
   };
+  act("deals", () => openDeals({ url: p.pricecharting_url, grade: gradeLabel, q: c.search_query, name: c.name }));
+  act("listing", () => openListing(r));
   act("ask", () => { setAskContext(r); goTab("ask"); $("#askInput").focus(); });
   act("rerun", () => {
-    const grade = c.grading_company ? ` ${c.grading_company} ${c.grade}` : "";
     photos = []; renderThumbs();
-    $("#lookupText").value = (c.search_query || c.name) + grade;
+    $("#lookupText").value = (c.search_query || c.name) + (c.grading_company ? ` ${c.grading_company} ${c.grade}` : "");
     goTab("lookup");
     $("#researchBtn").click();
   });
@@ -561,20 +817,17 @@ $("#quickBtn").onclick = async () => {
   btn.disabled = true;
   out.innerHTML = `<div class="report muted" role="status">Searching sold prices…</div>`;
   try {
-    const r = await fetch("/api/quick?q=" + encodeURIComponent(q));
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error);
+    const j = await getJSON("/api/quick?q=" + encodeURIComponent(q));
     if (!j.results.length) return alertBox(out, "No matching cards found. Try fewer words, e.g. 'griffey 1989 upper deck 1'.");
-    out.innerHTML = `<div class="report"><div class="grid2" style="grid-template-columns: minmax(220px,300px) 1fr">
+    out.innerHTML = `<div class="report"><div class="grid2 quick-grid">
       <div class="qlist"><h3 style="margin-top:0">Matches</h3>${j.results.map((x, i) => `<button data-url="${esc(x.url)}" class="${i === 0 ? "active" : ""}"><b>${esc(x.name)}</b><br><span class="muted small">${esc(x.set)} · ${esc(x.ungraded || "")}</span></button>`).join("")}</div>
       <div id="quickCard"></div></div></div>`;
     renderQuickCard(j.top);
     $$(".qlist button", out).forEach((b) => (b.onclick = async () => {
       $$(".qlist button", out).forEach((x) => x.classList.toggle("active", x === b));
       $("#quickCard").innerHTML = `<p class="muted">Loading…</p>`;
-      const cr = await fetch("/api/quick/card?url=" + encodeURIComponent(b.dataset.url));
-      const cj = await cr.json();
-      cr.ok ? renderQuickCard(cj) : ($("#quickCard").innerHTML = `<p class="error">${esc(cj.error)}</p>`);
+      try { renderQuickCard(await getJSON("/api/quick/card?url=" + encodeURIComponent(b.dataset.url))); }
+      catch (err) { $("#quickCard").innerHTML = `<p class="error">${esc(err.message)}</p>`; }
     }));
   } catch (err) {
     alertBox(out, err.message);
@@ -583,50 +836,81 @@ $("#quickBtn").onclick = async () => {
   }
 };
 
-function renderQuickCard(d) {
+/** Price page view, used by Quick price and the Set browser. el defaults to #quickCard. */
+function renderQuickCard(d, el = $("#quickCard")) {
   if (!d) return;
   const grades = Object.keys(d.recentSales || {});
-  $("#quickCard").innerHTML = `
+  const gradeOpts = Object.keys(d.priceGuide || {}).map((g) => `<option>${esc(g === "Ungraded" ? "Raw" : g)}</option>`).join("");
+  el.innerHTML = `
+    <div data-owned></div>
     <h2 style="margin-top:0">${esc(d.title)}</h2>
     <div class="muted">${esc(d.set)} · ${link(d.url, d.source)}</div>
+    <div class="row qc-actions">
+      <select data-grade aria-label="Grade">${gradeOpts}</select>
+      <button data-q="watch">★ Watch</button>
+      <button data-q="inv">＋ Inventory</button>
+      <button data-q="deals">🏷 Find deals</button>
+    </div>
+    <form class="inline-form hidden" data-qinv>
+      <label class="small">Paid each $ <input type="number" step="0.01" min="0" name="cost" required></label>
+      <label class="small">Qty <input type="number" min="1" value="1" name="qty" style="width:70px"></label>
+      <button class="primary">Add</button>
+    </form>
     <h3>Current value by grade</h3>
     <div class="guide">${Object.entries(d.priceGuide || {}).map(([k, v]) => `<div><span>${esc(k)}</span><b>${usd(v)}</b></div>`).join("")}</div>
     ${d.history && Object.keys(d.history).length ? `<h3>Price history</h3>${priceChart(d.history)}` : ""}
     <h3>Trend</h3>
-    <table><tr><th>Grade</th><th class="num">1 mo</th><th class="num">3 mo</th><th class="num">6 mo</th><th class="num">12 mo</th><th>Volume</th></tr>
-      ${Object.entries(d.trendPct || {}).map(([k, t]) => `<tr><td>${esc(k)}</td><td class="num">${pct(t["1mo"])}</td><td class="num">${pct(t["3mo"])}</td><td class="num">${pct(t["6mo"])}</td><td class="num">${pct(t["12mo"])}</td><td class="small muted">${esc(d.salesVolume?.[k] || "")}</td></tr>`).join("")}
-    </table>
+    <div class="table-wrap"><table><tr><th>Grade</th><th class="num">1 mo</th><th class="num">3 mo</th><th class="num">6 mo</th><th class="num">12 mo</th><th>Volume</th></tr>
+      ${Object.entries(d.trendPct || {}).map(([k, t]) => {
+        const liq = liquidity(d.salesVolume?.[k]);
+        return `<tr><td>${esc(k)}</td><td class="num">${pct(t["1mo"])}</td><td class="num">${pct(t["3mo"])}</td><td class="num">${pct(t["6mo"])}</td><td class="num">${pct(t["12mo"])}</td><td class="small muted">${esc(d.salesVolume?.[k] || "")}${liq ? ` · <span class="${liq.cls}">${liq.level}</span>` : ""}</td></tr>`;
+      }).join("")}
+    </table></div>
     <h3>Recent sold</h3>
-    <div class="pills" id="qGrades" role="group" aria-label="Grade">${grades.map((g, i) => `<button data-g="${esc(g)}" class="${i === 0 ? "active" : ""}" aria-pressed="${i === 0}">${esc(g)}</button>`).join("")}</div>
-    <div id="qSales"></div>
+    <div class="pills" data-qgrades role="group" aria-label="Grade">${grades.map((g, i) => `<button data-g="${esc(g)}" class="${i === 0 ? "active" : ""}" aria-pressed="${i === 0}">${esc(g)}</button>`).join("")}</div>
+    <div data-qsales></div>
     <p class="small muted" style="margin-top:.8rem">Free data, no AI. For card ID from a photo, grading advice and news, use <b>Research with AI</b>.</p>`;
   const show = (g) => {
-    $("#qSales").innerHTML = `<table style="margin-top:.5rem"><tr><th>Date</th><th>Listing</th><th class="num">Price</th></tr>
-      ${(d.recentSales[g] || []).map((s) => `<tr><td>${esc(s.date)}</td><td class="small">${esc(s.title)}</td><td class="num">${usd(s.price)}</td></tr>`).join("")}</table>`;
+    $("[data-qsales]", el).innerHTML = `<div class="table-wrap"><table style="margin-top:.5rem"><tr><th>Date</th><th>Listing</th><th class="num">Price</th></tr>
+      ${(d.recentSales[g] || []).map((s) => `<tr><td>${esc(s.date)}</td><td class="small">${esc(s.title)}</td><td class="num">${usd(s.price)}</td></tr>`).join("")}</table></div>`;
   };
-  pillGroup("#qGrades", show);
+  $$("[data-qgrades] button", el).forEach((b) => (b.onclick = () => {
+    $$("[data-qgrades] button", el).forEach((x) => { x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", x === b); });
+    show(b.dataset.g);
+  }));
   if (grades.length) show(grades[0]);
+  ownedBanner(d.url, $("[data-owned]", el));
+  const grade = () => $("[data-grade]", el).value;
+  const name = `${d.title} (${d.set})`;
+  $("[data-q=watch]", el).onclick = async (e) => {
+    const r = await fetch("/api/watchlist", json("POST", { url: d.url, name, grade: grade() }));
+    e.target.textContent = r.ok ? "★ Watching" : "Couldn't add";
+    e.target.disabled = true;
+  };
+  $("[data-q=inv]", el).onclick = () => $("[data-qinv]", el).classList.toggle("hidden");
+  $("[data-qinv]", el).onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const value = d.priceGuide[grade() === "Raw" ? "Ungraded" : grade()] ?? null;
+    const r = await fetch("/api/inventory", json("POST", { name, grade: grade(), priceUrl: d.url, value, cost: f.get("cost"), qty: f.get("qty") }));
+    e.target.innerHTML = r.ok ? `<span class="ok">Added to inventory ✓</span>` : `<span class="bad">Couldn't add</span>`;
+  };
+  $("[data-q=deals]", el).onclick = () => openDeals({ url: d.url, grade: grade(), name });
 }
 
 // ------------------------------------------------------------------ hottest cards
 
 let hotCat = "all", hotPeriod = "weekly", hotCtrl = null;
-function pillGroup(sel, onPick) {
-  $$(sel + " button").forEach((b) => (b.onclick = () => {
-    $$(sel + " button").forEach((x) => { x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", x === b); });
-    onPick(b.dataset.v ?? b.dataset.g);
-  }));
-}
 pillGroup("#hotCats", (v) => { hotCat = v; loadHotCached(); });
 pillGroup("#hotPeriods", (v) => { hotPeriod = v; loadHotCached(); });
 
 async function loadHotCached() {
-  const r = await fetch(`/api/hot?category=${hotCat}&period=${hotPeriod}`);
-  const hot = await r.json();
+  const hot = await getJSON(`/api/hot?category=${hotCat}&period=${hotPeriod}`);
   $("#hotRefresh").classList.toggle("hidden", !hot);
   $("#hotResult").innerHTML = hot ? "" : `<div class="empty"><h2>No report yet for this view</h2><p>Click <b>Find hottest cards</b>. The bot searches Google for news and market trackers, then checks real sold prices (takes 1–2 minutes).</p></div>`;
   if (hot) renderHot(hot);
 }
+TAB_LOADERS.hot = loadHotCached;
 
 async function runHot(refresh) {
   if (needKey()) return;
@@ -649,6 +933,7 @@ $("#hotRefresh").onclick = () => runHot(true);
 $("#hotCancel").onclick = () => hotCtrl?.abort();
 
 const signalLabel = { price_spike: "📈 Price spike", volume_spike: "🔊 Volume spike", news: "📰 News", new_release: "🆕 New release", tournament_meta: "🏆 Tournament meta", milestone: "🎯 Milestone", long_term_riser: "⏫ Long-term riser" };
+const movementChip = (m) => (m === "new" ? `<span class="chip good">NEW</span>` : m > 0 ? `<span class="chip good">↑${m}</span>` : m < 0 ? `<span class="chip warn">↓${-m}</span>` : "");
 
 function renderHot(h) {
   const periodLabel = { daily: "today", weekly: "this week", monthly: "this month" }[h.period];
@@ -659,14 +944,14 @@ function renderHot(h) {
       ${(h.trackedMovers || []).length ? `<p class="small"><b>Your watchlist movers:</b> ${h.trackedMovers.slice(0, 6).map((m) => `${esc(m.name)} ${pct(m.pct)}`).join(" · ")}</p>` : ""}
       <div class="small muted">${esc(costLine(h.usage))}</div>
     </div>
-    ${(h.cards || []).map((c) => {
+    ${(h.cards || []).map((c, i) => {
       const pc = c.price_check;
       return `
       <div class="hot-card">
         <div class="rank">${esc(c.rank)}</div>
         <div>
           <div class="hot-name">${esc(c.name)}</div>
-          <div class="chips"><span class="chip">${esc(CAT_LABEL[c.category] || c.category)}</span><span class="chip warn">${esc(signalLabel[c.signal] || c.signal)}</span></div>
+          <div class="chips"><span class="chip">${esc(CAT_LABEL[c.category] || c.category)}</span><span class="chip warn">${esc(signalLabel[c.signal] || c.signal)}</span>${movementChip(c.movement)}</div>
           <p class="small" style="margin:.5rem 0 .3rem">${esc(c.why_hot)}</p>
           <p class="small" style="margin:0"><b>Play:</b> ${esc(c.opportunity)}</p>
           ${pc ? `<p class="small muted" style="margin:.35rem 0 0">Sold-price check (${link(pc.url, pc.matched)}): raw ${usd(pc.ungraded)} · PSA 10 ${usd(pc.psa10)} · 1-mo ${pct(pc.trend_1mo)}${pc.last_sale ? ` · last sale ${usd(pc.last_sale.price)} ${esc(pc.last_sale.grade)} on ${esc(pc.last_sale.date)}` : ""}</p>` : ""}
@@ -674,7 +959,10 @@ function renderHot(h) {
         <div class="hot-right">
           <div class="price">${esc(c.recent_price)}</div>
           <div class="small">${esc(c.price_change)}</div>
-          <button class="small research-this" data-q="${esc(c.search_query)}" style="margin-top:.5rem">Research →</button>
+          <div class="actions" style="justify-content:flex-end;margin-top:.5rem">
+            ${pc ? `<button class="small" data-hwatch="${i}">★ Watch</button>` : ""}
+            <button class="small research-this" data-q="${esc(c.search_query)}">Research →</button>
+          </div>
         </div>
       </div>`;
     }).join("")}
@@ -685,111 +973,58 @@ function renderHot(h) {
     $("#lookupText").value = b.dataset.q;
     goTab("lookup");
   }));
-}
-
-// ------------------------------------------------------------------ inventory
-
-$("#invAddBtn").onclick = () => $("#invForm").classList.toggle("hidden");
-$("#invForm").onsubmit = async (e) => {
-  e.preventDefault();
-  const f = Object.fromEntries(new FormData(e.target));
-  if (f.value === "") delete f.value;
-  await fetch("/api/inventory", json("POST", f));
-  e.target.reset();
-  e.target.classList.add("hidden");
-  loadInventory();
-};
-$("#invRefresh").onclick = async () => {
-  const b = $("#invRefresh");
-  b.disabled = true; b.textContent = "Re-valuing…";
-  await fetch("/api/inventory/refresh", { method: "POST" });
-  b.disabled = false; b.textContent = "↻ Re-value";
-  loadInventory();
-};
-
-async function loadInventory() {
-  const rows = await (await fetch("/api/inventory")).json();
-  const inStock = rows.filter((r) => r.status !== "sold");
-  const sold = rows.filter((r) => r.status === "sold");
-  const sum = (arr, f) => arr.reduce((n, r) => n + (f(r) || 0), 0);
-  const cost = sum(inStock, (r) => r.cost * r.qty);
-  const value = sum(inStock, (r) => (r.value ?? r.cost) * r.qty);
-  const realized = sum(sold, (r) => (r.soldPrice != null ? (r.soldPrice - r.cost) * r.qty : 0));
-  $("#invTotals").innerHTML = rows.length ? `
-    <div><span>Cards in stock</span><b>${sum(inStock, (r) => r.qty)}</b></div>
-    <div><span>Total cost</span><b>${usd(cost)}</b></div>
-    <div><span>Value today</span><b>${usd(value)}</b></div>
-    <div><span>Unrealized profit</span><b class="${value - cost >= 0 ? "pos" : "neg"}">${usd(value - cost)}</b></div>
-    <div><span>Realized profit (sold)</span><b class="${realized >= 0 ? "pos" : "neg"}">${usd(realized)}</b></div>` : "";
-  $("#invList").innerHTML = rows.length
-    ? `<div class="panel" style="overflow-x:auto"><table>
-        <tr><th>Card</th><th>Grade</th><th class="num">Qty</th><th class="num">Paid each</th><th class="num">Value each</th><th class="num">P/L</th><th>Sold for (each)</th><th></th></tr>
-        ${rows.map((r) => {
-          const pl = r.status === "sold" ? (r.soldPrice != null ? (r.soldPrice - r.cost) * r.qty : null) : r.value != null ? (r.value - r.cost) * r.qty : null;
-          return `<tr class="${r.status === "sold" ? "sold" : ""}" data-id="${esc(r.id)}">
-            <td><b>${esc(r.name)}</b><div class="small muted">${esc(CAT_LABEL[r.category] || "")} · bought ${esc(r.purchased)} ${r.priceUrl ? "· " + link(r.priceUrl, "sales") : ""}</div></td>
-            <td class="small">${esc(r.grade)}</td><td class="num">${esc(r.qty)}</td>
-            <td class="num"><input class="cell" type="number" step="0.01" min="0" data-f="cost" value="${esc(r.cost)}" aria-label="Paid each"></td>
-            <td class="num">${usd(r.value)}<div class="small muted">${esc(when(r.valuedAt))}</div></td>
-            <td class="num ${pl == null ? "" : pl >= 0 ? "pos" : "neg"}">${usd(pl)}</td>
-            <td><input class="cell" type="number" step="0.01" min="0" data-f="soldPrice" value="${esc(r.soldPrice ?? "")}" placeholder="not sold" aria-label="Sold price each"></td>
-            <td><button class="ghost small" data-del>Remove</button></td></tr>`;
-        }).join("")}</table></div>`
-    : `<div class="empty"><h2>No inventory yet</h2><p>Research a card and click <b>＋ Inventory</b>, or add one by hand with <b>＋ Add card</b>.</p></div>`;
-  $$("#invList tr[data-id]").forEach((tr) => {
-    const id = tr.dataset.id;
-    $$("input[data-f]", tr).forEach((inp) => (inp.onchange = async () => {
-      const v = inp.value === "" ? null : parseFloat(inp.value);
-      const patch = { [inp.dataset.f]: v };
-      if (inp.dataset.f === "soldPrice") Object.assign(patch, v == null ? { status: "in_stock", soldDate: null } : { status: "sold", soldDate: new Date().toISOString().slice(0, 10) });
-      await fetch("/api/inventory/" + id, json("PATCH", patch));
-      loadInventory();
-    }));
-    $("[data-del]", tr).onclick = async () => {
-      if (!confirm("Remove this card from inventory?")) return;
-      await fetch("/api/inventory/" + id, { method: "DELETE" });
-      loadInventory();
-    };
-  });
+  $$("[data-hwatch]").forEach((b) => (b.onclick = async () => {
+    const c = h.cards[+b.dataset.hwatch];
+    const r = await fetch("/api/watchlist", json("POST", { url: c.price_check.url, name: c.price_check.matched, grade: "Raw" }));
+    b.textContent = r.ok ? "★ Watching" : "Couldn't add";
+    b.disabled = true;
+  }));
 }
 
 // ------------------------------------------------------------------ watchlist + alerts
 
 async function loadWatch() {
-  const [{ items, movers }, alerts] = await Promise.all([(await fetch("/api/watchlist")).json(), (await fetch("/api/alerts")).json()]);
+  const [{ items, movers }, alerts] = await Promise.all([getJSON("/api/watchlist"), getJSON("/api/alerts")]);
   const unseen = alerts.filter((a) => !a.seen);
+  const alertText = (a) => (a.kind === "brief" ? `☀️ <b>${esc(a.name)}</b>: ${esc(a.text)} <a href="#" data-gohot>Open</a>` : `🔔 <b>${esc(a.name)}</b> is ${a.kind === "above" ? "up to" : "down to"} <b>${usd(a.value)}</b> (your ${a.kind === "above" ? "sell" : "buy"} target ${usd(a.target)})`);
   $("#alertList").innerHTML = unseen.length
-    ? unseen.map((a) => `<div class="alert-item" role="status"><span>🔔 <b>${esc(a.name)}</b> is ${a.kind === "above" ? "up to" : "down to"} <b>${usd(a.value)}</b> (your ${a.kind === "above" ? "sell" : "buy"} target ${usd(a.target)}) · ${esc(when(a.at))}</span></div>`).join("") +
+    ? unseen.map((a) => `<div class="alert-item" role="status"><span>${alertText(a)} · ${esc(when(a.at))}</span></div>`).join("") +
       `<div class="row" style="margin:0 0 1rem"><button id="alertsSeen">Mark alerts as read</button>${"Notification" in window && Notification.permission !== "granted" ? `<button id="alertsNotify" class="ghost">Enable desktop alerts</button>` : ""}</div>`
     : "Notification" in window && Notification.permission === "default" && items.length ? `<div class="row" style="margin:0 0 1rem"><button id="alertsNotify" class="ghost">🔔 Enable desktop alerts</button></div>` : "";
   if ($("#alertsSeen")) $("#alertsSeen").onclick = async () => { await fetch("/api/alerts/seen", { method: "POST" }); refreshStatus(); loadWatch(); };
   if ($("#alertsNotify")) $("#alertsNotify").onclick = async () => { await Notification.requestPermission(); loadWatch(); };
+  $$("[data-gohot]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); hotCat = "all"; hotPeriod = "daily"; goTab("hot"); }));
 
   const moverBox = (title, list) => `<div class="panel"><h3 style="margin-top:0">${title}</h3>${list.length
     ? `<table>${list.slice(0, 6).map((m) => `<tr><td class="small">${esc(m.name)}</td><td class="num">${usd(m.to)}</td><td class="num">${pct(m.pct)}</td></tr>`).join("")}</table>`
     : `<p class="muted small">Not enough price history yet. Check back after a few daily re-checks.</p>`}</div>`;
   $("#movers").innerHTML = moverBox("Biggest movers · 24h", movers.daily) + moverBox("Biggest movers · 7 days", movers.weekly) + moverBox("Biggest movers · 30 days", movers.monthly);
   $("#watchList").innerHTML = items.length
-    ? `<div class="panel" style="overflow-x:auto"><table><tr><th>Card</th><th>Tracking</th><th class="num">Added at</th><th class="num">Latest</th><th class="num">Change</th><th>Alert me at</th><th></th></tr>
+    ? `<div class="panel table-wrap"><table><tr><th>Card</th><th>Tracking</th><th class="num">Added at</th><th class="num">Latest</th><th class="num">Change</th><th class="num">vs 12-mo avg</th><th>Alert me at</th><th></th></tr>
       ${items.map((w) => {
         const pts = w.snapshots.filter((s) => s.value != null);
         const first = pts[0]?.value, last = pts[pts.length - 1]?.value;
         const ch = first && last ? Math.round(((last - first) / first) * 1000) / 10 : null;
-        return `<tr data-id="${esc(w.id)}"><td><b>${esc(w.card?.name)}</b><div class="small muted">${esc(CAT_LABEL[w.category] || "")} ${w.pricechartingUrl ? "· " + link(w.pricechartingUrl, "sales") : "· no price source (won't auto-update)"}</div></td>
+        const vsAvg = last && w.avg12 ? Math.round(((last - w.avg12) / w.avg12) * 1000) / 10 : null;
+        const badge = vsAvg == null ? "" : vsAvg <= -15 ? ` <span class="chip good" title="Well below its 12-month average">Dip</span>` : vsAvg >= 25 ? ` <span class="chip warn" title="Well above its 12-month average">Peak</span>` : "";
+        return `<tr data-id="${esc(w.id)}"><td><b>${esc(w.card?.name)}</b><div class="small muted">${esc(CAT_LABEL[w.category] || "")} ${w.pricechartingUrl ? "· " + link(w.pricechartingUrl, "sales") : "· no price source (won't auto-update)"}${w.addedBy ? " · " + esc(w.addedBy) : ""}</div></td>
           <td class="small">${esc(w.card?.grading_company ? `${w.card.grading_company} ${w.card.grade}` : "Raw")}</td>
           <td class="num">${usd(first)}</td><td class="num">${usd(last)}<div class="small muted">${pts.length ? esc(when(pts[pts.length - 1].at)) : ""}</div></td><td class="num">${pct(ch)}</td>
+          <td class="num">${pct(vsAvg)}${badge}</td>
           <td class="targets small">≥ <input type="number" min="0" step="1" data-t="targetAbove" value="${esc(w.targetAbove ?? "")}" aria-label="Alert when price rises to"> ≤ <input type="number" min="0" step="1" data-t="targetBelow" value="${esc(w.targetBelow ?? "")}" aria-label="Alert when price falls to"></td>
-          <td><button class="ghost small" data-del>Remove</button></td></tr>`;
+          <td><button class="ghost small" data-del aria-label="Remove from watchlist">Remove</button></td></tr>`;
       }).join("")}</table></div>`
-    : `<div class="empty"><h2>Nothing on the watchlist yet</h2><p>Research a card, then click <b>★ Watchlist</b>. The bot re-prices watched cards daily and shows your biggest movers here.</p></div>`;
+    : `<div class="empty"><h2>Nothing on the watchlist yet</h2><p>Click <b>★ Watch</b> on any report, quick price, set card or hot card. The bot re-prices watched cards daily and shows your biggest movers here.</p></div>`;
   $$("#watchList tr[data-id]").forEach((tr) => {
     const save = async () => {
       await fetch("/api/watchlist/" + tr.dataset.id, json("PATCH", { targetAbove: $("[data-t=targetAbove]", tr).value, targetBelow: $("[data-t=targetBelow]", tr).value }));
+      toast("Alert target saved", { ms: 1500 });
     };
     $$("[data-t]", tr).forEach((i) => (i.onchange = save));
-    $("[data-del]", tr).onclick = async () => { await fetch("/api/watchlist/" + tr.dataset.id, { method: "DELETE" }); loadWatch(); };
+    $("[data-del]", tr).onclick = () => removeWithUndo("/api/watchlist/" + tr.dataset.id, "from watchlist", loadWatch);
   });
 }
+TAB_LOADERS.watch = loadWatch;
 $("#watchRefresh").onclick = async () => {
   const b = $("#watchRefresh");
   b.disabled = true; b.textContent = "Checking…";
@@ -826,7 +1061,7 @@ function md(src) {
   const flushTable = () => {
     if (!table.length) return;
     const rows = table.filter((r) => !/^\|?\s*:?-{2,}/.test(r)).map((r) => r.replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim())));
-    html += `<table><tr>${rows[0].map((c) => `<th>${c}</th>`).join("")}</tr>${rows.slice(1).map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</table>`;
+    html += `<div class="table-wrap"><table><tr>${rows[0].map((c) => `<th>${c}</th>`).join("")}</tr>${rows.slice(1).map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</table></div>`;
     table = [];
   };
   for (const raw of lines) {
@@ -878,30 +1113,37 @@ $("#askInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doAsk
 
 let historyCache = [];
 async function loadHistory() {
-  historyCache = await (await fetch("/api/lookups")).json();
+  historyCache = await getJSON("/api/lookups");
   drawHistory();
 }
+TAB_LOADERS.history = loadHistory;
 function drawHistory() {
   const q = $("#histSearch").value.trim().toLowerCase();
-  const list = historyCache.filter((r) => !q || JSON.stringify([r.card?.name, r.card?.player_or_character, r.card?.brand_set, r.card?.category]).toLowerCase().includes(q));
+  const list = historyCache.filter((r) => !q || JSON.stringify([r.card?.name, r.card?.player_or_character, r.card?.brand_set, r.card?.category, r.by]).toLowerCase().includes(q));
   $("#historyList").innerHTML = list.length
     ? list.map((r) => `<div class="hist" data-id="${esc(r.id)}" tabindex="0" role="button" aria-label="Open report for ${esc(r.card?.name)}">
-        <div class="hist-left">${r.thumb ? `<img class="hist-thumb" src="${esc(r.thumb)}" alt="">` : ""}<div><b>${esc(r.card?.name)}</b><div class="small muted">${esc(CAT_LABEL[r.card?.category] || "")} · ${esc(when(r.at))}</div></div></div>
+        <div class="hist-left">${r.thumb ? `<img class="hist-thumb" src="${esc(r.thumb)}" alt="">` : ""}<div><b>${esc(r.card?.name)}</b><div class="small muted">${esc(CAT_LABEL[r.card?.category] || "")} · ${esc(when(r.at))}${r.by ? " · " + esc(r.by) : ""}${r.slab ? (r.slab.verified ? " · ✅ cert" : " · ⚠ cert") : ""}</div></div></div>
         <div class="row" style="margin:0"><div class="value-big" style="font-size:1.2rem">${usd(r.pricing?.estimated_value_usd)}</div><button class="ghost small" data-del aria-label="Delete this report">🗑</button></div></div>`).join("")
     : `<div class="empty"><h2>${q ? "No matches" : "No lookups yet"}</h2><p>${q ? "Try another search." : "Every AI card report is saved here."}</p></div>`;
   $$(".hist").forEach((el) => {
     const r = historyCache.find((x) => x.id === el.dataset.id);
-    const open = () => { renderReport(r, $("#lookupResult")); goTab("lookup"); };
+    const open = () => { goTab("lookup"); renderReport(r, $("#lookupResult")); };
     el.onclick = open;
     el.onkeydown = (e) => { if (e.key === "Enter") open(); };
-    $("[data-del]", el).onclick = async (e) => {
+    $("[data-del]", el).onclick = (e) => {
       e.stopPropagation();
-      if (!confirm("Delete this report from history?")) return;
-      await fetch("/api/lookups/" + r.id, { method: "DELETE" });
-      loadHistory();
+      removeWithUndo("/api/lookups/" + r.id, "report", loadHistory);
     };
   });
 }
 $("#histSearch").oninput = drawHistory;
 
-refreshStatus();
+// ------------------------------------------------------------------ start
+
+applyTheme();
+renderWho();
+refreshStatus().then(() => {
+  const t = store.get("tab", "home");
+  goTab($(`#tabs button[data-tab="${t}"]`) ? t : "home");
+  if (!store.get("who")) setTimeout(() => $("#whoBtn").click(), 400);
+});

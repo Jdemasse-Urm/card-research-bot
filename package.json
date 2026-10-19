@@ -1,6 +1,6 @@
 {
   "name": "card-research-bot",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "description": "AI trading card research bot: drop a card photo, get recent sold prices, grading math, and the hottest cards by day/week/month.",
   "private": true,
   "type": "module",
@@ -10,7 +10,8 @@
   },
   "scripts": {
     "start": "node server.js",
-    "check": "node scripts/check-sources.js"
+    "check": "node scripts/check-sources.js",
+    "selftest": "node lib/selftest.js"
   },
   "dependencies": {
     "@google/genai": "^2.30.0",

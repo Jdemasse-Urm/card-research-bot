@@ -24,13 +24,6 @@
     <button>Unlock</button>
     <div id="msg" role="alert"></div>
   </form>
-  <script>
-    document.getElementById("f").onsubmit = async (e) => {
-      e.preventDefault();
-      const r = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: document.getElementById("pin").value }) });
-      if (r.ok) location.reload();
-      else document.getElementById("msg").textContent = (await r.json().catch(() => ({}))).error || "Wrong PIN — try again.";
-    };
-  </script>
+  <script src="/pin.js"></script>
 </body>
 </html>

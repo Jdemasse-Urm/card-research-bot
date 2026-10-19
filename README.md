@@ -3,21 +3,33 @@
 An AI research assistant for a trading card business. Runs on **Windows and Mac** in your web browser, powered by
 **Google Gemini** (free tier works — no credit card).
 
-- **Drag & drop a card photo** (front + back works best). The bot identifies the card (player/character, year, set,
-  number, parallel, grade on the slab), pulls the **most recent sold prices for every grade**, searches Google for news
-  and price moves, and gives a reseller call: max buy price, list price, quick-sale price, and whether to grade it.
-- **Batch mode** — drop a stack of photos (one card each) and the bot works through them in a queue.
-- **⚡ Quick price (free)** — instant sold-price lookup by name, no AI.
-- **🔥 Hottest cards** — today / this week / this month for baseball, basketball, football, Yu-Gi-Oh, One Piece, or
-  all of them, each double-checked against real sold prices.
-- **Inventory** — what you own, what you paid, what it's worth today, unrealized and realized profit. Export to CSV/Excel.
-- **★ Watchlist + price alerts** — track cards, set "alert me at" prices, see biggest movers over 24h / 7d / 30d.
-- **Calculators** on every report — profit after eBay / TCGplayer / Whatnot fees, and grading expected value from the
-  AI's PSA-grade odds for your card.
-- **Price-history charts** going back ~3 years for every grade.
+**Research**
+- **Drag & drop a card photo** (front + back works best), or take one with your phone's camera. The bot identifies
+  the card (player/character, year, set, number, parallel, slab grade), pulls the **most recent sold prices for every
+  grade**, searches Google for news and price moves, and gives a reseller call: max buy price, list price,
+  quick-sale price, whether to grade it, and **which grading company** pays best for a 10.
+- **Lot / binder-page evaluator** — one photo of many cards → each card priced, total value, and whether the asking
+  price is a good buy.
+- **PSA slab check** — reads the cert number off the slab and verifies it with PSA, with population by grade.
+- **eBay deal finder** — live listings priced well under the card's recent sold value.
+- **Listing writer** — eBay / TCGplayer / Whatnot title, description, item specifics and pricing.
+- **Centering tool** — measure left/right and top/bottom centering on the photo.
+- **⚡ Quick price** and **📖 Set browser** — free sold-price lookups and every card in a set sorted by value (no AI).
+- **🔥 Hottest cards** — today / this week / this month per category, double-checked against real sold prices, with
+  NEW / ↑↓ markers vs the last scan. Optional automatic **morning brief**.
 - **Ask** — any market question (or follow-ups about a specific card), answered with Google-searched sources.
-- **History** — every report saved with a thumbnail; search, re-run with fresh prices, delete, export.
-- **Share on your home network** — run it on one computer, open it from the other (PIN-protected).
+
+**Business**
+- **Home dashboard** — inventory value, profit this month, alerts, hottest cards, movers, who did what.
+- **Inventory** — in stock / listed / at grading / sold, SKUs, storage locations, tags, printable labels, CSV import
+  and export, daily re-valuing, portfolio value chart, "you already own this" warnings.
+- **Grading tracker** — submissions, cards at grading, PSA progress checked automatically, grades + cost basis
+  updated when cards come back.
+- **Sales & profit** — revenue, fees, profit, ROI, days to sell, best/worst flips, by month and category. **Expenses**.
+- **★ Watchlist** — price alerts, biggest movers (24h / 7d / 30d), buy-the-dip / at-peak badges.
+- **Share on your home network** — one computer runs it; the other computer or a phone opens it (PIN-protected).
+
+Covers baseball, basketball, football, Yu-Gi-Oh and One Piece — plus Pokémon, hockey and soccer.
 
 ## Where the data comes from
 
@@ -26,13 +38,19 @@ An AI research assistant for a trading card business. Runs on **Windows and Mac*
 | Recent sold prices (eBay completed sales), value per grade, volume, 1/3/6/12-month trends, history | SportsCardsPro.com (sports) and PriceCharting.com (Yu-Gi-Oh, One Piece) |
 | Yu-Gi-Oh printings, rarities, TCGplayer/Cardmarket prices, banlist | YGOPRODeck API |
 | One Piece variants (alt art, manga, SP) with TCGplayer market price | optcgapi.com |
-| Reading the card photo, news, hot cards, answers | Google Gemini (`gemini-3.8-flash`) with Google Search |
+| Reading the card photo, news, hot cards, answers, listings | Google Gemini (`gemini-3.8-flash`, backup `gemini-3.5-flash-lite`) with Google Search |
+| Slab verification, population, grading progress (optional) | PSA Public API |
+| Live listings for the deal finder (optional) | eBay Browse API |
+| Every card in a set | SportsCardsPro.com / PriceCharting.com set pages |
 
 ## Setup (once per computer)
 
 1. **Install Node.js (LTS)** from <https://nodejs.org>. Windows: the `.msi`. Mac: the `.pkg` (macOS Ventura 13+ is fine).
 2. **Get a free Gemini API key** at <https://aistudio.google.com/apikey> → sign in with Google → **Create API key**.
-3. **Download this folder** (GitHub → green **Code** button → **Download ZIP**, then unzip), or `git clone` it.
+3. *(Optional)* **PSA token** — free at <https://www.psacard.com/publicapi/documentation> — for slab checks, population
+   and grading progress. **eBay keys** — free at <https://developer.ebay.com/my/keys> (Production keyset: App ID +
+   Cert ID) — for the deal finder. Paste them in **Settings → Optional connections**.
+4. **Download this folder** (GitHub → green **Code** button → **Download ZIP**, then unzip), or `git clone` it.
 
 ## Start it
 
@@ -43,7 +61,7 @@ An AI research assistant for a trading card business. Runs on **Windows and Mac*
     Terminal window, press Enter, then double-click it again.
 
 The first start installs what it needs (about a minute), then your browser opens **http://localhost:3737**.
-Click **⚙ Settings** and paste your Gemini key. Keep the black terminal window open while you use the bot; close it
+Click **⚙ Settings**, paste your Gemini key, then click **🩺 Run self-test** to confirm everything works. Keep the black terminal window open while you use the bot; close it
 to stop.
 
 ## Cost
@@ -62,13 +80,25 @@ On the computer that will run the bot: **Settings → Share on home network** �
 `http://192.168.1.20:3737`). Open it in Safari/Chrome there and enter the PIN. Both of you now see the same inventory,
 watchlist and history. Only the computer running the bot can change settings.
 
+## Using it on a phone at a card show
+
+Turn on **Settings → Share on home network** (or use a phone hotspot that the laptop is also on). Open the address it
+shows on the phone, enter the PIN, then use **Share → Add to Home Screen** (iPhone Safari) or **Install app**
+(Android Chrome). The **📷 Take photo** button opens the camera.
+
+## Keyboard shortcuts
+
+`/` search · `Ctrl/⌘ + Enter` research · `Esc` cancel · `1`–`8` tabs · `?` list them.
+
 ## Tips
 
 - Photos: good light, card fills the frame, no glare on the slab. Add the back for set/number confirmation.
 - iPhone HEIC photos: export as JPEG first (Photos → File → Export), or set iPhone Camera → Formats → Most Compatible.
 - Type extra details in the box with the photo, e.g. "it's the silver prizm" or "PSA 9".
 - Hottest-cards results are cached (4h daily / 12h weekly / 24h monthly); hit **↻ Refresh** for a new scan.
-- **Settings → Backup** downloads everything in one file; restore it on another computer.
+- **Settings → Backup** downloads everything in one file; restore it on another computer. The bot also keeps 14 daily
+  backups automatically in `data/backups`.
+- Something wrong? **Settings → Copy diagnostics** and paste it in a message (it never includes your keys).
 
 ## Options (`.env` file)
 
@@ -78,8 +108,14 @@ See `.env.example`: port, model (e.g. `gemini-3.5-flash-lite` for faster/cheaper
 
 Everything stays on your computer in the `data/` folder. The API key is in `.env`. Neither is uploaded to GitHub.
 
-## Check the free data sources
+## Check that everything works
 
 ```
-npm run check
+npm run selftest     # data sources + Gemini key + Google Search + one full lookup
+npm run check        # just the free data sources
 ```
+
+## Updating
+
+Download the newest ZIP, then copy your old `data` folder and `.env` file into the new folder (or `git pull` if you
+cloned it). See `CHANGELOG.md` for what changed.

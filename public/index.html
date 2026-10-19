@@ -7,51 +7,56 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <a class="skip" href="#main">Skip to content</a>
   <header class="top">
-    <div class="brand"><span class="logo">◆</span> Card Research Bot</div>
-    <nav class="tabs" id="tabs">
-      <button data-tab="lookup" class="active">Card Lookup</button>
+    <div class="brand"><span class="logo" aria-hidden="true">◆</span> Card Research Bot</div>
+    <nav class="tabs" id="tabs" aria-label="Sections">
+      <button data-tab="lookup" class="active" aria-current="page">Card Lookup</button>
       <button data-tab="hot">Hottest Cards</button>
-      <button data-tab="watch">Watchlist</button>
+      <button data-tab="inventory">Inventory</button>
+      <button data-tab="watch">Watchlist <span id="alertBadge" class="badge hidden" aria-label="new price alerts"></span></button>
       <button data-tab="ask">Ask</button>
       <button data-tab="history">History</button>
     </nav>
-    <button class="ghost" id="settingsBtn" title="Settings">⚙ Settings</button>
+    <button class="ghost" id="settingsBtn">⚙ Settings</button>
   </header>
 
-  <div id="keyBanner" class="banner hidden">
-    No Anthropic API key yet — the free <b>Quick price</b> search works, but AI research needs a key.
+  <div id="keyBanner" class="banner hidden" role="status">
+    No Gemini API key yet. The free <b>Quick price</b> search works without one, but AI research needs a key (also free).
     <button id="keyBannerBtn">Add key</button>
   </div>
 
-  <main>
+  <main id="main">
     <!-- ================= LOOKUP ================= -->
-    <section id="tab-lookup" class="tab active">
+    <section id="tab-lookup" class="tab active" aria-label="Card lookup">
       <div class="lookup-grid">
         <div class="panel">
-          <div id="drop" class="drop">
+          <div id="drop" class="drop" role="button" tabindex="0" aria-label="Add card photos: drop files here, or press Enter to choose files">
             <input type="file" id="fileInput" accept="image/*" multiple hidden />
             <div class="drop-inner">
-              <div class="drop-icon">⬇</div>
+              <div class="drop-icon" aria-hidden="true">⬇</div>
               <div><b>Drag &amp; drop card photos here</b></div>
               <div class="muted">or click to choose · or paste (Ctrl/⌘+V) · front + back works best</div>
             </div>
             <div id="thumbs" class="thumbs"></div>
           </div>
+          <label class="check"><input type="checkbox" id="batchMode" /> Batch mode: each photo is a <b>different</b> card</label>
           <label class="lbl" for="lookupText">Card name or extra details <span class="muted">(optional with a photo)</span></label>
           <input id="lookupText" type="text" placeholder="e.g. 2018 Prizm Luka Doncic silver PSA 10 · Blue-Eyes LOB-001 1st · Luffy OP05-119 manga" />
           <div class="row">
             <button id="researchBtn" class="primary">🔎 Research with AI</button>
-            <button id="quickBtn" title="Instant, free — PriceCharting/SportsCardsPro sold data, no AI">⚡ Quick price (free)</button>
+            <button id="quickBtn" title="Instant, free: sold-price data only, no AI">⚡ Quick price (free)</button>
+            <button id="cancelBtn" class="ghost hidden">✕ Cancel</button>
             <button id="clearBtn" class="ghost">Clear</button>
           </div>
-          <div id="lookupProgress" class="progress hidden"></div>
+          <div id="lookupProgress" class="progress hidden" aria-live="polite"></div>
+          <div id="batchQueue" class="hidden"></div>
         </div>
         <div id="lookupResult" class="result">
           <div class="empty">
             <h2>Drop a card to get started</h2>
             <p>The bot reads the card from the photo (player, year, set, number, parallel, grade), pulls the most recent
-              <b>sold</b> prices for every grade, searches the web for news and price moves, and tells you whether to
+              <b>sold</b> prices for every grade, searches Google for news and price moves, and tells you whether to
               grade it, hold it or sell it.</p>
             <p class="muted">Covers baseball, basketball, football, Yu-Gi-Oh and One Piece.</p>
           </div>
@@ -60,45 +65,75 @@
     </section>
 
     <!-- ================= HOT ================= -->
-    <section id="tab-hot" class="tab">
+    <section id="tab-hot" class="tab" aria-label="Hottest cards">
       <div class="panel">
-        <div class="pills" id="hotCats">
-          <button data-v="all" class="active">All</button>
-          <button data-v="baseball">⚾ Baseball</button>
-          <button data-v="basketball">🏀 Basketball</button>
-          <button data-v="football">🏈 Football</button>
-          <button data-v="yugioh">🃏 Yu-Gi-Oh</button>
-          <button data-v="onepiece">🏴‍☠️ One Piece</button>
+        <div class="pills" id="hotCats" role="group" aria-label="Category">
+          <button data-v="all" class="active" aria-pressed="true">All</button>
+          <button data-v="baseball" aria-pressed="false">⚾ Baseball</button>
+          <button data-v="basketball" aria-pressed="false">🏀 Basketball</button>
+          <button data-v="football" aria-pressed="false">🏈 Football</button>
+          <button data-v="yugioh" aria-pressed="false">🃏 Yu-Gi-Oh</button>
+          <button data-v="onepiece" aria-pressed="false">🏴‍☠️ One Piece</button>
         </div>
         <div class="row">
-          <div class="pills" id="hotPeriods">
-            <button data-v="daily">Today</button>
-            <button data-v="weekly" class="active">This week</button>
-            <button data-v="monthly">This month</button>
+          <div class="pills" id="hotPeriods" role="group" aria-label="Time period">
+            <button data-v="daily" aria-pressed="false">Today</button>
+            <button data-v="weekly" class="active" aria-pressed="true">This week</button>
+            <button data-v="monthly" aria-pressed="false">This month</button>
           </div>
           <button id="hotBtn" class="primary">🔥 Find hottest cards</button>
           <button id="hotRefresh" class="ghost hidden">↻ Refresh</button>
+          <button id="hotCancel" class="ghost hidden">✕ Cancel</button>
         </div>
-        <div id="hotProgress" class="progress hidden"></div>
+        <div id="hotProgress" class="progress hidden" aria-live="polite"></div>
       </div>
       <div id="hotResult"></div>
     </section>
 
-    <!-- ================= WATCHLIST ================= -->
-    <section id="tab-watch" class="tab">
+    <!-- ================= INVENTORY ================= -->
+    <section id="tab-inventory" class="tab" aria-label="Inventory">
       <div class="panel">
         <div class="row space">
-          <div><h2>Watchlist</h2><div class="muted">Cards you're tracking. Prices re-check automatically once a day while the app is open (free — no AI).</div></div>
-          <button id="watchRefresh">↻ Re-check prices now</button>
+          <div><h2>Inventory</h2><div class="muted">What you own, what you paid, and what it's worth today. Values re-check daily (free).</div></div>
+          <div class="row" style="margin:0">
+            <button id="invAddBtn">＋ Add card</button>
+            <button id="invRefresh">↻ Re-value</button>
+            <a class="button" href="/api/export/inventory.csv">⬇ Export CSV</a>
+          </div>
+        </div>
+        <form id="invForm" class="inv-form hidden">
+          <input name="name" type="text" placeholder="Card name" required aria-label="Card name" />
+          <input name="grade" type="text" placeholder="Grade (Raw, PSA 10…)" aria-label="Grade" />
+          <input name="qty" type="number" min="1" value="1" aria-label="Quantity" />
+          <input name="cost" type="number" min="0" step="0.01" placeholder="Paid each $" aria-label="Paid each" />
+          <input name="value" type="number" min="0" step="0.01" placeholder="Value each $ (optional)" aria-label="Current value each" />
+          <button class="primary">Save</button>
+        </form>
+      </div>
+      <div id="invTotals" class="totals"></div>
+      <div id="invList"></div>
+    </section>
+
+    <!-- ================= WATCHLIST ================= -->
+    <section id="tab-watch" class="tab" aria-label="Watchlist">
+      <div class="panel">
+        <div class="row space">
+          <div><h2>Watchlist</h2><div class="muted">Cards you're tracking. Prices re-check daily while the app is open (free). Set targets to get alerts.</div></div>
+          <div class="row" style="margin:0">
+            <button id="watchRefresh">↻ Re-check prices now</button>
+            <a class="button" href="/api/export/watchlist.csv">⬇ Export CSV</a>
+          </div>
         </div>
       </div>
+      <div id="alertList"></div>
       <div id="movers" class="movers"></div>
       <div id="watchList"></div>
     </section>
 
     <!-- ================= ASK ================= -->
-    <section id="tab-ask" class="tab">
-      <div id="chat" class="chat">
+    <section id="tab-ask" class="tab" aria-label="Ask">
+      <div id="askContext" class="panel hidden"></div>
+      <div id="chat" class="chat" aria-live="polite">
         <div class="empty">
           <h2>Ask anything about the card market</h2>
           <p class="muted">Examples: “What are the chase cards in the newest Topps Chrome?” · “Is it a good time to sell Wembanyama rookies?” ·
@@ -106,31 +141,76 @@
         </div>
       </div>
       <div class="panel ask-bar">
-        <input id="askInput" type="text" placeholder="Ask a question…" />
+        <input id="askInput" type="text" placeholder="Ask a question…" aria-label="Your question" />
         <button id="askBtn" class="primary">Ask</button>
+        <button id="askCancel" class="ghost hidden">✕</button>
       </div>
-      <div id="askProgress" class="progress hidden"></div>
+      <div id="askProgress" class="progress hidden" aria-live="polite"></div>
     </section>
 
     <!-- ================= HISTORY ================= -->
-    <section id="tab-history" class="tab">
+    <section id="tab-history" class="tab" aria-label="History">
+      <div class="panel row space">
+        <input id="histSearch" type="search" placeholder="Search past lookups…" aria-label="Search past lookups" style="max-width:420px" />
+        <a class="button" href="/api/export/lookups.csv">⬇ Export CSV</a>
+      </div>
       <div id="historyList"></div>
     </section>
   </main>
 
-  <dialog id="settings">
-    <form method="dialog" class="settings">
-      <h2>Settings</h2>
-      <p>Paste your Anthropic API key. Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com → API Keys</a>
-        (add a few dollars of credit under Billing). It's saved only on this computer in the app's <code>.env</code> file.</p>
-      <input id="keyInput" type="password" placeholder="sk-ant-..." autocomplete="off" />
-      <div id="keyMsg" class="muted"></div>
-      <div class="row">
-        <button id="saveKey" class="primary" value="none">Save key</button>
-        <button value="cancel" class="ghost">Close</button>
-      </div>
+  <dialog id="settings" aria-labelledby="settingsTitle">
+    <div class="settings">
+      <div class="row space"><h2 id="settingsTitle">Settings</h2><button class="ghost" id="closeSettings" aria-label="Close settings">✕</button></div>
+      <div id="settingsLocalOnly" class="muted hidden">Settings can only be changed on the computer running the bot.</div>
+
+      <section class="set-block">
+        <h3>Gemini API key</h3>
+        <p class="small">Free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>
+          (sign in with Google → Create API key). Saved only on this computer, in the app's <code>.env</code> file.</p>
+        <div class="row" style="margin-top:.3rem">
+          <input id="keyInput" type="password" placeholder="AIza..." autocomplete="off" aria-label="Gemini API key" style="flex:1" />
+          <button id="saveKey" class="primary">Save</button>
+        </div>
+        <div id="keyMsg" class="small muted" role="status"></div>
+      </section>
+
+      <section class="set-block">
+        <h3>Usage this month</h3>
+        <div id="usageBox" class="small"></div>
+        <div class="row" style="margin-top:.4rem">
+          <label for="budgetInput" class="small">Monthly spending cap $</label>
+          <input id="budgetInput" type="number" min="0" step="1" placeholder="none" style="width:110px" />
+          <button id="saveBudget">Save cap</button>
+        </div>
+      </section>
+
+      <section class="set-block">
+        <h3>Share on home network</h3>
+        <p class="small">Let your other computer (e.g. the Mac) use this bot and its data in a browser. Needs a PIN; restart the bot after changing.</p>
+        <div class="row" style="margin-top:.3rem">
+          <label class="check" style="margin:0"><input type="checkbox" id="shareToggle" /> Share</label>
+          <input id="pinInput" type="password" inputmode="numeric" maxlength="8" placeholder="4–8 digit PIN" style="width:150px" aria-label="PIN" />
+          <button id="saveShare">Save</button>
+        </div>
+        <div id="shareMsg" class="small" role="status"></div>
+      </section>
+
+      <section class="set-block">
+        <h3>Data sources</h3>
+        <div id="healthBox" class="small muted">Checking…</div>
+      </section>
+
+      <section class="set-block">
+        <h3>Backup</h3>
+        <div class="row" style="margin-top:.3rem">
+          <a class="button" href="/api/backup">⬇ Download backup</a>
+          <label class="button" for="restoreFile">⬆ Restore from backup</label>
+          <input type="file" id="restoreFile" accept="application/json,.json" hidden />
+        </div>
+        <div id="restoreMsg" class="small" role="status"></div>
+      </section>
       <p class="muted small" id="modelInfo"></p>
-    </form>
+    </div>
   </dialog>
 
   <script src="app.js"></script>

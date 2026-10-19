@@ -151,3 +151,63 @@ ul.tight li { margin: .15rem 0; }
 dialog { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--ink); max-width: 520px; width: calc(100% - 32px); }
 dialog::backdrop { background: rgba(0,0,0,.4); }
 .settings p { margin: .5rem 0; }
+
+/* ---------- v2 additions ---------- */
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.skip { position: absolute; left: -999px; top: 0; background: var(--panel); padding: .5rem 1rem; z-index: 10; }
+.skip:focus { left: 1rem; }
+a.button, label.button { display: inline-block; text-decoration: none; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: .55rem .95rem; border-radius: 10px; font-weight: 600; }
+a.button:hover, label.button:hover { border-color: var(--muted); }
+.badge { display: inline-block; min-width: 1.2em; padding: 0 .35em; border-radius: 999px; background: var(--bad); color: #fff; font-size: .75rem; line-height: 1.4; text-align: center; }
+.check { display: flex; align-items: center; gap: .45rem; margin-top: .7rem; font-size: .92rem; cursor: pointer; }
+input[type=number], input[type=search] { font: inherit; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); }
+input[type=search] { width: 100%; }
+
+/* batch queue */
+.queue { margin-top: .8rem; border-top: 1px solid var(--line); padding-top: .6rem; }
+.qrow { display: grid; grid-template-columns: 44px 1fr auto; gap: .6rem; align-items: center; padding: .35rem 0; border-bottom: 1px solid var(--line); font-size: .88rem; }
+.qrow img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; }
+.qrow button { padding: .25rem .6rem; font-size: .8rem; }
+
+/* chart + calculators */
+.chart { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart text { fill: var(--muted); font-size: 11px; }
+.chart-legend { display: flex; gap: .8rem; flex-wrap: wrap; font-size: .8rem; color: var(--muted); }
+.chart-legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; margin-right: 5px; vertical-align: middle; background: var(--c); }
+.calc { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: .5rem; margin-bottom: .5rem; }
+.calc label { font-size: .78rem; color: var(--muted); display: flex; flex-direction: column; gap: .2rem; }
+.calc input, .calc select { font: inherit; padding: .4rem .5rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); width: 100%; }
+.actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+.actions button { font-size: .85rem; padding: .4rem .75rem; }
+.inline-form { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin-top: .6rem; }
+.inline-form input { width: 120px; }
+
+/* inventory */
+.inv-form { display: grid; grid-template-columns: 2fr 1fr 70px 1fr 1fr auto; gap: .5rem; margin-top: .9rem; }
+@media (max-width: 800px) { .inv-form { grid-template-columns: 1fr 1fr; } }
+.totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .8rem; margin-bottom: 1rem; }
+.totals div { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: .7rem 1rem; }
+.totals b { display: block; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+.totals span { font-size: .8rem; color: var(--muted); }
+td input.cell { width: 90px; padding: .25rem .4rem; font-size: .88rem; }
+tr.sold td { opacity: .65; }
+
+/* watchlist alerts */
+.alert-item { display: flex; justify-content: space-between; gap: 1rem; align-items: center; background: color-mix(in srgb, var(--warn) 14%, var(--panel)); border: 1px solid var(--line); border-radius: 12px; padding: .6rem 1rem; margin-bottom: .5rem; }
+.targets input { width: 84px; padding: .25rem .4rem; font-size: .85rem; }
+
+/* history */
+.hist-thumb { width: 46px; height: 46px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+.hist-left { display: flex; gap: .8rem; align-items: center; }
+
+/* settings */
+.set-block { border-top: 1px solid var(--line); padding-top: .4rem; margin-top: .6rem; }
+.set-block h3 { margin: .4rem 0 .2rem; }
+.ok { color: var(--good); } .bad { color: var(--bad); }
+
+@media print {
+  .top, .banner, .lookup-grid > .panel, .foot .actions, .no-print, .calc-block { display: none !important; }
+  .lookup-grid { display: block; }
+  body, .report { background: #fff; color: #000; box-shadow: none; border: none; }
+}

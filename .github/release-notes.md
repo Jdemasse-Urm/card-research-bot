@@ -3,7 +3,7 @@
 | Computer | Download | How to install |
 |---|---|---|
 | **Windows** 10/11 | `CardResearchBot-Setup-…-Windows.exe` | Double-click it. If Windows shows "Windows protected your PC", click **More info → Run anyway**. It installs in a few seconds and puts **Card Research Bot** on your Desktop and Start menu. |
-| **Mac** (Apple Silicon or Intel, macOS 11+) | `CardResearchBot-…-Mac.dmg` | Double-click it, drag **Card Research Bot** into **Applications**. The first time, **right-click the app → Open → Open**. If macOS says the app "is damaged", open Terminal and run `xattr -cr "/Applications/Card Research Bot.app"`, then open it again. |
+| **Mac** (Apple Silicon or Intel, macOS 11+) | `CardResearchBot-…-Mac.dmg` | Double-click it, drag **Card Research Bot** into **Applications**. The first open is blocked ("Apple cannot check it for malicious software") because the app isn't Apple-signed: click **Cancel**, then **System Settings → Privacy & Security → scroll down → Open Anyway**. Or right-click the app in Applications → **Open** → **Open**. If it still refuses, run `xattr -cr "/Applications/Card Research Bot.app"` in Terminal. One time only. |
 
 Then open **⚙ Settings** in the app → paste a free Gemini key from https://aistudio.google.com/apikey → click **🩺 Run self-test**.
 

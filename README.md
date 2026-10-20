@@ -50,8 +50,10 @@ Go to **[Releases](../../releases/latest)** and download the one for your comput
 - **Windows:** `CardResearchBot-Setup-x.y.z-Windows.exe` → double-click. If Windows says "Windows protected your PC":
   **More info → Run anyway**. It installs in seconds and adds **Card Research Bot** to your Desktop and Start menu.
 - **Mac** (Apple Silicon or Intel, macOS 11+): `CardResearchBot-x.y.z-Mac.dmg` → double-click → drag
-  **Card Research Bot** into **Applications**. First time: **right-click the app → Open → Open**. If macOS says it
-  "is damaged", run `xattr -cr "/Applications/Card Research Bot.app"` in Terminal and open it again.
+  **Card Research Bot** into **Applications**. The first open is blocked with *"Apple cannot check it for malicious
+  software"* (the app isn't Apple-signed). Click **Cancel**, then **System Settings → Privacy & Security → scroll down →
+  Open Anyway**. Or right-click the app → **Open** → **Open**. If it still refuses, open Terminal and run
+  `xattr -cr "/Applications/Card Research Bot.app"`. This is a one-time step.
 
 Then get a **free Gemini API key** at <https://aistudio.google.com/apikey> (sign in with Google → **Create API key**),
 paste it in the app's **⚙ Settings**, and click **🩺 Run self-test**.

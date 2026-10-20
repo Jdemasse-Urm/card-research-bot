@@ -8,7 +8,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { exec, execFile } from "node:child_process";
 
-import { hasKey, resetClient, explainError, MODEL, FALLBACK_MODEL, monthlyBudget, FREE_GROUNDED_PER_MONTH } from "./lib/ai.js";
+import { hasKey, resetClient, explainError, MODEL, FALLBACK_MODEL, monthlyBudget, FREE_GROUNDED_PER_MONTH, aiQueue } from "./lib/ai.js";
 import { cardLookup, hotCards, ask, lotLookup, writeListing, slabCheck, adviseInventory, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
 import { runSelfTest } from "./lib/selftest.js";
 import * as store from "./lib/store.js";
@@ -259,6 +259,8 @@ app.get("/api/settings", (req, res) => {
     spendThisMonth: store.spendThisMonth(),
     groundedThisMonth: store.groundedThisMonth(),
     freeGrounded: FREE_GROUNDED_PER_MONTH,
+    aiStats: store.usageStats(),
+    aiQueue: aiQueue(),
     share: process.env.SHARE_ON_NETWORK === "1",
     shareActive: SHARE,
     pinSet: Boolean(process.env.ACCESS_PIN),
@@ -1451,8 +1453,9 @@ async function hourly() {
   await refreshSubmissions();
 
   // Daily website re-price (the pricing engine), then push the new prices to the MJC site.
+  // A run that couldn't read the sold-price feed doesn't count as today's run — try again next hour.
   const lastPricing = store.load("pricing-last-run", null);
-  if (!lastPricing || lastPricing.at.slice(0, 10) !== new Date().toISOString().slice(0, 10)) {
+  if (!lastPricing || lastPricing.feedDown || lastPricing.at.slice(0, 10) !== new Date().toISOString().slice(0, 10)) {
     try {
       const r = await pricingJob.run();
       if (r.changes?.length) store.logActivity("Pricing engine", `re-priced ${r.changes.length} MJC website cards`);

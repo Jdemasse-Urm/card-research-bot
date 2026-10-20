@@ -34,7 +34,10 @@ Covers baseball, basketball, football, Yu-Gi-Oh and One Piece — plus Pokémon,
 ## The MJC website connection
 
 Cards you mark **Sell on MJC** appear on the MJC store website with their photos. A daily pricing engine sets
-their prices from real sold comps and learns from your sales. Website orders come back into inventory as sold,
+their prices from real sold comps and learns from your sales — and health-checks itself every day: the learned
+model only steers prices when it predicts unseen listing-days better than the built-in assumptions, a day the
+sold-price feed can't be read holds every price (one alert, hourly retry), and a market value that jumps 40%+
+overnight is held until the feed confirms it. Website orders come back into inventory as sold,
 and customer messages from the site's chatbot (Pip) land in **Inventory → MJC store**. Setup: deploy the
 store backend (see the `mcj` repo, `api/deploy.mjs`), then paste its address and sync key into
 **MJC store → Setup** and fill in your shipping, returns and policies.

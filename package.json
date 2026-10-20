@@ -1,7 +1,7 @@
 {
   "name": "card-research-bot",
   "productName": "Card Research Bot",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "AI trading card research bot: drop a card photo, get recent sold prices, grading math, and the hottest cards by day/week/month.",
   "author": "Joseph DeMasse",
   "private": true,
@@ -15,7 +15,7 @@
     "start": "node server.js",
     "check": "node scripts/check-sources.js",
     "selftest": "node lib/selftest.js",
-    "test": "node --test test/pricing.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "dist:win": "electron-builder --win --publish never",
     "dist:mac": "electron-builder --mac --publish never"
   },
@@ -48,7 +48,14 @@
     "asar": true,
     "publish": null,
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.ico"
     },
     "nsis": {
@@ -61,7 +68,14 @@
       "artifactName": "CardResearchBot-Setup-${version}-Windows.${ext}"
     },
     "mac": {
-      "target": [{ "target": "dmg", "arch": ["universal"] }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
       "category": "public.app-category.business",
       "icon": "build/icon.png",
       "identity": "-",

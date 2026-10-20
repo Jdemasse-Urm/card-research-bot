@@ -1,5 +1,51 @@
 # Changelog
 
+## 3.4.0 — the pricing engine and the AI, made dependable (10-10 on performance + service)
+
+**Major**
+- **Pricing engine: model health check.** Every daily training now tests the learned model on the newest
+  30% of listing-days it hasn't seen, against the built-in starting assumptions, and checks that its price
+  sensitivity is clearly negative. It only steers prices when it passes; otherwise prices stay on the
+  schedule and the Pricing panel says why. A 30-day "expected sales vs actual" line shows calibration.
+- **Pricing engine: a broken feed day doesn't count.** If the sold-price site can't be read for most cards,
+  prices hold, you get one alert, no training rows are written, and the engine retries every hour.
+- **Pricing engine: faster runs.** Sales pages load in parallel, one fetch per page even when several copies
+  or grades share it, and the inventory is written once per run instead of once per card.
+- **Pricing engine: training fix.** The trainer now damps its steps (line search) — on a shop with a high
+  sale rate the old one could overshoot into a model that predicted a sale every day for every card.
+- **AI: no more pile-ups.** At most two Gemini calls run at once (a lookup and a hot scan no longer race each
+  other into "speed limit" errors), and a 429 waits exactly as long as Google asks instead of a blind 20 s.
+- **AI: every call has a deadline** (90 s, 150 s for Google research). A hung call is retried once, then
+  fails with a clear message instead of a job that never finishes.
+- **AI: fast lane.** The simple structured steps (matching a card to its price page, matching a lot,
+  writing a listing) run at low thinking effort — quicker and cheaper. If a model rejects the option it's
+  dropped automatically.
+- **Card lookups finish sooner:** the Google research starts at the same time as the sold-price search
+  instead of after it.
+- **AI performance panel** in Settings: calls and jobs today and over 7 days, failures, time-outs, average
+  and slowest times, retries, switches to the backup model, fast-lane calls.
+- **Pip (website chatbot) never leaves a shopper with an error.** If the AI is off, out of quota, slow or
+  over its daily limit, Pip still searches the shop for what was asked, says plainly that its assistant is
+  offline, and offers the team. Its calls have a deadline inside the server's own limit, and the website
+  shows "taking longer than usual" after 6 s.
+
+**Niche**
+- Pricing: a market value that jumps 40%+ in a day is held until the feed confirms it the next day
+  (misparsed page, mislabeled lot), and the Pricing panel lists what's on hold.
+- Pricing: a website sale is recorded against the price it sold for, even if it sold before that day's run.
+- Pricing: a learned price sensitivity that isn't clearly negative (a confounded fit) can't steer prices.
+- Pricing: wiring tests — feed-failure day, shared page fetched once, market-jump hold, sale observation,
+  health check — `npm test` runs 15 tests in 4 s with no network.
+- AI: a repeat lookup of the same photo also skips the price-page match step, not just the identification.
+- AI: each report shows how long it took; alerts for website orders, messages and pricing notices now read
+  correctly in the Watchlist (they used to render as a price alert).
+- Pip quotes the real shipping charge, free-shipping threshold, returns text and whether checkout is open.
+- Pip understands plain-words filters — "rookies under $100", "PSA 10 basketball between $500 and $1,000",
+  "cheapest signed football card" — as hard filters before ranking, and says when nothing matches.
+- Pip: per-instance caches (catalog 15 s, repeated opening questions 10 min) and a daily AI-answer cap with
+  counters you can see in MJC store → Setup (chats, hand-offs, answered without AI, average time).
+- Store backend: Stripe and the AI SDK load only on the routes that use them (lighter cold starts).
+
 ## 3.3.0 — connected to the MJC website
 - **Sell on MJC**: a switch on any inventory card puts it on the MJC website, with its photos and an
   optional AI-written description. Selling it anywhere else, or switching it off, takes it down automatically.

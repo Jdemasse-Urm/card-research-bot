@@ -37,7 +37,8 @@ function costLine(u) {
   if (!u) return "";
   const free = u.freeGrounded ? ` · Google searches this month: ${u.groundedThisMonth}/${u.freeGrounded} free` : "";
   const models = u.models?.length ? ` · ${u.models.join(", ")}` : "";
-  return `AI: ${u.calls || 0} calls, ≈ $${(u.usd || 0).toFixed(3)} on paid tier ($0 on free tier)${models}${free}`;
+  const took = u.ms ? ` · took ${Math.round(u.ms / 1000)} s` : "";
+  return `AI: ${u.calls || 0} calls, ≈ $${(u.usd || 0).toFixed(3)} on paid tier ($0 on free tier)${took}${models}${free}`;
 }
 
 let status = { hasKey: false };
@@ -183,6 +184,12 @@ async function openSettings() {
   $("#ebayState").innerHTML = s.ebay ? `<span class="ok">✓ connected</span>` : "";
   $("#usageBox").innerHTML = `Estimated AI cost this month: <b>${usd(s.spendThisMonth)}</b> <span class="muted">(only charged if you turned on billing in Google AI Studio; the free tier is $0)</span><br>
     Google searches this month: <b>${s.groundedThisMonth}</b> of ${s.freeGrounded.toLocaleString()} free · AI model ${esc(s.model)}${s.fallbackModel ? `, backup ${esc(s.fallbackModel)}` : ""} · key ${s.hasKey ? "saved ✓" : "not set"}`;
+  // How the AI is actually performing (every Gemini call is timed and its outcome recorded).
+  const perf = (d) => (d && d.calls
+    ? `${d.calls} call${d.calls === 1 ? "" : "s"} in ${d.jobs} job${d.jobs === 1 ? "" : "s"} · ${d.failed ? `<span class="bad">${d.failed} failed</span>` : "none failed"}${d.timeouts ? ` (${d.timeouts} timed out)` : ""} · avg ${(d.ms / d.calls / 1000).toFixed(1)} s per call, slowest ${Math.round(d.slowestMs / 1000)} s${d.jobs ? ` · avg job ${Math.round(d.jobMs / d.jobs / 1000)} s` : ""}${d.retries ? ` · ${d.retries} retr${d.retries === 1 ? "y" : "ies"}` : ""}${d.fallbacks ? ` · <span class="warn">${d.fallbacks} switch${d.fallbacks === 1 ? "" : "es"} to the backup model</span>` : ""}${d.fast ? ` · ${d.fast} fast-lane` : ""}`
+    : "no AI calls");
+  const st = s.aiStats || {};
+  $("#aiPerfBox").innerHTML = `<b>AI performance</b> — today: ${perf(st.today)}<br>last ${st.week?.days || 0} day${st.week?.days === 1 ? "" : "s"}: ${perf(st.week)}${s.aiQueue?.waiting ? `<br>${s.aiQueue.waiting} call${s.aiQueue.waiting === 1 ? "" : "s"} waiting in the queue (at most ${s.aiQueue.max} at once)` : ""}`;
   $("#shareMsg").innerHTML = s.shareActive
     ? `Sharing is on. On the other computer or phone open: ${s.lanUrls.map((u) => `<b>${esc(u)}</b>`).join(" or ")}`
     : s.share ? `<span class="bad">Sharing is set but not active. ${s.desktop ? "Quit and reopen the app" : "Restart the bot"} (and make sure a PIN is saved).</span>` : "";
@@ -1041,7 +1048,9 @@ function renderHot(h) {
 async function loadWatch() {
   const [{ items, movers }, alerts] = await Promise.all([getJSON("/api/watchlist"), getJSON("/api/alerts")]);
   const unseen = alerts.filter((a) => !a.seen);
-  const alertText = (a) => (a.kind === "brief" ? `☀️ <b>${esc(a.name)}</b>: ${esc(a.text)} <a href="#" data-gohot>Open</a>` : `🔔 <b>${esc(a.name)}</b> is ${a.kind === "above" ? "up to" : "down to"} <b>${usd(a.value)}</b> (your ${a.kind === "above" ? "sell" : "buy"} target ${usd(a.target)})`);
+  const alertText = (a) => (a.kind === "brief" ? `☀️ <b>${esc(a.name)}</b>: ${esc(a.text)} <a href="#" data-gohot>Open</a>`
+    : a.text ? `${a.kind === "order" ? "🛒" : a.kind === "ticket" ? "✉" : a.kind === "pricing" ? "📈" : "🔔"} <b>${esc(a.name)}</b>: ${esc(a.text)}` // website orders, messages, pricing-engine notices
+    : `🔔 <b>${esc(a.name)}</b> is ${a.kind === "above" ? "up to" : "down to"} <b>${usd(a.value)}</b> (your ${a.kind === "above" ? "sell" : "buy"} target ${usd(a.target)})`);
   $("#alertList").innerHTML = unseen.length
     ? unseen.map((a) => `<div class="alert-item" role="status"><span>${alertText(a)} · ${esc(when(a.at))}</span></div>`).join("") +
       `<div class="row" style="margin:0 0 1rem"><button id="alertsSeen">Mark alerts as read</button>${"Notification" in window && Notification.permission !== "granted" ? `<button id="alertsNotify" class="ghost">Enable desktop alerts</button>` : ""}</div>`

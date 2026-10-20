@@ -1,6 +1,12 @@
 # Builds the desktop apps when a version tag (v*) is pushed, smoke-tests each packaged app,
 # and attaches the Windows installer + Mac .dmg to that tag's GitHub Release.
 # The Mac app must be built on a Mac (signing + .dmg), which is why this runs on GitHub's runners.
+#
+# Mac builds run on GitHub's INTEL Mac runners: the Apple-silicon (arm64) pool was oversubscribed
+# ("not acquired by Runner ... capacity constraints") and cancelled the job three times. The output is
+# the same universal app (Apple silicon + Intel) either way.
+#
+# Re-run one platform for an existing tag: Actions → Desktop release → Run workflow → tag + platform.
 name: Desktop release
 
 on:
@@ -9,8 +15,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re)build, e.g. v3.1.0"
+        description: "Existing tag to (re)build, e.g. v3.3.0"
         required: true
+      platform:
+        description: "Which installer to (re)build"
+        type: choice
+        options: [all, windows, mac]
+        default: all
 
 permissions:
   contents: write
@@ -21,6 +32,8 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,22 +43,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Card Research Bot ${TAG#v}" --notes-file .github/release-notes.md --latest
+      - name: Pick the platforms to build
+        id: matrix
+        run: |
+          W='{"os":"windows-latest","target":"--win","app":"dist/win-unpacked/Card Research Bot.exe","files":"dist/*.exe"}'
+          M='{"os":"macos-15-intel","target":"--mac","app":"dist/mac-universal/Card Research Bot.app/Contents/MacOS/Card Research Bot","files":"dist/*.dmg"}'
+          case "${{ github.event.inputs.platform || 'all' }}" in
+            windows) echo "matrix={\"include\":[$W]}" >> "$GITHUB_OUTPUT" ;;
+            mac)     echo "matrix={\"include\":[$M]}" >> "$GITHUB_OUTPUT" ;;
+            *)       echo "matrix={\"include\":[$W,$M]}" >> "$GITHUB_OUTPUT" ;;
+          esac
 
   build:
     needs: release
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: --win
-            app: dist/win-unpacked/Card Research Bot.exe
-            files: dist/*.exe
-          - os: macos-15
-            target: --mac
-            app: dist/mac-universal/Card Research Bot.app/Contents/MacOS/Card Research Bot
-            files: dist/*.dmg
+      matrix: ${{ fromJSON(needs.release.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:

@@ -41,7 +41,7 @@ jobs:
             target: --win
             app: dist/win-unpacked/Card Research Bot.exe
             files: dist/*.exe
-          - os: macos-latest
+          - os: macos-15
             target: --mac
             app: dist/mac-universal/Card Research Bot.app/Contents/MacOS/Card Research Bot
             files: dist/*.dmg

@@ -351,3 +351,17 @@ input:not([type]), input[type=date], input[type=email], input[type=url] { font: 
 .trade-total { text-align: right; margin-top: .5rem; font-size: 1.05rem; }
 #advisorBar { gap: .8rem; }
 @media (max-width: 700px) { .att-row { grid-template-columns: 1fr; } .psa-photos img { height: 120px; } }
+
+
+/* ---------- MJC website ---------- */
+.chip.st-web { background: color-mix(in srgb, var(--gold) 18%, transparent); color: var(--gold); }
+.web-box { border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--line)); border-radius: 12px; padding: .7rem .9rem; }
+.web-box legend { font-weight: 700; padding: 0 .3rem; }
+.photo-strip { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .6rem; }
+.pthumb { position: relative; display: flex; flex-direction: column; align-items: center; gap: .2rem; }
+.pthumb img { height: 110px; border-radius: 8px; border: 1px solid var(--line); }
+.mjc-head { font-size: .92rem; }
+.order ul { margin: .5rem 0; }
+.ticket.closed { opacity: .65; }
+.warn { color: var(--warn); }
+.form-grid label.check, .web-box label.check { flex-direction: row; align-items: center; color: var(--ink); font-size: .92rem; }

@@ -31,6 +31,14 @@ An AI research assistant for a trading card business. Runs on **Windows and Mac*
 
 Covers baseball, basketball, football, Yu-Gi-Oh and One Piece — plus Pokémon, hockey and soccer.
 
+## The MJC website connection
+
+Cards you mark **Sell on MJC** appear on the MJC store website with their photos. A daily pricing engine sets
+their prices from real sold comps and learns from your sales. Website orders come back into inventory as sold,
+and customer messages from the site's chatbot (Pip) land in **Inventory → MJC store**. Setup: deploy the
+store backend (see the `mcj` repo, `api/deploy.mjs`), then paste its address and sync key into
+**MJC store → Setup** and fill in your shipping, returns and policies.
+
 ## Where the data comes from
 
 | Data | Source |

@@ -4,7 +4,8 @@
 
 const STATUS_LABEL = { in_stock: "In stock", listed: "Listed", grading: "At grading", sold: "Sold" };
 window.STATUS_LABEL = STATUS_LABEL;
-const SELL_PLATFORMS = ["eBay", "TCGplayer", "Whatnot", "Facebook", "Card show", "Local / cash", "Other"];
+const SELL_PLATFORMS = ["eBay", "TCGplayer", "Whatnot", "Facebook", "MJC site", "Card show", "Local / cash", "Other"];
+const webPrice = (r) => (r.webMode === "fixed" ? r.webFixedPrice : r.webPrice);
 const EXPENSE_KINDS = ["Supplies", "Shipping", "Grading", "Card show / table", "Fees", "Travel", "Software", "Other"];
 const COMPANIES = ["PSA", "BGS", "SGC", "CGC", "TAG", "Other"];
 const today = () => new Date().toISOString().slice(0, 10);
@@ -129,6 +130,7 @@ async function loadInventory() {
   if (invView === "sales") return loadSales();
   if (invView === "expenses") return loadExpenses();
   if (invView === "want") return loadWant();
+  if (invView === "mjc") return loadMjc();
 }
 TAB_LOADERS.inventory = loadInventory;
 
@@ -203,10 +205,10 @@ function drawStock() {
           <td class="num">${usd(r.cost)}</td>
           <td class="num">${r.status === "sold" ? `sold ${usd(r.soldPrice)}` : r.priceUrl ? usd(r.value) : `<button class="small" data-findprice title="Link to a sales page so this card gets valued">💲 Find price</button>`}<div class="small muted">${r.status === "sold" ? esc(r.soldOn || "") : r.priceUrl ? `${esc(when(r.valuedAt))}${!r.valuedAt || Date.now() - Date.parse(r.valuedAt) > 7 * 86400000 ? ` <span class="chip warn" title="Older than a week">stale</span> <button class="ghost small" data-revalue aria-label="Re-value now">↻</button>` : ""}` : ""}</div></td>
           <td class="num ${pl == null ? "" : pl >= 0 ? "pos" : "neg"}">${usd(pl)}</td>
-          <td><span class="chip st-${r.status}">${esc(STATUS_LABEL[r.status])}</span>${r.status === "listed" && r.listedOn ? `<div class="small muted">${esc(r.listedOn)} ${usd(r.listPrice)}</div>` : ""}</td>
+          <td><span class="chip st-${r.status}">${esc(STATUS_LABEL[r.status])}</span>${r.status === "listed" && r.listedOn ? `<div class="small muted">${esc(r.listedOn)} ${usd(r.listPrice)}</div>` : ""}${r.web && r.status !== "sold" ? `<div><span class="chip st-web" title="${esc(r.webPricingNote || (r.priceLog?.at(-1)?.reason) || "On the MJC website")}">🌐 ${webPrice(r) ? usd(webPrice(r)) : "needs price"}</span></div>` : ""}</td>
           <td class="actions nowrap">${r.status !== "sold" ? `<button class="small" data-sell>Sold</button>` : ""}<button class="small ghost" data-edit aria-label="Edit">✎</button><button class="small ghost" data-del aria-label="Remove">🗑</button></td></tr>`;
       }).join("")}</table>
-      <div class="row bulk"><span class="small muted" data-selcount>0 selected</span><button class="small" data-bulk="grading" disabled>Send selected to grading</button><button class="small" data-bulk="labels" disabled>Labels for selected</button></div></div>`
+      <div class="row bulk"><span class="small muted" data-selcount>0 selected</span><button class="small" data-bulk="grading" disabled>Send selected to grading</button><button class="small" data-bulk="labels" disabled>Labels for selected</button><button class="small" data-bulk="web-on" disabled>🌐 Sell selected on MJC</button><button class="small" data-bulk="web-off" disabled>Remove from MJC</button></div></div>`
     : `<div class="empty"><h2>${invRows.length ? "No cards match" : "No inventory yet"}</h2><p>${invRows.length ? "Change the filters above." : "Research a card and click <b>＋ Inventory</b>, add one by hand, or import your existing spreadsheet."}</p></div>`}`;
 
   $$("#invBody [data-f]").forEach((el) => (el.oninput = () => {
@@ -225,6 +227,16 @@ function drawStock() {
   $$("#invBody [data-sel]").forEach((c) => (c.onchange = syncBulk));
   $("#invBody [data-bulk=grading]") && ($("#invBody [data-bulk=grading]").onclick = () => openSubmissionEditor(selected()));
   $("#invBody [data-bulk=labels]") && ($("#invBody [data-bulk=labels]").onclick = () => printLabels(selected()));
+  for (const on of [true, false]) {
+    const b = $(`#invBody [data-bulk=web-${on ? "on" : "off"}]`);
+    if (b) b.onclick = async () => {
+      const ids = selected();
+      b.disabled = true;
+      for (const id of ids) await fetch("/api/inventory/" + id, json("PATCH", { web: on }));
+      toast(on ? `${ids.length} card${ids.length > 1 ? "s" : ""} going on the MJC website — the pricing engine is setting prices now` : `${ids.length} card${ids.length > 1 ? "s" : ""} taken off the website`);
+      setTimeout(loadStock, on ? 2500 : 300);
+    };
+  }
   $$("#invBody tr[data-id]").forEach((tr) => {
     const row = invRows.find((r) => r.id === tr.dataset.id);
     $("[data-edit]", tr).onclick = () => openItemEditor(row);
@@ -256,14 +268,31 @@ function openItemEditor(row = null) {
       <label>Location<input name="location" value="${esc(r.location || "")}" placeholder="Box 3, row 2"></label>
       <label class="span2">Tags (comma separated)<input name="tags" value="${esc((r.tags || []).join(", "))}" placeholder="rookie, flip, PC"></label>
       <label class="span2">Sales page URL (for automatic values)<input name="priceUrl" value="${esc(r.priceUrl || "")}" placeholder="https://www.sportscardspro.com/game/..."></label>
-      <label class="span2">Notes<textarea name="notes" rows="2">${esc(r.notes || "")}</textarea></label>
+      <label class="span2">Notes <span class="muted">(private — never shown on the website)</span><textarea name="notes" rows="2">${esc(r.notes || "")}</textarea></label>
+      <fieldset class="span2 web-box">
+        <legend>🌐 MJC website</legend>
+        <label class="check"><input type="checkbox" name="web"${r.web ? " checked" : ""}> Sell this card on the MJC website</label>
+        <div class="form-grid" style="margin-top:.4rem">
+          <label>Price<select name="webMode"><option value="auto"${r.webMode !== "fixed" ? " selected" : ""}>Automatic (pricing engine, daily)</option><option value="fixed"${r.webMode === "fixed" ? " selected" : ""}>Fixed price I set</option></select></label>
+          <label>Fixed price $<input name="webFixedPrice" type="number" min="0" step="0.01" value="${esc(r.webFixedPrice ?? "")}" placeholder="only for fixed"></label>
+        </div>
+        ${row?.web ? `<div class="small" style="margin-top:.4rem">${webPrice(row) ? `On the site at <b>${usd(webPrice(row))}</b>${row.webMarket ? ` · market ${usd(row.webMarket)}` : ""}${row.webLiquidity ? ` · ${esc(row.webLiquidity)}` : ""}` : `<span class="bad">${esc(row.webPricingNote || "Waiting for its first price")}</span>`}
+          ${(row.priceLog || []).length ? `<details><summary>Price history (${row.priceLog.length})</summary><ul class="tight small">${row.priceLog.slice(-8).reverse().map((l) => `<li>${esc(when(l.at))}: ${usd(l.from)} → <b>${usd(l.to)}</b> — ${esc(l.reason)}</li>`).join("")}</ul></details>` : ""}</div>` : ""}
+        <label style="margin-top:.5rem">Website description <span class="muted">(blank = the research summary)</span><textarea name="webDescription" rows="3">${esc(r.webDescription || "")}</textarea></label>
+        ${row ? `<div class="row" style="margin:.3rem 0 0"><button type="button" class="small" data-describe>✍ Write it with AI</button><span class="small muted">uses the card's research report</span></div>
+        <div class="photo-strip" data-photos></div>
+        <div class="row" style="margin:.3rem 0 0"><label class="button small" for="photoIn">📷 Add photos</label><input type="file" id="photoIn" accept="image/*" multiple hidden><span class="small muted">Front first. Your own photos — up to 8.</span></div>` : `<p class="small muted">Save the card first, then reopen it to add photos.</p>`}
+      </fieldset>
       <div class="span2 row"><button class="primary">${row ? "Save" : "Add card"}</button></div>
     </form>`, { wide: true });
+  if (row) wireWebExtras(row, body);
   $("[data-form]", body).onsubmit = async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
     if (f.value === "") f.value = null;
     if (!f.sku) delete f.sku;
+    f.web = e.target.elements.web.checked;
+    if (f.webMode === "fixed" && !(parseFloat(f.webFixedPrice) > 0)) return toast("Enter the fixed website price, or switch to Automatic.", { error: true });
     if (!row) {
       const dup = await getJSON(`/api/inventory/duplicate?name=${encodeURIComponent(f.name)}&grade=${encodeURIComponent(f.grade || "Raw")}`).catch(() => null);
       if (dup && !e.target.dataset.force) {
@@ -483,6 +512,164 @@ async function loadSales() {
     <div class="panel table-wrap"><h3 style="margin-top:0">By category</h3><table><tr><th>Category</th><th class="num">Sold</th><th class="num">Revenue</th><th class="num">Profit</th></tr>
       ${a.byCategory.map((c) => `<tr><td>${esc(CAT_LABEL[c.category] || c.category)}</td><td class="num">${c.sales}</td><td class="num">${usd(c.revenue)}</td><td class="num ${c.profit >= 0 ? "pos" : "neg"}">${usd(c.profit)}</td></tr>`).join("")}</table></div>`
     : `<div class="empty"><h2>No sales yet</h2><p>When a card sells, click <b>Sold</b> next to it in <b>Stock</b>. Profit, ROI, fees and days-to-sell show up here automatically.</p></div>`;
+}
+
+// ------------------------------------------------------------------ MJC website: photos + description inside the editor
+
+function wireWebExtras(row, body) {
+  const strip = $("[data-photos]", body);
+  let photos = [...(row.photos || [])];
+  const draw = () => {
+    strip.innerHTML = photos.map((f, i) => `<div class="pthumb"><img src="/api/photos/${encodeURIComponent(row.id)}/${encodeURIComponent(f)}" alt="photo ${i + 1}">${i === 0 ? `<span class="chip">front</span>` : `<button type="button" class="ghost small" data-first="${esc(f)}" title="Make this the main photo">★</button>`}<button type="button" class="ghost small" data-rm="${esc(f)}" aria-label="Remove photo">×</button></div>`).join("");
+    $$("[data-rm]", strip).forEach((b) => (b.onclick = async () => { photos = (await (await fetch(`/api/inventory/${row.id}/photos/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" })).json()).photos; draw(); }));
+    $$("[data-first]", strip).forEach((b) => (b.onclick = async () => { photos = (await (await fetch(`/api/inventory/${row.id}/photos/order`, json("POST", { photos: [b.dataset.first] }))).json()).photos; draw(); }));
+  };
+  draw();
+  $("#photoIn", body).onchange = async (e) => {
+    for (const file of e.target.files) {
+      try {
+        const { img, url } = await readAsImage(file);
+        const data = drawScaled(img, 1800).toDataURL("image/jpeg", 0.9);
+        URL.revokeObjectURL(url);
+        const r = await fetch(`/api/inventory/${row.id}/photos`, json("POST", { data }));
+        const j = await r.json();
+        if (!r.ok) { toast(j.error, { error: true }); break; }
+        photos = j.photos;
+        draw();
+      } catch (err) {
+        toast(err.message, { error: true });
+      }
+    }
+    e.target.value = "";
+  };
+  $("[data-describe]", body).onclick = async (e) => {
+    if (needKey()) return;
+    e.target.disabled = true;
+    e.target.textContent = "Writing…";
+    const prog = document.createElement("div");
+    prog.className = "progress";
+    e.target.closest(".row").after(prog);
+    try {
+      const r = await streamPost(`/api/inventory/${row.id}/describe`, {}, prog);
+      body.querySelector("[name=webDescription]").value = r.description;
+      prog.remove();
+    } catch (err) {
+      toast(err.message, { error: true });
+      prog.remove();
+    } finally {
+      e.target.disabled = false;
+      e.target.textContent = "✍ Write it with AI";
+    }
+  };
+}
+
+// ------------------------------------------------------------------ MJC STORE (orders, messages, pricing, setup)
+
+let mjcTab = "orders";
+const ORDER_STATUS = ["paid", "packed", "shipped", "delivered", "refunded", "cancelled"];
+async function loadMjc() {
+  $("#invActions").innerHTML = `<div class="pills" id="mjcTabs" role="group" aria-label="MJC store section">${[["orders", "📦 Orders"], ["messages", "✉ Messages"], ["pricing", "📈 Pricing engine"], ["setup", "⚙ Setup"]].map(([v, l]) => `<button data-v="${v}" class="${mjcTab === v ? "active" : ""}" aria-pressed="${mjcTab === v}">${l}</button>`).join("")}</div>`;
+  pillGroup("#mjcTabs", (v) => { mjcTab = v; loadMjc(); });
+  const m = await getJSON("/api/mjc");
+  const head = `<div class="panel mjc-head">
+    ${m.configured ? `<div class="row space" style="margin:0"><span>${m.remote ? `<span class="ok">● Connected</span>` : `<span class="bad">● Can't reach the store</span>`} · <b>${m.onSite}</b> card${m.onSite === 1 ? "" : "s"} on the website${m.needsPrice.length ? ` · <span class="warn">${m.needsPrice.length} waiting for a price</span>` : ""}${m.remote ? ` · checkout ${m.remote.checkoutEnabled && m.remote.payments ? `<span class="ok">open</span>` : `<span class="warn">closed</span>`}` : ""}</span>
+      <span class="small muted">last sync ${esc(when(m.state.lastSync) || "never")}${m.state.lastSyncError ? ` · <span class="bad">${esc(m.state.lastSyncError)}</span>` : ""} <button class="small" id="mjcSync">↻ Sync now</button></span></div>`
+      : `<b>The MJC website isn't connected yet.</b> <span class="small muted">Go to <b>⚙ Setup</b> below — you'll need the store's address and sync key (shown once when the store backend is deployed).</span>`}
+  </div>`;
+  let bodyHtml = "";
+  if (mjcTab === "orders") {
+    const orders = await getJSON("/api/mjc/orders");
+    bodyHtml = orders.length ? orders.map((o) => `<div class="panel order" data-id="${esc(o.id)}">
+        <div class="row space" style="margin:0"><div><b>${esc(o.id)}</b> · ${esc(when(o.created))} · <b>${usd(o.total)}</b> <span class="chip ${o.status === "paid" ? "warn" : o.status === "shipped" || o.status === "delivered" ? "good" : ""}">${esc(o.status)}</span></div>
+          <div class="small muted">${esc(o.name || "")} · ${o.email ? link("mailto:" + o.email, o.email) : ""}</div></div>
+        <ul class="tight small">${o.items.map((i) => `<li>${esc(i.title)} <span class="muted">${esc(i.grade || "")}</span> — ${usd(i.price)}</li>`).join("")}</ul>
+        ${o.shippingAddress ? `<div class="small"><b>Ship to:</b> ${esc([o.name, o.shippingAddress.line1, o.shippingAddress.line2, `${o.shippingAddress.city || ""}, ${o.shippingAddress.state || ""} ${o.shippingAddress.postal_code || ""}`].filter(Boolean).join(" · "))}</div>` : ""}
+        <div class="inline-form"><select data-st aria-label="Order status">${ORDER_STATUS.map((s) => `<option${s === o.status ? " selected" : ""}>${s}</option>`).join("")}</select>
+          <input data-carrier placeholder="Carrier" value="${esc(o.carrier || "")}" style="width:110px" aria-label="Carrier"><input data-track placeholder="Tracking #" value="${esc(o.tracking || "")}" style="width:200px" aria-label="Tracking number">
+          <button class="small primary" data-save>Save — customer sees it</button></div>
+      </div>`).join("")
+      : `<div class="empty"><h2>No website orders yet</h2><p>When a customer pays on the MJC site, the order shows up here within 5 minutes (and as an alert). The card is marked sold in your inventory automatically.</p><button id="mjcPull">↻ Check now</button></div>`;
+  } else if (mjcTab === "messages") {
+    const tickets = await getJSON("/api/mjc/tickets");
+    bodyHtml = tickets.length ? tickets.map((t) => `<div class="panel ticket ${t.status}" data-id="${esc(t.id)}">
+        <div class="row space" style="margin:0"><div><b>${esc(t.name || t.email)}</b> <span class="muted small">${esc(t.email)} · ${esc(when(t.created))}</span> <span class="chip ${t.status === "open" ? "warn" : ""}">${esc(t.status)}</span></div>
+          <div class="actions"><a class="button small" href="mailto:${esc(t.email)}?subject=${encodeURIComponent("Re: your message to MJC (" + t.id + ")")}&body=${encodeURIComponent("\n\n— — —\n" + t.message)}">Reply by email</a>${t.status !== "closed" ? `<button class="small" data-close>Mark done</button>` : ""}</div></div>
+        <p style="white-space:pre-wrap">${esc(t.message)}</p>
+        ${t.transcript ? `<details><summary class="small">Chat with Pip before this message</summary><pre class="diag">${esc(t.transcript)}</pre></details>` : ""}
+      </div>`).join("")
+      : `<div class="empty"><h2>No customer messages</h2><p>When a shopper asks Pip for a person (offers, bulk buys, anything Pip can't do), their message lands here with the chat that led to it.</p></div>`;
+  } else if (mjcTab === "pricing") {
+    const p = await getJSON("/api/pricing");
+    const s = p.settings;
+    bodyHtml = `<div class="panel"><h3 style="margin-top:0">How the website prices are set</h3>
+        <p class="small">Every day the engine re-prices each card marked <b>Sell on MJC</b> (with <b>Automatic</b> price) from that grade's real recent sold prices, your cost, how fast the card sells, and how long it's been listed. ${p.model ? esc(p.model.text) : "It hasn't run yet."} ${p.model && !p.model.optimizing ? `Until the site has ${p.model.needSales} sales it uses a steady starting schedule (market price, small weekly markdowns) — that variety is what the model learns from.` : p.model ? "It now chooses prices from what it has learned about your buyers." : ""}</p>
+        <form class="form-grid" data-pricing>
+          <label class="check span2" style="margin:0"><input type="checkbox" name="enabled"${s.enabled ? " checked" : ""}> Re-price automatically every day</label>
+          <label>Minimum profit over cost %<input name="minMarginPct" type="number" min="0" max="200" value="${s.minMarginPct}"></label>
+          <label>Most a price can move in one day %<input name="maxMovePct" type="number" min="1" max="25" value="${s.maxMovePct}"></label>
+          <label>Clearance after (days listed)<input name="clearanceDays" type="number" min="14" max="365" value="${s.clearanceDays}"></label>
+          <label>Your return target per month % <span class="muted">(higher = sell faster)</span><input name="monthlyReturnPct" type="number" min="1" max="30" value="${s.monthlyReturnPct}"></label>
+          <div class="span2 row"><button class="primary">Save</button><button type="button" id="runPricing">↻ Re-price now</button><span class="small muted">${p.lastRun ? `last run ${esc(when(p.lastRun.at))}: ${p.lastRun.priced} priced, ${p.lastRun.changes.length} changed${p.lastRun.skipped.length ? `, ${p.lastRun.skipped.length} skipped` : ""}` : "never run"} · ${p.observations} training observations</span></div>
+        </form>
+        ${p.lastRun?.skipped?.length ? `<p class="small warn">Skipped: ${p.lastRun.skipped.map((x) => `${esc(x.name)} (${esc(x.reason)})`).join(" · ")}</p>` : ""}
+      </div>
+      <div class="panel table-wrap"><h3 style="margin-top:0">Recent price changes</h3>${p.changes.length ? `<table><tr><th>When</th><th>Card</th><th class="num">From</th><th class="num">To</th><th>Why</th></tr>${p.changes.map((c) => `<tr><td class="small nowrap">${esc(when(c.at))}</td><td>${esc(c.name)} <span class="muted small">${esc(c.grade)}</span></td><td class="num">${usd(c.from)}</td><td class="num"><b>${usd(c.to)}</b></td><td class="small">${esc(c.reason)}</td></tr>`).join("")}</table>` : `<p class="muted small">No changes yet.</p>`}</div>`;
+  } else {
+    const st = m.store || {};
+    bodyHtml = `<div class="panel"><h3 style="margin-top:0">1. Connect to the store</h3>
+        <p class="small">The store's address and sync key are printed when the MJC backend is deployed (ask Claude to deploy it). The key lets this bot — and only this bot — update the website.</p>
+        <form class="form-grid" data-connect>
+          <label class="span2">Store API address<input name="apiUrl" value="${esc(m.apiUrl || "")}" placeholder="https://xxxx.lambda-url.us-east-2.on.aws"></label>
+          <label class="span2">Sync key <span class="muted">${m.configured ? "(saved — leave blank to keep it)" : ""}</span><input name="token" type="password" autocomplete="off"></label>
+          <div class="span2 row"><button class="primary"${m.canEditSettings ? "" : " disabled"}>Connect</button><span data-msg class="small"></span></div>
+        </form></div>
+      <div class="panel"><h3 style="margin-top:0">2. Store details Pip and checkout use</h3>
+        <p class="small">Pip, the website chatbot, answers shoppers from <b>exactly this text</b> — it won't promise anything that isn't here. Write it the way you'd tell a customer.</p>
+        <form class="form-grid" data-store>
+          <label>Store name<input name="name" value="${esc(st.name || "MJC Sports Cards & Collectibles")}"></label>
+          <label>Support email<input name="supportEmail" type="email" value="${esc(st.supportEmail || "")}" placeholder="you@yourdomain.com"></label>
+          <label>Shipping charge $<input name="shippingFlat" type="number" min="0" step="0.01" value="${esc(st.shippingFlat ?? "")}" placeholder="e.g. 4.99"></label>
+          <label>Free shipping over $<input name="freeShippingOver" type="number" min="0" step="1" value="${esc(st.freeShippingOver ?? "")}" placeholder="blank = never free"></label>
+          <label class="span2">Shipping details<textarea name="shipping" rows="2" placeholder="e.g. Ships within 1 business day in a top loader + bubble mailer, tracked. Cards over $250 ship insured with signature.">${esc(st.shipping || "")}</textarea></label>
+          <label class="span2">Returns<textarea name="returns" rows="2" placeholder="e.g. Raw cards: returns within 14 days if not as described. Graded slabs: returnable only if damaged in transit.">${esc(st.returns || "")}</textarea></label>
+          <label class="span2">Other policies &amp; facts for Pip<textarea name="policies" rows="5" placeholder="Payment methods, whether you buy collections, grading services, local pickup, card shows you'll be at, how to make an offer…">${esc(st.policies || "")}</textarea></label>
+          <label class="check span2"><input type="checkbox" name="checkoutEnabled"${st.checkoutEnabled ? " checked" : ""}> Open online checkout (customers can pay with Stripe). Leave off until you've done a test purchase.</label>
+          <div class="span2 row"><button class="primary">Save &amp; send to the website</button><span data-msg class="small"></span></div>
+        </form></div>`;
+  }
+  $("#invBody").innerHTML = head + bodyHtml;
+
+  const sync = $("#mjcSync");
+  if (sync) sync.onclick = async () => { sync.disabled = true; const r = await fetch("/api/mjc/sync", { method: "POST" }); const j = await r.json(); toast(r.ok ? `Synced — ${j.live} card${j.live === 1 ? "" : "s"} on the website` : j.error, { error: !r.ok }); loadMjc(); };
+  const pull = $("#mjcPull");
+  if (pull) pull.onclick = async () => { pull.disabled = true; const r = await fetch("/api/mjc/orders/pull", { method: "POST" }); const j = await r.json(); toast(r.ok ? `${j.fresh.length} new order${j.fresh.length === 1 ? "" : "s"}` : j.error, { error: !r.ok }); loadMjc(); };
+  $$("#invBody .order").forEach((el) => ($("[data-save]", el).onclick = async () => {
+    const r = await fetch("/api/mjc/orders/" + el.dataset.id, json("PATCH", { status: $("[data-st]", el).value, carrier: $("[data-carrier]", el).value, tracking: $("[data-track]", el).value }));
+    toast(r.ok ? "Saved — the customer can see it when they check their order" : (await r.json()).error, { error: !r.ok });
+  }));
+  $$("#invBody .ticket").forEach((el) => { const b = $("[data-close]", el); if (b) b.onclick = async () => { await fetch("/api/mjc/tickets/" + el.dataset.id, json("PATCH", { status: "closed" })); loadMjc(); }; });
+  const pf = $("#invBody [data-pricing]");
+  if (pf) {
+    pf.onsubmit = async (e) => { e.preventDefault(); const f = Object.fromEntries(new FormData(pf)); f.enabled = pf.elements.enabled.checked; await fetch("/api/pricing/settings", json("PUT", f)); toast("Pricing settings saved"); loadMjc(); };
+    $("#runPricing").onclick = async (e) => { e.target.disabled = true; e.target.textContent = "Re-pricing…"; const r = await fetch("/api/pricing/run", { method: "POST" }); const j = await r.json(); toast(r.ok ? `${j.changes.length} price${j.changes.length === 1 ? "" : "s"} changed` : j.error, { error: !r.ok }); loadMjc(); };
+  }
+  const cf = $("#invBody [data-connect]");
+  if (cf) cf.onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await fetch("/api/mjc/connect", json("POST", Object.fromEntries(new FormData(cf))));
+    const j = await r.json();
+    $("[data-msg]", cf).innerHTML = r.ok ? `<span class="ok">Connected ✓</span>` : `<span class="bad">${esc(j.error)}</span>`;
+    if (r.ok) setTimeout(loadMjc, 600);
+  };
+  const sf = $("#invBody [data-store]");
+  if (sf) sf.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(sf));
+    f.checkoutEnabled = sf.elements.checkoutEnabled.checked;
+    const r = await fetch("/api/mjc/store", json("PUT", f));
+    const j = await r.json();
+    $("[data-msg]", sf).innerHTML = r.ok ? `<span class="ok">Saved ✓ — Pip and checkout use this now</span>` : `<span class="bad">${esc(j.error)}</span>`;
+  };
 }
 
 // ------------------------------------------------------------------ WANT LIST

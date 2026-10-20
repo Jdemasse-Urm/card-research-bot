@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.3.0 — connected to the MJC website
+- **Sell on MJC**: a switch on any inventory card puts it on the MJC website, with its photos and an
+  optional AI-written description. Selling it anywhere else, or switching it off, takes it down automatically.
+  Bulk "Sell selected on MJC" in Stock.
+- **Daily pricing engine** for website cards. Prices come from that exact grade's recent sold comps (outliers
+  removed, recent sales weighted most), your cost, how fast the card sells, and how long it's been listed.
+  - Until the site has 10 sales it follows a steady starting schedule: market price, a premium for slow movers,
+    2% markdowns each week a card doesn't sell.
+  - After that, a model trained on your own sales decides how price-sensitive your buyers are.
+  - Guardrails: never under cost + your margin (until the clearance age), at most ±5% a day, no churn under 1%.
+  - Every change is logged with its reason. Settings live in Inventory → MJC store → Pricing engine.
+- **Website orders → inventory**: paid orders arrive within 5 minutes as an alert. The card is marked sold on
+  "MJC site" with Stripe's fee, and you add tracking in MJC store → Orders; the customer sees it.
+- **Customer messages**: shoppers who ask Pip for a person land in MJC store → Messages, with the chat that
+  led there and a one-click email reply.
+- **Store details for Pip**: shipping, returns and policies typed once in MJC store → Setup. They're exactly
+  what the website chatbot quotes and what checkout charges. Online checkout stays off until you turn it on.
+- Your cost, notes, storage locations and SKUs never leave this computer — only public card facts are sent.
+
 ## 3.2.0 — the second 10-10
 
 **Major**

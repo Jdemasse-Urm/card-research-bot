@@ -17,6 +17,9 @@ import * as ygoprodeck from "./lib/sources/ygoprodeck.js";
 import * as onepiece from "./lib/sources/onepiece.js";
 import * as psa from "./lib/sources/psa.js";
 import * as ebay from "./lib/sources/ebay.js";
+import * as mjc from "./lib/mjc.js";
+import * as pricingJob from "./lib/pricing-job.js";
+import { DEFAULTS as PRICING_DEFAULTS } from "./lib/pricing.js";
 
 const here = APP_DIR;
 const DESKTOP = process.env.CARD_BOT_DESKTOP === "1";
@@ -658,6 +661,7 @@ app.post("/api/inventory", (req, res) => {
     value: b.value ?? lookup?.pricing?.estimated_value_usd ?? null,
   });
   log(req, `added ${row.qty}× ${row.name} to inventory (paid $${row.cost} each)`);
+  if (row.web) pricingJob.run({ ids: [row.id] }).then(() => mjc.scheduleSync()).catch(() => {});
   res.json(row);
 });
 
@@ -667,10 +671,233 @@ app.patch("/api/inventory/:id", (req, res) => {
   if (!row) return res.status(404).json({ error: "not found" });
   if (before && before.status !== "sold" && row.status === "sold") log(req, `sold ${row.name} for $${row.soldPrice ?? "?"}${row.soldOn ? " on " + row.soldOn : ""}`);
   else if (before && before.status !== row.status) log(req, `marked ${row.name} as ${row.status.replace("_", " ")}`);
+  if (row.web && !before?.web) log(req, `put ${row.name} on the MJC website`);
+  if (before?.web && !row.web) log(req, `took ${row.name} off the MJC website`);
+  if (row.web && (!before?.web || before.webMode !== row.webMode || before.grade !== row.grade || before.cost !== row.cost)) {
+    pricingJob.run({ ids: [row.id] }).then(() => mjc.scheduleSync()).catch(() => {});
+  } else if (row.web || before?.web) mjc.scheduleSync();
   res.json(row);
 });
 
-app.delete("/api/inventory/:id", (req, res) => okDelete(res, store.deleteInventory(req.params.id)));
+app.delete("/api/inventory/:id", (req, res) => {
+  const wasWeb = store.inventory().find((r) => r.id === req.params.id)?.web;
+  const trashId = store.deleteInventory(req.params.id);
+  if (wasWeb) mjc.scheduleSync();
+  okDelete(res, trashId);
+});
+
+// ---------------- MJC website: listing photos + description ----------------
+
+app.get("/api/photos/:id/:file", (req, res) => {
+  const f = mjc.photoPath(req.params.id, req.params.file);
+  if (!fs.existsSync(f)) return res.status(404).end();
+  res.setHeader("Cache-Control", "private, max-age=86400");
+  res.sendFile(f);
+});
+
+app.post("/api/inventory/:id/photos", (req, res) => {
+  const row = store.inventory().find((r) => r.id === req.params.id);
+  if (!row) return res.status(404).json({ error: "not found" });
+  const m = String(req.body?.data || "").match(/^(?:data:image\/jpeg;base64,)?([A-Za-z0-9+/=]+)$/);
+  const buf = m ? Buffer.from(m[1], "base64") : null;
+  if (!buf || buf.length < 100 || buf.length > 4.5e6 || buf[0] !== 0xff || buf[1] !== 0xd8) return res.status(400).json({ error: "Send a JPEG photo under 4.5 MB." });
+  if ((row.photos || []).length >= 8) return res.status(400).json({ error: "Up to 8 photos per card." });
+  const file = `${store.newId()}.jpg`;
+  const f = mjc.photoPath(row.id, file);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, buf);
+  const updated = store.setEngineFields(row.id, { photos: [...(row.photos || []), file] });
+  if (row.web) mjc.scheduleSync();
+  res.json({ ok: true, file, photos: updated.photos });
+});
+
+app.delete("/api/inventory/:id/photos/:file", (req, res) => {
+  const row = store.inventory().find((r) => r.id === req.params.id);
+  if (!row) return res.status(404).json({ error: "not found" });
+  const photos = (row.photos || []).filter((x) => x !== req.params.file);
+  try {
+    fs.unlinkSync(mjc.photoPath(row.id, req.params.file));
+  } catch {}
+  store.setEngineFields(row.id, { photos });
+  if (row.web) mjc.scheduleSync();
+  res.json({ ok: true, photos });
+});
+
+app.post("/api/inventory/:id/photos/order", (req, res) => {
+  const row = store.inventory().find((r) => r.id === req.params.id);
+  if (!row) return res.status(404).json({ error: "not found" });
+  const want = (Array.isArray(req.body?.photos) ? req.body.photos : []).filter((f) => (row.photos || []).includes(f));
+  const photos = [...want, ...(row.photos || []).filter((f) => !want.includes(f))];
+  store.setEngineFields(row.id, { photos });
+  if (row.web) mjc.scheduleSync();
+  res.json({ ok: true, photos });
+});
+
+// AI-written website description from the card's research report.
+app.post("/api/inventory/:id/describe", (req, res) => {
+  const row = store.inventory().find((r) => r.id === req.params.id);
+  const report = row?.lookupId ? store.getLookup(row.lookupId) : null;
+  if (!report) return res.status(400).json({ error: "Research this card first (Card Lookup → Research with AI → ＋ Inventory) so the description has real facts to work from." });
+  streamJob(req, res, async (send, signal) => {
+    const l = await writeListing({ report, platform: "MJC website (your own shop, fixed price)" }, { onEvent: send, signal });
+    store.updateInventory(row.id, { webDescription: l.description });
+    if (row.web) mjc.scheduleSync();
+    return { description: l.description, title: l.title };
+  });
+});
+
+// ---------------- MJC website: connection, store policies, orders, messages ----------------
+
+app.get("/api/mjc", async (req, res) => {
+  let remote = null, remoteError = null;
+  if (mjc.configured()) {
+    try {
+      remote = await mjc.status();
+    } catch (err) {
+      remoteError = err.message;
+    }
+  }
+  const inv = store.inventory();
+  res.json({
+    configured: mjc.configured(),
+    apiUrl: mjc.apiUrl(),
+    state: mjc.state(),
+    remote,
+    remoteError,
+    store: mjc.storeSettings(),
+    onSite: inv.filter(mjc.onSite).length,
+    marked: inv.filter((r) => r.web && r.status !== "sold").length,
+    needsPrice: inv.filter((r) => r.web && r.status !== "sold" && !mjc.onSite(r)).map((r) => ({ id: r.id, name: r.name, note: r.webPricingNote || (r.qty > 0 ? "Waiting for its first price" : "Out of stock") })),
+    canEditSettings: isLoopback(req.socket.remoteAddress),
+  });
+});
+
+app.post("/api/mjc/connect", async (req, res) => {
+  if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
+  const url = String(req.body?.apiUrl || "").trim().replace(/\/+$/, "");
+  const token = String(req.body?.token || "").trim();
+  if (!/^https?:\/\/[\w.-]+(:\d+)?(\/[\w./-]*)?$/.test(url)) return res.status(400).json({ error: "That isn't a web address." });
+  if (!/^https:\/\//.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/.test(url)) return res.status(400).json({ error: "The store address must start with https:// (http only for localhost testing)." });
+  setEnv({ MJC_API_URL: url, ...(token ? { MJC_SYNC_TOKEN: token } : {}) });
+  try {
+    const remote = await mjc.status();
+    log(req, "connected the bot to the MJC website");
+    res.json({ ok: true, remote });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put("/api/mjc/store", async (req, res) => {
+  const b = req.body || {};
+  const s = {
+    name: store.clean.str(b.name, 120) || "MJC Sports Cards & Collectibles",
+    supportEmail: store.clean.str(b.supportEmail, 254),
+    shippingFlat: store.clean.money(b.shippingFlat) ?? 0,
+    freeShippingOver: store.clean.money(b.freeShippingOver),
+    shipping: store.clean.str(b.shipping, 1000),
+    returns: store.clean.str(b.returns, 2000),
+    policies: store.clean.str(b.policies, 8000),
+    checkoutEnabled: Boolean(b.checkoutEnabled),
+  };
+  try {
+    await mjc.saveStoreSettings(s);
+    log(req, `updated MJC store settings${s.checkoutEnabled ? " (checkout ON)" : ""}`);
+    res.json({ ok: true, store: s });
+  } catch (err) {
+    res.status(502).json({ error: `Saved here, but the website didn't take it: ${err.message}` });
+  }
+});
+
+app.post("/api/mjc/sync", async (req, res) => {
+  try {
+    const r = await mjc.syncCatalog();
+    log(req, `synced ${r.live} cards to the MJC website`);
+    res.json(r);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.get("/api/mjc/orders", (_req, res) => res.json(mjc.localOrders()));
+app.post("/api/mjc/orders/pull", async (_req, res) => {
+  try {
+    res.json({ fresh: (await pullMjc()).orders });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+app.patch("/api/mjc/orders/:id", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const o = await mjc.updateOrder(req.params.id, { status: b.status, carrier: store.clean.str(b.carrier, 30), tracking: store.clean.str(b.tracking, 60) });
+    if (b.status === "shipped") log(req, `shipped MJC order ${o.id}${o.tracking ? ` (${o.carrier || ""} ${o.tracking})` : ""}`);
+    res.json(o);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.get("/api/mjc/tickets", (_req, res) => res.json(mjc.localTickets()));
+app.patch("/api/mjc/tickets/:id", async (req, res) => {
+  try {
+    await mjc.updateTicket(req.params.id, store.clean.oneOf(req.body?.status, ["open", "answered", "closed"], "answered"));
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// ---------------- pricing engine ----------------
+
+app.get("/api/pricing", (_req, res) => {
+  res.json({
+    settings: pricingJob.settings(),
+    defaults: PRICING_DEFAULTS,
+    model: store.load("pricing-model", null),
+    lastRun: store.load("pricing-last-run", null),
+    changes: pricingJob.recentChanges(80),
+    observations: store.pricingObs().length,
+  });
+});
+app.put("/api/pricing/settings", (req, res) => res.json(pricingJob.saveSettings(req.body || {})));
+app.post("/api/pricing/run", async (req, res) => {
+  try {
+    const r = await pricingJob.run({ force: true });
+    if (r.changes?.length) log(req, `re-priced ${r.changes.length} website cards`);
+    mjc.scheduleSync();
+    res.json(r);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// New orders and customer messages, every few minutes (alerts + desktop notifications via the badge).
+let mjcPulling = false;
+async function pullMjc() {
+  if (!mjc.configured() || mjcPulling) return { orders: [], tickets: 0 };
+  mjcPulling = true;
+  try {
+    const orders = await mjc.pullOrders({
+      onOrder: (o) => {
+        store.addAlert({ kind: "order", name: `MJC order ${o.id}`, text: `${o.name || o.email} bought ${o.items.map((i) => i.title).join(", ")} — $${o.total}. Ship it from Inventory → MJC store.` });
+        store.logActivity("MJC website", `new order ${o.id}: ${o.items.map((i) => i.title).join(", ")} ($${o.total})`);
+      },
+    });
+    if (orders.length) mjc.scheduleSync();
+    let tickets = 0;
+    await mjc.pullTickets({
+      onTicket: (t) => {
+        tickets++;
+        store.addAlert({ kind: "ticket", name: `Message from ${t.name || t.email}`, text: t.message.slice(0, 140) });
+      },
+    });
+    return { orders, tickets };
+  } finally {
+    mjcPulling = false;
+  }
+}
+setInterval(() => pullMjc().catch((err) => console.warn("MJC pull failed:", err.message)), 5 * 60 * 1000);
 
 async function revalueInventory() {
   let updated = 0;
@@ -792,7 +1019,7 @@ app.post("/api/expenses", (req, res) => {
 app.delete("/api/expenses/:id", (req, res) => okDelete(res, store.deleteExpense(req.params.id)));
 
 // Approximate seller fees when a sale didn't record its own (same table as the profit calculator).
-const FEE_PCT = { eBay: [13.25, 0.4], TCGplayer: [13.25, 0.3], Whatnot: [10.9, 0.3], Facebook: [0, 0], "Card show": [0, 0], "Local / cash": [0, 0], Other: [0, 0] };
+const FEE_PCT = { eBay: [13.25, 0.4], TCGplayer: [13.25, 0.3], Whatnot: [10.9, 0.3], Facebook: [0, 0], "MJC site": [2.9, 0.3], "Card show": [0, 0], "Local / cash": [0, 0], Other: [0, 0] };
 const feeFor = (r) => {
   if (r.fees != null) return r.fees;
   const [p, f] = FEE_PCT[r.soldOn] || [0, 0];
@@ -1222,6 +1449,25 @@ async function hourly() {
   const lastPoint = store.portfolio().slice(-1)[0];
   if (!lastPoint || lastPoint.date !== new Date().toISOString().slice(0, 10)) await revalueInventory();
   await refreshSubmissions();
+
+  // Daily website re-price (the pricing engine), then push the new prices to the MJC site.
+  const lastPricing = store.load("pricing-last-run", null);
+  if (!lastPricing || lastPricing.at.slice(0, 10) !== new Date().toISOString().slice(0, 10)) {
+    try {
+      const r = await pricingJob.run();
+      if (r.changes?.length) store.logActivity("Pricing engine", `re-priced ${r.changes.length} MJC website cards`);
+    } catch (err) {
+      console.warn("pricing run failed:", err.message);
+    }
+  }
+  if (mjc.configured()) {
+    try {
+      await mjc.syncCatalog();
+      await pullMjc();
+    } catch (err) {
+      console.warn("MJC sync failed:", err.message);
+    }
+  }
 
   // Morning brief (opt-in): one fresh "hottest cards today" scan per day after the chosen hour.
   const hour = parseInt(process.env.CARD_BOT_BRIEF_HOUR, 10) || 8;

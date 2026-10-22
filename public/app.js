@@ -967,13 +967,18 @@ function renderQuickCard(d, el = $("#quickCard")) {
   const refreshOwned = () => ownedBanner(d.url, grade(), $("[data-owned]", el), `${d.title} ${d.set}`);
   refreshOwned();
   $("[data-grade]", el).onchange = refreshOwned;
-  $("[data-q=want]", el).onclick = async (e) => {
-    const max = prompt("Pay up to $ (optional):");
-    if (max === null) return;
-    const r = await fetch("/api/wantlist", json("POST", { name, grade: grade(), priceUrl: d.url, maxPrice: max, category: categoryOfUrl(d.url) }));
-    e.target.textContent = r.ok ? "🎯 Wanted" : "Couldn't add";
-    e.target.disabled = true;
-    refreshOwned();
+  // A small dialog, not window.prompt(): prompt() silently does nothing inside the desktop app.
+  $("[data-q=want]", el).onclick = (e) => {
+    const body = openModal("Add to want list", `<form data-form class="form-grid"><div class="span2 small">${esc(name)} · ${esc(grade())}</div><label>Pay up to $ <span class="muted small">(optional)</span><input name="maxPrice" type="number" min="0" step="1"></label><div class="span2 row"><button class="primary">🎯 Add</button></div></form>`);
+    $("[data-form]", body).onsubmit = async (ev) => {
+      ev.preventDefault();
+      const max = new FormData(ev.target).get("maxPrice");
+      const r = await fetch("/api/wantlist", json("POST", { name, grade: grade(), priceUrl: d.url, maxPrice: max || null, category: categoryOfUrl(d.url) }));
+      modal.close();
+      e.target.textContent = r.ok ? "🎯 Wanted" : "Couldn't add";
+      e.target.disabled = true;
+      refreshOwned();
+    };
   };
   const name = `${d.title} (${d.set})`;
   $("[data-q=watch]", el).onclick = async (e) => {

@@ -78,7 +78,7 @@ async function loadDashboard() {
           <div><b>${w.added || 0}</b><span>cards added</span></div>
         </div>
         ${w.best ? `<p class="small">Best flip: <b>${esc(w.best.name)}</b> ${esc(w.best.grade || "")} — <span class="pos">${usd(w.best.profit)}</span>${w.best.soldOn ? ` on ${esc(w.best.soldOn)}` : ""}</p>` : ""}
-        ${w.website ? `<p class="small">Website: <b>${w.website.orders}</b> order${w.website.orders === 1 ? "" : "s"} · <b>${w.website.offers}</b> offer${w.website.offers === 1 ? "" : "s"} · <b>${w.website.messages}</b> message${w.website.messages === 1 ? "" : "s"} <button class="ghost small" data-mjc>Open →</button></p>` : ""}
+        ${w.website ? `<p class="small">Website: ${w.website.visits != null ? `<b>${w.website.visits}</b> visit${w.website.visits === 1 ? "" : "s"} · ` : ""}<b>${w.website.orders}</b> order${w.website.orders === 1 ? "" : "s"} · <b>${w.website.offers}</b> offer${w.website.offers === 1 ? "" : "s"} · <b>${w.website.messages}</b> message${w.website.messages === 1 ? "" : "s"}${w.website.subscribers ? ` · <b>${w.website.subscribers}</b> on the email list` : ""} <button class="ghost small" data-mjc>Open →</button></p>` : ""}
         ${w.expenses ? `<p class="small muted">Expenses this week: ${usd(w.expenses)}</p>` : ""}
       </div>
       <div class="panel">
@@ -669,27 +669,30 @@ function wireWebExtras(row, body) {
 
 let mjcTab = "orders";
 let mjcTickets = []; // the inbox as last loaded — its buttons act on these
+let mjcOrders = [];
 const ORDER_STATUS = ["paid", "packed", "shipped", "delivered", "refunded", "cancelled"];
 async function loadMjc() {
   $("#invActions").innerHTML = `<div class="pills" id="mjcTabs" role="group" aria-label="MJC store section">${[["orders", "📦 Orders"], ["messages", "✉ Messages"], ["pricing", "📈 Pricing engine"], ["setup", "⚙ Setup"]].map(([v, l]) => `<button data-v="${v}" class="${mjcTab === v ? "active" : ""}" aria-pressed="${mjcTab === v}">${l}</button>`).join("")}</div>`;
   pillGroup("#mjcTabs", (v) => { mjcTab = v; loadMjc(); });
   const m = await getJSON("/api/mjc");
   const head = `<div class="panel mjc-head">
-    ${m.configured ? `<div class="row space" style="margin:0"><span>${m.remote ? `<span class="ok">● Connected</span>` : `<span class="bad">● Can't reach the store</span>`} · <b>${m.onSite}</b> card${m.onSite === 1 ? "" : "s"} on the website${m.needsPrice.length ? ` · <span class="warn">${m.needsPrice.length} waiting for a price</span>` : ""}${m.remote ? ` · checkout ${m.remote.checkoutEnabled && m.remote.payments ? `<span class="ok">open</span>` : `<span class="warn">closed</span>`}` : ""}${m.remote?.pip?.today ? ` · Pip today: <b>${m.remote.pip.today.chats || 0}</b> chat${m.remote.pip.today.chats === 1 ? "" : "s"}${m.remote.pip.today.handoffs ? `, ${m.remote.pip.today.handoffs} to the team` : ""}${m.remote.pip.today.degraded ? `, <span class="warn">${m.remote.pip.today.degraded} without AI</span>` : ""}${m.remote.pip.today.chats && m.remote.pip.today.ms ? `, avg ${(m.remote.pip.today.ms / m.remote.pip.today.chats / 1000).toFixed(1)} s` : ""}${m.remote.pip.capped ? ` · <span class="bad">daily chat limit reached</span>` : ""}` : ""}</span>
+    ${m.configured ? `<div class="row space" style="margin:0"><span>${m.remote ? `<span class="ok">● Connected</span>` : `<span class="bad">● Can't reach the store</span>`} · <b>${m.onSite}</b> card${m.onSite === 1 ? "" : "s"} on the website${m.needsPrice.length ? ` · <span class="warn">${m.needsPrice.length} waiting for a price</span>` : ""}${m.remote ? ` · checkout ${m.remote.checkoutEnabled && m.remote.payments ? `<span class="ok">open</span>` : `<span class="warn">closed</span>`}` : ""}${m.remote?.pip?.today ? ` · Pip today: <b>${m.remote.pip.today.chats || 0}</b> chat${m.remote.pip.today.chats === 1 ? "" : "s"}${m.remote.pip.today.handoffs ? `, ${m.remote.pip.today.handoffs} to the team` : ""}${m.remote.pip.today.degraded ? `, <span class="warn">${m.remote.pip.today.degraded} without AI</span>` : ""}${m.remote.pip.today.chats && m.remote.pip.today.ms ? `, avg ${(m.remote.pip.today.ms / m.remote.pip.today.chats / 1000).toFixed(1)} s` : ""}${m.remote.pip.capped ? ` · <span class="bad">daily chat limit reached</span>` : ""}` : ""}${m.remote?.visits?.week ? ` · this week: <b>${m.remote.visits.week.sessions || 0}</b> visit${m.remote.visits.week.sessions === 1 ? "" : "s"}, ${m.remote.visits.week.card || 0} card view${m.remote.visits.week.card === 1 ? "" : "s"}` : ""}${m.remote?.subscribers != null ? ` · <b>${m.remote.subscribers}</b> on the email list` : ""}${m.remote?.version ? ` · <span class="muted">store v${esc(m.remote.version)}${m.remote.builtAt ? ` (${esc(when(m.remote.builtAt))})` : ""}</span>` : ""}</span>
       <span class="small muted">last sync ${esc(when(m.state.lastSync) || "never")}${m.state.lastSyncError ? ` · <span class="bad">${esc(m.state.lastSyncError)}</span>` : ""} <button class="small" id="mjcSync">↻ Sync now</button></span></div>`
       : `<b>The MJC website isn't connected yet.</b> <span class="small muted">Go to <b>⚙ Setup</b> below — you'll need the store's address and sync key (shown once when the store backend is deployed).</span>`}
   </div>`;
   let bodyHtml = "";
   if (mjcTab === "orders") {
-    const orders = await getJSON("/api/mjc/orders");
+    const orders = (mjcOrders = await getJSON("/api/mjc/orders"));
     bodyHtml = orders.length ? orders.map((o) => `<div class="panel order" data-id="${esc(o.id)}">
         <div class="row space" style="margin:0"><div><b>${esc(o.id)}</b> · ${esc(when(o.created))} · <b>${usd(o.total)}</b> <span class="chip ${o.status === "paid" ? "warn" : o.status === "shipped" || o.status === "delivered" ? "good" : ""}">${esc(o.status)}</span></div>
           <div class="small muted">${esc(o.name || "")} · ${o.email ? link("mailto:" + o.email, o.email) : ""}</div></div>
         <ul class="tight small">${o.items.map((i) => `<li>${esc(i.title)} <span class="muted">${esc(i.grade || "")}</span> — ${usd(i.price)}</li>`).join("")}</ul>
-        ${o.shippingAddress ? `<div class="small"><b>Ship to:</b> ${esc([o.name, o.shippingAddress.line1, o.shippingAddress.line2, `${o.shippingAddress.city || ""}, ${o.shippingAddress.state || ""} ${o.shippingAddress.postal_code || ""}`].filter(Boolean).join(" · "))}</div>` : ""}
+        ${o.fulfillment === "pickup" ? `<div class="small"><span class="chip warn">LOCAL PICKUP</span> the customer chose pickup — email them to arrange it${o.phone ? ` · ${esc(o.phone)}` : ""}</div>` : o.shippingAddress ? `<div class="small"><b>Ship to:</b> ${esc([o.name, o.shippingAddress.line1, o.shippingAddress.line2, `${o.shippingAddress.city || ""}, ${o.shippingAddress.state || ""} ${o.shippingAddress.postal_code || ""}`].filter(Boolean).join(" · "))}${o.phone ? ` · ${esc(o.phone)}` : ""}</div>` : ""}
+        ${o.note ? `<div class="small"><b>Note from the customer:</b> ${esc(o.note)}</div>` : ""}
+        ${o.discount ? `<div class="small muted">Promo code discount ${usd(o.discount)}${o.tax ? ` · tax ${usd(o.tax)}` : ""}</div>` : o.tax ? `<div class="small muted">Tax ${usd(o.tax)}</div>` : ""}
         <div class="inline-form"><select data-st aria-label="Order status">${ORDER_STATUS.map((s) => `<option${s === o.status ? " selected" : ""}>${s}</option>`).join("")}</select>
           <input data-carrier placeholder="Carrier" value="${esc(o.carrier || "")}" style="width:110px" aria-label="Carrier"><input data-track placeholder="Tracking #" value="${esc(o.tracking || "")}" style="width:200px" aria-label="Tracking number">
-          <button class="small primary" data-save>Save — customer sees it</button></div>
+          <button class="small primary" data-save>Save — customer sees it</button><a class="button small" data-mail-tracking href="#" title="Opens an email to the customer with the tracking number">✉ Email tracking</a></div>
       </div>`).join("")
       : `<div class="empty"><h2>No website orders yet</h2><p>When a customer pays on the MJC site, the order shows up here within 5 minutes (and as an alert). The card is marked sold in your inventory automatically.</p><button id="mjcPull">↻ Check now</button></div>`;
   } else if (mjcTab === "messages") {
@@ -754,6 +757,20 @@ async function loadMjc() {
           <label class="span2">Returns<textarea name="returns" rows="2" placeholder="e.g. Raw cards: returns within 14 days if not as described. Graded slabs: returnable only if damaged in transit.">${esc(st.returns || "")}</textarea></label>
           <label class="span2">Other policies &amp; facts for Pip<textarea name="policies" rows="5" placeholder="Payment methods, whether you buy collections, grading services, local pickup, card shows you'll be at, how to make an offer…">${esc(st.policies || "")}</textarea></label>
           <label class="check span2"><input type="checkbox" name="checkoutEnabled"${st.checkoutEnabled ? " checked" : ""}> Open online checkout (customers can pay with Stripe). Leave off until you've done a test purchase.</label>
+          <div class="span2"><b class="small">Checkout options</b></div>
+          <label class="check span2"><input type="checkbox" name="localPickup"${st.localPickup ? " checked" : ""}> Offer <b>local pickup</b> (free) as a choice at checkout</label>
+          <label class="span2">Pickup note shown to the customer<input name="pickupNote" value="${esc(st.pickupNote || "")}" placeholder="e.g. Saturdays at the Novi card show, or by appointment in Plymouth"></label>
+          <label class="check span2"><input type="checkbox" name="promoCodes"${st.promoCodes ? " checked" : ""}> Accept <b>promo codes</b> at checkout (you create the codes in your Stripe dashboard → Product catalog → Coupons)</label>
+          <label class="check span2"><input type="checkbox" name="stripeTax"${st.stripeTax ? " checked" : ""}> Charge <b>sales tax</b> automatically with Stripe Tax (turn on Stripe Tax in your Stripe dashboard first)</label>
+          <div class="span2"><b class="small">The website</b></div>
+          <label class="check span2"><input type="checkbox" name="showDemo"${st.showDemo === false ? "" : " checked"}> Show the <b>demo</b> parts of the site (example cards, auctions, mystery boxes, sets). Off = a plain shop with only your real cards.</label>
+          <label class="check span2"><input type="checkbox" name="emailList"${st.emailList === false ? "" : " checked"}> Let shoppers <b>sign up for emails</b> (new arrivals and price drops). ${m.remote?.subscribers != null ? `<b>${m.remote.subscribers}</b> signed up so far · <a href="/api/mjc/subscribers.csv">⬇ Download the list (CSV)</a> for your email program. Someone asks to stop? <button type="button" class="small ghost" data-unsub>Remove an address</button>` : ""}</label>
+          <label>Instagram<input name="social_instagram" value="${esc(st.social?.instagram || "")}" placeholder="https://instagram.com/…"></label>
+          <label>eBay store<input name="social_ebay" value="${esc(st.social?.ebay || "")}" placeholder="https://www.ebay.com/str/…"></label>
+          <label>Facebook<input name="social_facebook" value="${esc(st.social?.facebook || "")}" placeholder="https://facebook.com/…"></label>
+          <label>Whatnot<input name="social_whatnot" value="${esc(st.social?.whatnot || "")}" placeholder="https://www.whatnot.com/user/…"></label>
+          <label>TikTok<input name="social_tiktok" value="${esc(st.social?.tiktok || "")}" placeholder="https://tiktok.com/@…"></label>
+          <label>YouTube<input name="social_youtube" value="${esc(st.social?.youtube || "")}" placeholder="https://youtube.com/@…"></label>
           <div class="span2 row"><button class="primary">Save &amp; send to the website</button><span data-msg class="small"></span></div>
         </form></div>`;
   }
@@ -763,10 +780,24 @@ async function loadMjc() {
   if (sync) sync.onclick = async () => { sync.disabled = true; const r = await fetch("/api/mjc/sync", { method: "POST" }); const j = await r.json(); toast(r.ok ? `Synced — ${j.live} card${j.live === 1 ? "" : "s"} on the website` : j.error, { error: !r.ok }); loadMjc(); };
   const pull = $("#mjcPull");
   if (pull) pull.onclick = async () => { pull.disabled = true; const r = await fetch("/api/mjc/orders/pull", { method: "POST" }); const j = await r.json(); toast(r.ok ? `${j.fresh.length} new order${j.fresh.length === 1 ? "" : "s"}` : j.error, { error: !r.ok }); loadMjc(); };
-  $$("#invBody .order").forEach((el) => ($("[data-save]", el).onclick = async () => {
-    const r = await fetch("/api/mjc/orders/" + el.dataset.id, json("PATCH", { status: $("[data-st]", el).value, carrier: $("[data-carrier]", el).value, tracking: $("[data-track]", el).value }));
-    toast(r.ok ? "Saved — the customer can see it when they check their order" : (await r.json()).error, { error: !r.ok });
-  }));
+  $$("#invBody .order").forEach((el) => {
+    $("[data-save]", el).onclick = async () => {
+      const r = await fetch("/api/mjc/orders/" + el.dataset.id, json("PATCH", { status: $("[data-st]", el).value, carrier: $("[data-carrier]", el).value, tracking: $("[data-track]", el).value }));
+      toast(r.ok ? "Saved — the customer can see it when they check their order" : (await r.json()).error, { error: !r.ok });
+    };
+    // A ready-to-send shipping email: carrier, tracking number and the site's tracking page.
+    const mail = $("[data-mail-tracking]", el);
+    if (mail) mail.onclick = (e) => {
+      e.preventDefault();
+      const o = (mjcOrders || []).find((x) => x.id === el.dataset.id);
+      if (!o) return;
+      const carrier = $("[data-carrier]", el).value.trim(), tracking = $("[data-track]", el).value.trim();
+      if (!tracking) return toast("Type the tracking number first, then Save.", { error: true });
+      const site = m.remote?.siteUrl || "";
+      const body = `Hi${o.name ? " " + o.name.split(" ")[0] : ""},\n\nYour order ${o.id} is on its way!\n\n${o.items.map((i) => `• ${i.title}${i.grade ? ` (${i.grade})` : ""}`).join("\n")}\n\n${carrier ? carrier + " " : ""}tracking number: ${tracking}${site ? `\nTrack it any time: ${site}/track?order=${encodeURIComponent(o.id)} (with the email you used at checkout)` : ""}\n\nThanks for buying from MJC!`;
+      location.href = `mailto:${o.email}?subject=${encodeURIComponent(`Your MJC order ${o.id} has shipped`)}&body=${encodeURIComponent(body)}`;
+    };
+  });
   $$("#invBody .ticket").forEach((el) => {
     const t = mjcTickets.find((x) => x.id === el.dataset.id);
     const b = $("[data-close]", el);
@@ -804,10 +835,23 @@ async function loadMjc() {
     if (r.ok) setTimeout(loadMjc, 600);
   };
   const sf = $("#invBody [data-store]");
+  // (an inline box, not window.prompt — prompt() silently does nothing inside the desktop app)
+  const unsub = $("#invBody [data-unsub]");
+  if (unsub) unsub.onclick = () => {
+    const body = openModal("Remove from the email list", `<form data-form class="form-grid"><label class="span2">Email address<input name="email" type="email" required placeholder="someone@example.com"></label><div class="span2 row"><button class="primary">Remove</button></div></form>`);
+    $("[data-form]", body).onsubmit = async (e) => {
+      e.preventDefault();
+      const email = new FormData(e.target).get("email").trim().toLowerCase();
+      const r = await fetch("/api/mjc/subscribers/" + encodeURIComponent(email), { method: "DELETE" });
+      modal.close();
+      toast(r.ok ? `${email} removed` : (await r.json()).error, { error: !r.ok });
+      if (r.ok) loadMjc();
+    };
+  };
   if (sf) sf.onsubmit = async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(sf));
-    f.checkoutEnabled = sf.elements.checkoutEnabled.checked;
+    for (const k of ["checkoutEnabled", "localPickup", "promoCodes", "stripeTax", "showDemo", "emailList"]) f[k] = sf.elements[k].checked;
     const r = await fetch("/api/mjc/store", json("PUT", f));
     const j = await r.json();
     $("[data-msg]", sf).innerHTML = r.ok ? `<span class="ok">Saved ✓ — Pip and checkout use this now</span>` : `<span class="bad">${esc(j.error)}</span>`;

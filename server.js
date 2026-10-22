@@ -862,6 +862,13 @@ app.put("/api/mjc/store", async (req, res) => {
     returns: store.clean.text(b.returns, 2000),
     policies: store.clean.text(b.policies, 8000),
     checkoutEnabled: Boolean(b.checkoutEnabled),
+    showDemo: b.showDemo === undefined ? true : Boolean(b.showDemo),
+    localPickup: Boolean(b.localPickup),
+    pickupNote: store.clean.str(b.pickupNote, 300),
+    promoCodes: Boolean(b.promoCodes),
+    stripeTax: Boolean(b.stripeTax),
+    emailList: b.emailList === undefined ? true : Boolean(b.emailList),
+    social: Object.fromEntries(["instagram", "facebook", "tiktok", "youtube", "ebay", "whatnot", "x"].map((k) => [k, store.clean.str(b[`social_${k}`], 300)]).filter(([, v]) => v)),
   };
   try {
     await mjc.saveStoreSettings(s);
@@ -901,6 +908,23 @@ app.patch("/api/mjc/orders/:id", async (req, res) => {
   }
 });
 
+app.get("/api/mjc/subscribers.csv", async (_req, res) => {
+  try {
+    const list = await mjc.subscribers();
+    sendCsv(res, "mjc-email-list", csv(list, [["Email", (s) => s.email], ["Name", (s) => s.name], ["Signed up", (s) => s.created], ["Where", (s) => s.source]]));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+app.delete("/api/mjc/subscribers/:email", async (req, res) => {
+  try {
+    await mjc.removeSubscriber(req.params.email);
+    log(req, `removed ${req.params.email} from the website's email list`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
 app.get("/api/mjc/tickets", (_req, res) => res.json(mjc.localTickets()));
 app.get("/api/mjc/tickets/:id/photos/:n", (req, res) => {
   const f = mjc.ticketPhotoPath(req.params.id, req.params.n);
@@ -954,6 +978,7 @@ async function pullMjc() {
       },
     });
     if (orders.length) mjc.scheduleSync();
+    mjc.refreshStatus().catch(() => {}); // Home's website numbers; a miss just keeps the last copy
     let tickets = 0;
     await mjc.pullTickets({
       onTicket: (t) => {
@@ -1204,6 +1229,9 @@ function weekSummary(inv) {
       orders: mjc.localOrders().filter((o) => (o.created || "") >= since).length,
       offers: tickets.filter((t) => t.kind === "offer").length,
       messages: tickets.filter((t) => t.kind !== "offer").length,
+      visits: mjc.state().lastStatus?.visits?.week?.sessions ?? null,
+      cardViews: mjc.state().lastStatus?.visits?.week?.card ?? null,
+      subscribers: mjc.state().lastStatus?.subscribers ?? null,
     } : null,
   };
 }

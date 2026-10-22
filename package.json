@@ -1,7 +1,7 @@
 {
   "name": "card-research-bot",
   "productName": "Card Research Bot",
-  "version": "3.6.1",
+  "version": "3.7.0",
   "description": "AI trading card research bot: drop a card photo, get recent sold prices, grading math, and the hottest cards by day/week/month.",
   "author": "Joseph DeMasse",
   "private": true,

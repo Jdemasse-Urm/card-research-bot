@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.7.0 — the website's new controls, in the app
+- **Setup switches for the website**: local pickup (with a note), promo codes, Stripe Tax, show/hide the demo
+  parts of the site, the email list on/off, and your Instagram / eBay / Facebook / Whatnot / TikTok / YouTube
+  links. Changes reach the site within a minute — no programmer needed.
+- **Email list**: how many shoppers signed up for new-arrival and price-drop emails, a CSV download for your
+  email program, and "Remove an address" when someone asks to stop.
+- **Website numbers**: visits and card views this week, Pip chats, and the store software's version — on Home
+  ("This week") and in MJC store.
+- **Orders**: local-pickup orders are flagged, the customer's note and phone number show, promo discounts and
+  tax are listed, and **✉ Email tracking** drafts the shipping email with the tracking number and track link.
+- **Daily update email**: `scripts/daily-update-email.mjs` emails a plain-English summary of the day's work on
+  the app and the website (runs at 5 pm from Joseph's computer; skips quiet days).
+- Fix: "🎯 Want" in Quick price used a browser prompt that silently does nothing in the desktop app — it's a
+  small dialog now.
+
 ## 3.6.1
 - Fix: after updating from an older version, Home said "No backup in a while" even though the daily backups were
   there (the new backup status only started recording on the next backup). It now reads the newest backup file.

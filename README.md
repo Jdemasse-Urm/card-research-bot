@@ -33,6 +33,10 @@ Covers baseball, basketball, football, Yu-Gi-Oh and One Piece — plus Pokémon,
 
 ## The MJC website connection
 
+**The site:** https://main.d2p7srpg832hvo.amplifyapp.com (the demo build on AWS Amplify; the live store deploys to
+the MJC AWS account — see the `mcj` repo). **Every feature of both apps:** [FEATURES.md](FEATURES.md) here and
+[mcj/FEATURES.md](https://github.com/UR-MORTGAGE/mcj/blob/main/FEATURES.md).
+
 Cards you mark **Sell on MJC** appear on the MJC store website with their photos. A daily pricing engine sets
 their prices from real sold comps and learns from your sales — and health-checks itself every day: the learned
 model only steers prices when it predicts unseen listing-days better than the built-in assumptions, a day the

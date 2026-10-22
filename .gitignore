@@ -4,3 +4,6 @@ data/
 *.tmp
 .DS_Store
 dist/
+
+# written by scripts/daily-update-email.mjs on this computer
+scripts/daily-update-email.log

@@ -156,6 +156,7 @@
             <button data-v="expenses" aria-pressed="false">🧾 Expenses</button>
             <button data-v="want" aria-pressed="false">🎯 Want list</button>
             <button data-v="mjc" aria-pressed="false">🛒 MJC store</button>
+            <button data-v="show" aria-pressed="false">🏪 Show mode</button>
           </div>
           <div class="row" style="margin:0" id="invActions"></div>
         </div>
@@ -274,6 +275,11 @@
         <h3>Desktop app</h3>
         <label class="check"><input type="checkbox" id="trayToggle" /> Keep running in the background when the window is closed (tray icon) — daily price checks and alerts keep working</label>
         <label class="check"><input type="checkbox" id="loginToggle" /> Start automatically when I log in</label>
+        <p class="small" style="margin:.5rem 0 .2rem"><b>Pop-up notifications</b> (even when the window is closed):</p>
+        <label class="check"><input type="checkbox" data-notify="orders" /> Website orders</label>
+        <label class="check"><input type="checkbox" data-notify="messages" /> Offers, sell-to-us requests and messages from the website</label>
+        <label class="check"><input type="checkbox" data-notify="prices" /> Watchlist price targets</label>
+        <label class="check"><input type="checkbox" data-notify="pricing" /> Pricing engine problems</label>
       </section>
 
       <section class="set-block">
@@ -292,9 +298,16 @@
         <div id="healthBox" class="small muted">Checking…</div>
       </section>
 
-      <section class="set-block">
+      <section class="set-block" id="backupBlock">
         <h3>Backup &amp; help</h3>
         <p class="small muted" style="margin:.2rem 0">The bot also saves an automatic backup every day (last 14 kept) in <code>data/backups</code>.</p>
+        <div id="backupStatus" class="small" role="status"></div>
+        <div class="row" style="margin-top:.3rem">
+          <label class="small" for="mirrorSelect">Also keep a copy in</label>
+          <select id="mirrorSelect" aria-label="Cloud folder for backup copies"></select>
+          <button id="mirrorSave">Save</button>
+          <button id="backupNow" class="ghost">💾 Back up now</button>
+        </div>
         <p class="small" id="dataFolderBox" style="margin:.2rem 0"></p>
         <div class="row" style="margin-top:.3rem">
           <a class="button" href="/api/backup">⬇ Download backup</a>

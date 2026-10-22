@@ -1,5 +1,44 @@
 # Changelog
 
+## 3.6.0 — the third 10-10: run the business from it
+
+**Major**
+- **One-click updates** (desktop app): "Update now" downloads the new installer from GitHub, checks it against
+  GitHub's SHA-256 checksum, and installs it — Windows closes and reopens on the new version; on a Mac the
+  installer window opens for the usual drag to Applications. No browser, no hunting for the right file.
+- **Pop-up notifications** for website orders, offers, sell-to-us requests and messages, watchlist price targets
+  and pricing problems — with the alert's own words, even when the window is closed to the tray. Clicking one
+  opens the screen that deals with it. Choose which kinds in Settings → Desktop app.
+- **Show mode** (Inventory → 🏪 Show mode): a register for card shows. Scan a label (or type a name / SKU),
+  set prices, tap how they paid (Cash, Card, Venmo, PayPal…), Complete sale. Today's total by payment type,
+  Undo the last sale, and "Copy today's summary" for a text or email.
+- **Sell part of a stack**: the Sold dialog asks how many — the rest stay in stock with their own row. Show mode
+  and website orders use the same path, so a stack is never marked sold by accident.
+- **Backups to your cloud folder**: pick OneDrive, iCloud Drive, Dropbox or Google Drive in Settings and every
+  daily backup is copied there too (last 30 kept). Settings shows when the last backup and copy ran; Home warns
+  when backups stop or the copy fails. "Back up now" any time.
+- **Value history per card**: every daily re-value is recorded. Stock shows a small trend line per card, and Home
+  shows **your cards' biggest moves** this week (up and down, in dollars).
+- **Read a receipt** (Expenses → 📷): take a photo of a receipt and the AI fills in the date, total, category and
+  what was bought, for you to check and save.
+- **This week** on Home: cards sold, sales, profit after fees, best flip, cards added, expenses, and website
+  orders / offers / messages.
+- **Barcode labels**: printed labels carry a scannable barcode of the SKU. Any USB or Bluetooth barcode scanner
+  works — scan into Show mode to sell, or into the Stock search to open that card.
+- **Big inventories stay fast**: Stock draws 150 rows at a time with "Show more" / "Show all".
+
+**Niche**
+- Sold dialog: how they paid, and the profit after fees updates as you type (same fee table as Sales & profit).
+- Show mode: a card with several copies lets you pick the quantity; a card sold elsewhere a moment ago is skipped.
+- Update banner: "What's new" for the new version before you install it.
+- Mac: the Dock icon shows how many alerts are waiting. Windows: the taskbar button flashes on a new order.
+- Tray menu: Show mode, Website orders & messages, Check for updates; the tray tooltip counts new alerts.
+- Labels: choose a letter sheet (3 across) or a 2.25" × 1.25" thermal roll label (Dymo / Rollo / Zebra).
+- Receipts: the same receipt photographed twice is flagged before it's logged again.
+- Home alerts read correctly for website orders, messages and pricing notices (they showed "→ $—").
+- A scanned SKU in the Stock search opens that card.
+- The "payment" of every sale is kept and included in backups.
+
 ## 3.5.0 — the MJC store's new services, in your inbox
 
 - **Offers**: shoppers can make an offer on any website card. It arrives in Inventory → MJC store →

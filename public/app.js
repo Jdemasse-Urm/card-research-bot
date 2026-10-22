@@ -160,7 +160,7 @@ async function refreshStatus() {
   const n = status.unseenAlerts || 0;
   $("#alertBadge").textContent = n;
   $("#alertBadge").classList.toggle("hidden", !n);
-  if (n > lastAlertCount && "Notification" in window && Notification.permission === "granted") {
+  if (n > lastAlertCount && !window.desktop && "Notification" in window && Notification.permission === "granted") {
     new Notification("Card Research Bot", { body: `${n} new alert${n > 1 ? "s" : ""} on your watchlist` });
   }
   lastAlertCount = n;
@@ -209,8 +209,40 @@ async function openSettings() {
     $("#loginToggle").checked = Boolean(prefs.openAtLogin);
     $("#trayToggle").onchange = () => window.desktop.setPrefs({ closeToTray: $("#trayToggle").checked });
     $("#loginToggle").onchange = () => window.desktop.setPrefs({ openAtLogin: $("#loginToggle").checked });
+    $$("#settings [data-notify]").forEach((c) => {
+      c.checked = prefs.notify?.[c.dataset.notify] !== false;
+      c.onchange = () => window.desktop.setPrefs({ notify: { [c.dataset.notify]: c.checked } });
+    });
+  }
+  loadBackupStatus();
+}
+
+// Backups: when the last one ran, and an optional copy in a cloud folder (OneDrive, iCloud Drive, Dropbox…).
+async function loadBackupStatus() {
+  try {
+    const b = await getJSON("/api/backup/status");
+    const st = b.state || {};
+    $("#backupStatus").innerHTML = `Last backup: <b>${st.lastLocal ? esc(when(st.lastLocal)) : "not yet"}</b>${b.mirror ? ` · copy in <code>${esc(b.mirror)}</code>${st.mirrorError ? ` <span class="bad">— failed: ${esc(st.mirrorError)}</span>` : st.lastMirror ? ` <span class="ok">✓ ${esc(when(st.lastMirror))}</span>` : ""}` : ` · <span class="warn">only on this computer</span>`}`;
+    const options = [["", "— nowhere else (this computer only) —"], ...b.folders.map((f) => [f.dir, `${f.label} — ${f.dir}`])];
+    if (b.mirror && !options.some(([d]) => d === b.mirror)) options.push([b.mirror, b.mirror]);
+    $("#mirrorSelect").innerHTML = options.map(([d, l]) => `<option value="${esc(d)}"${d === (b.mirror || "") ? " selected" : ""}>${esc(l)}</option>`).join("");
+    if (!b.folders.length && !b.mirror) $("#backupStatus").insertAdjacentHTML("beforeend", `<div class="muted">No OneDrive, iCloud Drive, Dropbox or Google Drive folder found on this computer.</div>`);
+    $("#mirrorSave").disabled = $("#mirrorSelect").disabled = !b.canEditSettings;
+  } catch (err) {
+    $("#backupStatus").innerHTML = `<span class="bad">${esc(err.message)}</span>`;
   }
 }
+$("#mirrorSave").onclick = async () => {
+  const r = await fetch("/api/backup/mirror", json("POST", { dir: $("#mirrorSelect").value || null }));
+  const j = await r.json();
+  toast(r.ok ? (j.mirror ? "Backups will be copied there every day — the first copy is done" : "Cloud copies turned off") : j.error, { error: !r.ok });
+  loadBackupStatus();
+};
+$("#backupNow").onclick = async () => {
+  const r = await fetch("/api/backup/now", { method: "POST" });
+  toast(r.ok ? "Backed up ✓" : (await r.json()).error, { error: !r.ok });
+  loadBackupStatus();
+};
 async function loadHealth() {
   $("#healthBox").textContent = "Checking…";
   try {
@@ -1288,6 +1320,22 @@ function openSearch() {
   };
 }
 
+// Desktop app: download the installer from the release (checked against GitHub's checksum) and run it.
+// Windows installs and reopens by itself; on a Mac the installer window opens for the usual drag to Applications.
+async function installUpdate(asset) {
+  const btn = $("#updateNow"), out = $("#updateProgress");
+  if (btn) btn.disabled = true;
+  window.desktop.onUpdateProgress?.((m) => {
+    if (!out) return;
+    out.textContent = m.stage === "install" ? (window.desktop.platform === "win32" ? "Installing — the app will close and reopen…" : "Opening the installer…") : `Downloading… ${m.pct != null ? m.pct + "%" : Math.round(m.got / 1e6) + " MB"}`;
+  });
+  const r = await window.desktop.installUpdate(asset);
+  if (!r.ok) {
+    if (out) out.innerHTML = `<span class="bad">${esc(r.error)}</span> <a href="${esc(asset.url)}" target="_blank" rel="noopener">Download it yourself</a>`;
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function checkUpdates(force = false, show = false) {
   try {
     const u = await getJSON("/api/update-check" + (force ? "?force=1" : ""));
@@ -1295,10 +1343,13 @@ async function checkUpdates(force = false, show = false) {
     const want = /win/.test(plat) ? /\.exe$/i : /mac|darwin/.test(plat) ? /\.dmg$/i : null;
     const asset = want ? (u.assets || []).find((a) => want.test(a.name)) : null;
     const banner = $("#updateBanner");
-    if (u.available && store.get("dismissedUpdate") !== u.latest) {
-      banner.innerHTML = `⬆ Version <b>${esc(u.latest)}</b> is available (you have ${esc(u.current)}). ${asset ? `<a class="button" href="${esc(asset.url)}" target="_blank" rel="noopener">Download ${esc(asset.name)}</a>` : `<a class="button" href="${esc(u.url)}" target="_blank" rel="noopener">Open download page</a>`} <button class="ghost" id="dismissUpdate">Later</button>`;
+    const oneClick = asset && window.desktop?.installUpdate;
+    if (u.available && (show || store.get("dismissedUpdate") !== u.latest)) {
+      banner.innerHTML = `⬆ Version <b>${esc(u.latest)}</b> is available (you have ${esc(u.current)}). ${oneClick ? `<button class="primary" id="updateNow">Update now</button>` : asset ? `<a class="button" href="${esc(asset.url)}" target="_blank" rel="noopener">Download ${esc(asset.name)}</a>` : `<a class="button" href="${esc(u.url)}" target="_blank" rel="noopener">Open download page</a>`} <button class="ghost" id="dismissUpdate">Later</button>
+        <span id="updateProgress" class="small"></span>${u.whatsNew ? `<details class="whats-new"><summary>What's new</summary>${md(u.whatsNew.replace(/^## .*\n/, ""))}</details>` : ""}`;
       banner.classList.remove("hidden");
       $("#dismissUpdate").onclick = () => { store.set("dismissedUpdate", u.latest); banner.classList.add("hidden"); };
+      if (oneClick) $("#updateNow").onclick = () => installUpdate(asset);
     } else banner.classList.add("hidden");
     if (show && $("#updateBox")) {
       $("#updateBox").innerHTML = u.error ? `<span class="bad">Couldn't check: ${esc(u.error)}</span>`
@@ -1353,6 +1404,21 @@ $("#advisorBtn").onclick = async () => {
 };
 $("#advisorCancel").onclick = () => advisorCtrl?.abort();
 TAB_LOADERS.ask = loadAdvice;
+
+// ---- the desktop shell (tray menu, notification clicks) can ask for a screen ----
+window.desktop?.onGoto?.((where) => {
+  const inv = { show: "show", mjc: "mjc", "mjc-messages": "mjc", "mjc-pricing": "mjc" }[where];
+  if (inv) {
+    if (where === "mjc-messages") mjcTab = "messages";
+    else if (where === "mjc-pricing") mjcTab = "pricing";
+    else if (where === "mjc") mjcTab = "orders";
+    invView = inv;
+    goTab("inventory");
+  } else if (where === "updates") {
+    openSettings();
+    checkUpdates(true, true);
+  } else if (["watch", "hot", "home"].includes(where)) goTab(where);
+});
 
 // ---- unexpected errors become a toast instead of silence ----
 window.addEventListener("unhandledrejection", (e) => toast(String(e.reason?.message || e.reason || "Something went wrong"), { error: true }));

@@ -112,6 +112,16 @@ Turn on **Settings → Share on home network** (or use a phone hotspot that the 
 shows on the phone, enter the PIN, then use **Share → Add to Home Screen** (iPhone Safari) or **Install app**
 (Android Chrome). The **📷 Take photo** button opens the camera.
 
+## Card shows: Show mode, labels and a barcode scanner
+
+**Inventory → 🏪 Show mode** is a register: scan or type a card, set its price, tap how they paid, **Complete sale**.
+Each card is marked sold on "Card show" with the payment; part of a stack stays in stock. **Undo** puts the last
+sale back. **Copy today's summary** gives you the day's total by payment type.
+
+**🏷 Print labels** puts a barcode of each card's SKU on the label (letter sheet or 2.25" × 1.25" thermal roll). Any
+USB or Bluetooth barcode scanner works with it — it "types" the SKU, so scanning into Show mode adds the card to
+the sale, and scanning into the Stock search opens the card.
+
 ## Keyboard shortcuts
 
 `/` search · `Ctrl/⌘ + Enter` research · `Esc` cancel · `1`–`8` tabs · `?` list them.
@@ -132,6 +142,13 @@ See `.env.example`: port, model (e.g. `gemini-3.5-flash-lite` for faster/cheaper
 morning brief. Most of these are also in **Settings**.
 
 ## Your data
+
+**Backups:** one automatic backup a day (last 14) in `data/backups`. In **Settings → Backup** you can pick your
+OneDrive, iCloud Drive, Dropbox or Google Drive folder and every backup is copied there too, so a broken or stolen
+computer doesn't take your records. Restore with **Settings → Restore from backup**.
+
+**Updates (desktop app):** when a new version is out, a banner offers **Update now** — it downloads the installer
+from this project's GitHub releases, checks it against GitHub's checksum, and installs it.
 
 Everything stays on your computer in your data folder (**Settings → Open data folder**): `data/` holds your
 inventory, lookups, watchlist and backups, `.env` holds your keys. Your inventory and keys never leave your computer;

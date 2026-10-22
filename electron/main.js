@@ -2,7 +2,9 @@
 // Starts the app's own server inside this process and shows it in a native window.
 // No business logic lives here: everything is server.js + public/, exactly as when run from source.
 
-import { app, BrowserWindow, Menu, Tray, dialog, shell, ipcMain, nativeImage } from "electron";
+import { app, BrowserWindow, Menu, Tray, dialog, shell, ipcMain, nativeImage, Notification } from "electron";
+import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +26,8 @@ process.env.NO_BROWSER = "1";
 
 // ---- small preferences file (window bounds, close-to-tray, open at login) ----
 const PREFS_PATH = path.join(process.env.CARD_BOT_HOME, "desktop-prefs.json");
-let prefs = { closeToTray: true, openAtLogin: false, bounds: null, zoom: 0 };
+// notify: which alerts pop up as desktop notifications (orders + offers/messages from the website, price alerts, pricing notices)
+let prefs = { closeToTray: true, openAtLogin: false, bounds: null, zoom: 0, notify: { orders: true, messages: true, prices: true, pricing: true } };
 try {
   prefs = { ...prefs, ...JSON.parse(fs.readFileSync(PREFS_PATH, "utf8")) };
 } catch {}
@@ -120,6 +123,10 @@ function createTray() {
   tray.setToolTip("Card Research Bot");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Open Card Research Bot", click: showWindow },
+    { label: "Show mode (sell at a card show)", click: () => goto("show") },
+    { label: "Website orders & messages", click: () => goto("mjc") },
+    { type: "separator" },
+    { label: "Check for updates", click: () => goto("updates") },
     { type: "separator" },
     { label: "Quit", click: () => { quitting = true; app.quit(); } },
   ]));
@@ -152,7 +159,8 @@ function buildMenu() {
 }
 
 // ---- bridge calls from the page (see preload.cjs) ----
-ipcMain.handle("prefs:get", () => ({ closeToTray: prefs.closeToTray, openAtLogin: prefs.openAtLogin }));
+const publicPrefs = () => ({ closeToTray: prefs.closeToTray, openAtLogin: prefs.openAtLogin, notify: { ...prefs.notify } });
+ipcMain.handle("prefs:get", publicPrefs);
 ipcMain.handle("prefs:set", (_e, patch) => {
   if (patch && typeof patch === "object") {
     if ("closeToTray" in patch) prefs.closeToTray = Boolean(patch.closeToTray);
@@ -160,10 +168,94 @@ ipcMain.handle("prefs:set", (_e, patch) => {
       prefs.openAtLogin = Boolean(patch.openAtLogin);
       if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: prefs.openAtLogin, openAsHidden: true });
     }
+    if (patch.notify && typeof patch.notify === "object") for (const k of Object.keys(prefs.notify)) if (k in patch.notify) prefs.notify[k] = Boolean(patch.notify[k]);
     savePrefs();
   }
-  return { closeToTray: prefs.closeToTray, openAtLogin: prefs.openAtLogin };
+  return publicPrefs();
 });
+
+// ---- one-click update: download the new installer from this app's GitHub release, check it, run it ----
+// Only files from this project's own releases are accepted, and when GitHub publishes a SHA-256 for the file
+// the download must match it byte for byte before anything is run.
+const RELEASES = "https://github.com/Jdemasse-Urm/card-research-bot/releases/download/";
+ipcMain.handle("update:install", async (e, { url, name, size, sha256 } = {}) => {
+  const send = (msg) => e.sender.isDestroyed() || e.sender.send("update:progress", msg);
+  if (typeof url !== "string" || !url.startsWith(RELEASES) || !/^[\w.-]+\.(exe|dmg)$/i.test(String(name))) return { ok: false, error: "That isn't a Card Research Bot release file." };
+  if ((process.platform === "win32") !== /\.exe$/i.test(name)) return { ok: false, error: "That installer is for the other kind of computer." };
+  try {
+    const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15 * 60000) });
+    if (!r.ok || !r.body) throw new Error(`GitHub answered ${r.status}`);
+    const total = Number(r.headers.get("content-length")) || size || 0;
+    const file = path.join(app.getPath(process.platform === "win32" ? "temp" : "downloads"), name);
+    const out = fs.createWriteStream(file);
+    const hash = crypto.createHash("sha256");
+    let got = 0, lastPct = -1;
+    for await (const chunk of r.body) {
+      hash.update(chunk);
+      got += chunk.length;
+      if (!out.write(chunk)) await new Promise((res) => out.once("drain", res));
+      const pct = total ? Math.floor((got / total) * 100) : null;
+      if (pct !== lastPct) { lastPct = pct; send({ stage: "download", pct, got, total }); }
+    }
+    await new Promise((res, rej) => out.end((err) => (err ? rej(err) : res())));
+    if (size && got !== size) throw new Error("The download was incomplete — try again.");
+    const digest = hash.digest("hex");
+    if (sha256 && digest !== sha256) {
+      fs.rmSync(file, { force: true });
+      throw new Error("The download didn't match GitHub's checksum, so it was deleted. Try again later.");
+    }
+    send({ stage: "install" });
+    if (process.platform === "win32") {
+      // The installer replaces this app and starts the new version when it's done.
+      spawn(file, [], { detached: true, stdio: "ignore" }).unref();
+      setTimeout(() => { quitting = "confirmed"; app.quit(); }, 600);
+      return { ok: true, file, verified: Boolean(sha256) };
+    }
+    await shell.openPath(file); // Mac: Finder shows the installer window
+    dialog.showMessageBox({ type: "info", title: "Finish the update", message: "Drag Card Research Bot into Applications and choose Replace.", detail: "Then quit this window and open Card Research Bot again from Applications. Your data and settings stay as they are." });
+    return { ok: true, file, verified: Boolean(sha256) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// ---- open the app on a given screen (tray menu, notification clicks) ----
+function goto(where) {
+  showWindow();
+  const send = () => win?.webContents.send("goto", where);
+  if (win?.webContents.isLoading()) win.webContents.once("did-finish-load", send);
+  else send();
+}
+
+// ---- desktop notifications for new alerts: website orders, offers and messages, price targets ----
+// The server keeps the alerts; this polls the unseen count (already polled every 5 s for "busy") and pops
+// up each new one with its own words. Clicking it opens the screen that deals with it.
+const notified = new Set();
+let alertsPrimed = false;
+const KIND_PREF = { order: "orders", ticket: "messages", above: "prices", below: "prices", pricing: "pricing" };
+const KIND_SCREEN = { order: "mjc", ticket: "mjc-messages", pricing: "mjc-pricing", above: "watch", below: "watch", brief: "hot" };
+async function notifyNewAlerts(unseen) {
+  if (isMac || process.platform === "linux") app.setBadgeCount(unseen); // Dock badge = alerts waiting
+  if (tray) tray.setToolTip(unseen ? `Card Research Bot — ${unseen} new alert${unseen === 1 ? "" : "s"}` : "Card Research Bot");
+  let alerts;
+  try {
+    alerts = await (await fetch(origin + "/api/alerts")).json();
+  } catch {
+    return;
+  }
+  const fresh = alerts.filter((a) => !a.seen && !notified.has(a.id));
+  for (const a of fresh) notified.add(a.id);
+  if (!alertsPrimed) { alertsPrimed = true; return; } // alerts from before this launch don't pop up again
+  if (!Notification.isSupported()) return;
+  for (const a of fresh.slice(0, 4)) {
+    if (prefs.notify[KIND_PREF[a.kind]] === false) continue;
+    const body = a.text || (a.value != null ? `Now $${a.value} (your target $${a.target})` : "");
+    const n = new Notification({ title: a.name || "Card Research Bot", body: String(body).slice(0, 200), icon: ICON, silent: a.kind !== "order" });
+    n.on("click", () => goto(KIND_SCREEN[a.kind] || "watch"));
+    n.show();
+    if (a.kind === "order" && win && !win.isFocused()) win.flashFrame(true); // Windows: taskbar button flashes
+  }
+}
 ipcMain.handle("save-pdf", async (e, title) => {
   const wc = e.sender;
   const safe = String(title).replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 80) || "report";
@@ -226,12 +318,20 @@ app.on("before-quit", (e) => {
   quitting = "confirmed";
 });
 
-// The server reports jobs in flight; poll it cheaply so quitting can warn.
+// The server reports jobs in flight (so quitting can warn) and unseen alerts (desktop notifications); poll it cheaply.
 let busyCount = 0;
+let lastUnseen = -1;
 setInterval(async () => {
-  if (!origin) return;
+  if (!origin || SMOKE_TEST) return;
   try {
-    busyCount = (await (await fetch(origin + "/api/status")).json()).busy || 0;
+    const st = await (await fetch(origin + "/api/status")).json();
+    busyCount = st.busy || 0;
+    if (st.unseenAlerts !== lastUnseen) {
+      const grew = st.unseenAlerts > lastUnseen;
+      lastUnseen = st.unseenAlerts;
+      if (grew || !alertsPrimed) await notifyNewAlerts(st.unseenAlerts);
+      else notifyNewAlerts(st.unseenAlerts).catch(() => {}); // fewer = alerts were read: update the badge
+    }
   } catch {}
 }, 5000);
 

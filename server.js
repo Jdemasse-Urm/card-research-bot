@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 import { exec, execFile } from "node:child_process";
 
 import { hasKey, resetClient, explainError, MODEL, FALLBACK_MODEL, monthlyBudget, FREE_GROUNDED_PER_MONTH, aiQueue } from "./lib/ai.js";
-import { cardLookup, hotCards, ask, lotLookup, writeListing, slabCheck, adviseInventory, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
+import { cardLookup, hotCards, ask, lotLookup, writeListing, slabCheck, adviseInventory, readReceipt, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
 import { runSelfTest } from "./lib/selftest.js";
 import * as store from "./lib/store.js";
 import * as pricecharting from "./lib/sources/pricecharting.js";
@@ -246,6 +246,8 @@ app.get("/api/status", (req, res) => {
     ebay: ebay.hasKeys(),
     busy: busyJobs,
     desktop: DESKTOP,
+    fees: FEE_PCT,
+    payments: store.PAYMENTS,
   });
 });
 
@@ -681,6 +683,58 @@ app.patch("/api/inventory/:id", (req, res) => {
   res.json(row);
 });
 
+// Sell some or all of a row (the Sold dialog). Selling part of a stack keeps the rest in stock.
+app.post("/api/inventory/:id/sell", (req, res) => {
+  const b = req.body || {};
+  const r = store.sellUnits(req.params.id, { qty: b.qty, soldPrice: b.soldPrice, soldOn: b.soldOn, soldDate: b.soldDate, fees: b.fees, payment: b.payment });
+  if (!r) return res.status(404).json({ error: "That card isn't in stock anymore." });
+  log(req, `sold ${r.soldRow.qty}× ${r.soldRow.name} for $${r.soldRow.soldPrice ?? "?"} each${r.soldRow.soldOn ? " on " + r.soldRow.soldOn : ""}${r.split ? ` (${r.row.qty} left)` : ""}`);
+  if (r.row.web) mjc.scheduleSync();
+  res.json(r);
+});
+
+// ---- show mode: a quick register for card shows (sell several cards in one go, undo the last one)
+app.get("/api/show", (_req, res) => {
+  const day = new Date().toISOString().slice(0, 10);
+  const sales = store.showSales();
+  const today = sales.filter((s) => s.at.slice(0, 10) === day);
+  const byPayment = {};
+  for (const s of today) byPayment[s.payment] = Math.round(((byPayment[s.payment] || 0) + s.total) * 100) / 100;
+  res.json({ today, recent: sales.slice(0, 30), totals: { sales: today.length, cards: today.reduce((n, s) => n + s.items.reduce((m, i) => m + i.qty, 0), 0), total: Math.round(today.reduce((n, s) => n + s.total, 0) * 100) / 100, byPayment } });
+});
+app.post("/api/show/sale", (req, res) => {
+  const b = req.body || {};
+  const payment = store.clean.oneOf(b.payment, store.PAYMENTS, "Cash");
+  const lines = (Array.isArray(b.items) ? b.items : []).slice(0, 100);
+  if (!lines.length) return res.status(400).json({ error: "Add a card to the sale first." });
+  const items = [];
+  let web = false;
+  for (const l of lines) {
+    const price = store.clean.money(l.price);
+    if (price == null) return res.status(400).json({ error: "Every card needs a price." });
+    const r = store.sellUnits(l.id, { qty: l.qty, soldPrice: price, soldOn: "Card show", soldDate: store.clean.date(b.date), payment, fees: 0 });
+    if (!r) continue; // sold elsewhere a moment ago
+    web ||= Boolean(r.row.web);
+    items.push({ name: r.soldRow.name, grade: r.soldRow.grade, sku: r.soldRow.sku, qty: r.soldRow.qty, price, rowId: r.row.id, soldRowId: r.soldRow.id, split: r.split, prev: r.prev });
+  }
+  if (!items.length) return res.status(409).json({ error: "Those cards were already sold." });
+  const total = Math.round(items.reduce((n, i) => n + i.price * i.qty, 0) * 100) / 100;
+  const sale = store.addShowSale({ by: who(req), payment, total, items });
+  log(req, `sold ${items.reduce((n, i) => n + i.qty, 0)} card${items.length === 1 && items[0].qty === 1 ? "" : "s"} at a show for $${total} (${payment})`);
+  if (web) mjc.scheduleSync();
+  res.json({ sale, skipped: lines.length - items.length });
+});
+app.post("/api/show/sale/:id/undo", (req, res) => {
+  const sale = store.showSales().find((s) => s.id === req.params.id);
+  if (!sale) return res.status(404).json({ error: "That sale isn't on record." });
+  let back = 0;
+  for (const i of sale.items) if (store.unsellUnits(i)) back++;
+  store.removeShowSale(sale.id);
+  log(req, `undid a $${sale.total} show sale (${back} card${back === 1 ? "" : "s"} back in stock)`);
+  mjc.scheduleSync();
+  res.json({ ok: true, back });
+});
+
 app.delete("/api/inventory/:id", (req, res) => {
   const wasWeb = store.inventory().find((r) => r.id === req.params.id)?.web;
   const trashId = store.deleteInventory(req.params.id);
@@ -916,19 +970,17 @@ async function pullMjc() {
 setInterval(() => pullMjc().catch((err) => console.warn("MJC pull failed:", err.message)), 5 * 60 * 1000);
 
 async function revalueInventory() {
-  let updated = 0;
+  const updates = [];
   for (const row of store.inventory()) {
     if (!row.priceUrl || row.status === "sold") continue;
     try {
       const value = pricecharting.valueAtGrade(await pricecharting.card(row.priceUrl), row.grade);
-      if (value != null) {
-        store.updateInventory(row.id, { value, valuedAt: new Date().toISOString() });
-        updated++;
-      }
+      if (value != null) updates.push({ id: row.id, value });
     } catch {
       /* keep the old value */
     }
   }
+  const updated = store.recordValues(updates); // value + its daily history, one write
   store.snapshotPortfolio();
   return updated;
 }
@@ -1033,6 +1085,17 @@ app.post("/api/expenses", (req, res) => {
   res.json(e);
 });
 app.delete("/api/expenses/:id", (req, res) => okDelete(res, store.deleteExpense(req.params.id)));
+// A receipt photo → the expense's fields, for the owner to check and save. Same photo twice is flagged.
+app.post("/api/expenses/receipt", (req, res) => {
+  const images = cleanImages(req.body?.images, 2);
+  if (!images.length) return res.status(400).json({ error: "Add a photo of the receipt." });
+  const hash = crypto.createHash("sha256").update(images.map((i) => i.data).join("|")).digest("hex").slice(0, 32);
+  const duplicate = store.expenses().find((e) => e.receiptHash === hash) || null;
+  streamJob(req, res, async (send, signal) => {
+    const receipt = await readReceipt({ images }, { onEvent: send, signal });
+    return { receipt, hash, duplicate };
+  });
+});
 
 // Approximate seller fees when a sale didn't record its own (same table as the profit calculator).
 const FEE_PCT = { eBay: [13.25, 0.4], TCGplayer: [13.25, 0.3], Whatnot: [10.9, 0.3], Facebook: [0, 0], "MJC site": [2.9, 0.3], "Card show": [0, 0], "Local / cash": [0, 0], Other: [0, 0] };
@@ -1116,8 +1179,34 @@ app.get("/api/dashboard", (_req, res) => {
     hot: brief ? { at: brief.at, category: brief.category, period: brief.period, cards: (brief.cards || []).slice(0, 5), market_summary: brief.market_summary } : null,
     recent: store.load("lookups", []).slice(0, 5).map((r) => ({ id: r.id, name: r.card?.name, value: r.pricing?.estimated_value_usd, at: r.at, thumb: r.thumb })),
     activity: store.activity(12),
+    week: weekSummary(inv),
+    stockMovers: store.stockMovers(7, 4),
+    backup: { ...store.backupState(), mirror: process.env.CARD_BOT_BACKUP_DIR || null },
   });
 });
+
+/** The last 7 days of the business, in numbers: sales, profit, best flip, new stock, the website. */
+function weekSummary(inv) {
+  const since = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const sold = inv.filter((r) => r.status === "sold" && r.soldPrice != null && (r.soldDate || "") >= since);
+  const profitOf = (r) => (r.soldPrice - (r.cost || 0)) * r.qty - feeFor(r);
+  const best = [...sold].sort((a, b) => profitOf(b) - profitOf(a))[0] || null;
+  const tickets = mjc.localTickets().filter((t) => (t.created || "") >= since);
+  return {
+    sales: sold.reduce((n, r) => n + r.qty, 0),
+    revenue: Math.round(sold.reduce((n, r) => n + r.soldPrice * r.qty, 0) * 100) / 100,
+    profit: Math.round(sold.reduce((n, r) => n + profitOf(r), 0) * 100) / 100,
+    best: best ? { name: best.name, grade: best.grade, profit: Math.round(profitOf(best) * 100) / 100, soldOn: best.soldOn } : null,
+    // cards bought/added this week, counting units already sold off a stack (they carry their stack's date)
+    added: inv.filter((r) => ((r.splitFrom && inv.find((x) => x.id === r.splitFrom)?.added) || r.added || "") >= since).reduce((n, r) => n + r.qty, 0),
+    expenses: Math.round(store.expenses().filter((e) => e.date >= since).reduce((n, e) => n + e.amount, 0) * 100) / 100,
+    website: mjc.configured() ? {
+      orders: mjc.localOrders().filter((o) => (o.created || "") >= since).length,
+      offers: tickets.filter((t) => t.kind === "offer").length,
+      messages: tickets.filter((t) => t.kind !== "offer").length,
+    } : null,
+  };
+}
 
 app.get("/api/activity", (_req, res) => res.json(store.activity(100)));
 
@@ -1156,6 +1245,34 @@ app.get("/api/export/sales.csv", (_req, res) => {
     ["Sold date", (r) => r.soldDate], ["Card", (r) => r.name], ["Grade", (r) => r.grade], ["Qty", (r) => r.qty], ["Sold on", (r) => r.soldOn], ["Sold price each", (r) => r.soldPrice],
     ["Cost each", (r) => r.cost], ["Fees", (r) => feeFor(r)], ["Profit", (r) => ((r.soldPrice - r.cost) * r.qty - feeFor(r)).toFixed(2)], ["Purchased", (r) => r.purchased], ["SKU", (r) => r.sku],
   ]));
+});
+
+app.get("/api/backup/status", (req, res) => {
+  res.json({ state: store.backupState(), mirror: process.env.CARD_BOT_BACKUP_DIR || null, folders: store.cloudFolders(), canEditSettings: isLoopback(req.socket.remoteAddress) });
+});
+app.post("/api/backup/now", (req, res) => {
+  try {
+    store.dailyBackup({ force: true });
+    log(req, "backed up the data");
+    res.json({ ok: true, state: store.backupState() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post("/api/backup/mirror", (req, res) => {
+  if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
+  const dir = req.body?.dir ? String(req.body.dir) : null;
+  if (dir && !(path.isAbsolute(dir) && fs.existsSync(dir) && fs.statSync(dir).isDirectory())) return res.status(400).json({ error: "That folder doesn't exist on this computer." });
+  setEnv({ CARD_BOT_BACKUP_DIR: dir });
+  if (dir) {
+    try {
+      store.dailyBackup({ force: true }); // first copy right away, so the owner sees it worked
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+  log(req, dir ? `turned on backup copies to ${dir}` : "turned off cloud backup copies");
+  res.json({ ok: true, state: store.backupState(), mirror: dir });
 });
 
 app.get("/api/backup", (_req, res) => {
@@ -1434,8 +1551,16 @@ app.get("/api/update-check", async (req, res) => {
         available: newer(j.tag_name, VERSION),
         url: j.html_url,
         notes: String(j.body || "").slice(0, 2000),
-        assets: (j.assets || []).map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size })).filter((a) => /\.(exe|dmg)$/i.test(a.name)),
+        assets: (j.assets || []).map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size, sha256: /^sha256:[a-f0-9]{64}$/.test(a.digest || "") ? a.digest.slice(7) : null })).filter((a) => /\.(exe|dmg)$/i.test(a.name)),
       };
+      if (value.available) {
+        try {
+          const log = await (await fetch(`https://raw.githubusercontent.com/${REPO}/${encodeURIComponent(j.tag_name)}/CHANGELOG.md`, { signal: AbortSignal.timeout(10000) })).text();
+          value.whatsNew = (log.split(/\n(?=## )/).find((sec) => sec.startsWith(`## ${value.latest}`)) || "").slice(0, 4000);
+        } catch {
+          /* the banner still works without it */
+        }
+      }
     }
   } catch (err) {
     value = { current: VERSION, latest: null, error: err.message, url: `https://github.com/${REPO}/releases/latest` };

@@ -46,12 +46,21 @@ async function loadDashboard() {
   const welcome = !store.get("welcomeDone") && steps.some(([, done]) => !done)
     ? `<div class="panel welcome"><div class="row space" style="margin:0"><h2 style="margin:0">Welcome 👋 — four steps to get going</h2><button class="ghost small" id="welcomeDismiss">Hide</button></div>
        <ol class="steps">${steps.map(([t, done], i) => `<li class="${done ? "done" : ""}"><button class="ghost" data-step="${i}">${done ? "✓" : i + 1 + "."} ${esc(t)}</button></li>`).join("")}</ol></div>` : "";
-  const attention = att && (att.items.length || att.unpriced || att.staleValues)
+  // Backups: warn when the daily copy hasn't happened, the cloud copy is failing, or there's no off-computer copy yet.
+  const bk = d.backup || {};
+  const bkAge = bk.lastLocal ? (Date.now() - Date.parse(bk.lastLocal)) / 86400000 : Infinity;
+  const backupRow = bkAge > 3 ? `<div class="att-row"><span class="chip bad">Backup</span><span>No backup in ${bkAge === Infinity ? "a while" : Math.floor(bkAge) + " days"} — the bot backs up once a day while it's open.</span><button class="small" data-backupnow>Back up now</button></div>`
+    : bk.mirror && bk.mirrorError ? `<div class="att-row"><span class="chip bad">Backup</span><span>Couldn't copy today's backup to your cloud folder (${esc(bk.mirrorError)}).</span><button class="small" data-backupset>Fix</button></div>`
+    : !bk.mirror ? `<div class="att-row"><span class="chip">Backup</span><span>Your backups are only on this computer. Keep a copy in OneDrive, iCloud Drive, Dropbox or Google Drive so a dead computer can't take your records.</span><button class="small" data-backupset>Set up</button></div>` : "";
+  const attention = att && (att.items.length || att.unpriced || att.staleValues || backupRow)
     ? `<div class="panel"><h3 style="margin-top:0">Needs attention</h3>
        ${att.items.slice(0, 8).map((it) => `<div class="att-row"><span class="chip ${it.type === "value_drop" ? "bad" : "warn"}">${esc({ stale_listing: "Stale listing", unlisted_long: "Not listed", value_drop: "Value drop" }[it.type])}</span><span><b>${esc(it.name)}</b> <span class="muted small">${esc(it.grade)}</span><div class="small">${esc(it.text)}</div></span>${it.suggested ? `<button class="small" data-drop="${esc(it.id)}" data-price="${it.suggested}">Set ${usd(it.suggested)}</button>` : ""}</div>`).join("")}
        ${att.unpriced ? `<div class="att-row"><span class="chip">Unpriced</span><span>${att.unpriced} card${att.unpriced > 1 ? "s" : ""} without a sales page — they never get valued.</span><button class="small" data-findprices>Find prices</button></div>` : ""}
        ${att.staleValues ? `<div class="att-row"><span class="chip">Stale</span><span>${att.staleValues} value${att.staleValues > 1 ? "s" : ""} older than a week.</span><button class="small" data-revalue>Re-value</button></div>` : ""}
+       ${backupRow}
      </div>` : "";
+  const w = d.week || {};
+  const moversRow = (m) => `<tr><td class="small">${esc(m.name)} <span class="muted">${esc(m.grade)}</span></td><td class="num">${usd(m.to)}</td><td class="num ${m.dollars >= 0 ? "pos" : "neg"}">${pct(m.pct)}</td></tr>`;
   $("#dash").innerHTML = welcome + attention + `
     <div class="totals">
       <div><span>Inventory value</span><b>${usd(p.value)}</b><span>${p.cards} cards · paid ${usd(p.cost)}</span></div>
@@ -60,6 +69,18 @@ async function loadDashboard() {
       <div><span>In progress</span><b>${d.status.listed} listed</b><span>${d.status.grading} at grading · ${d.status.submissionsOpen} open submissions</span></div>
     </div>
     <div class="dash-grid">
+      <div class="panel week">
+        <h3 style="margin-top:0">This week</h3>
+        <div class="week-grid">
+          <div><b>${w.sales || 0}</b><span>cards sold</span></div>
+          <div><b>${usd(w.revenue || 0)}</b><span>sales</span></div>
+          <div><b class="${(w.profit || 0) >= 0 ? "pos" : "neg"}">${usd(w.profit || 0)}</b><span>profit after fees</span></div>
+          <div><b>${w.added || 0}</b><span>cards added</span></div>
+        </div>
+        ${w.best ? `<p class="small">Best flip: <b>${esc(w.best.name)}</b> ${esc(w.best.grade || "")} — <span class="pos">${usd(w.best.profit)}</span>${w.best.soldOn ? ` on ${esc(w.best.soldOn)}` : ""}</p>` : ""}
+        ${w.website ? `<p class="small">Website: <b>${w.website.orders}</b> order${w.website.orders === 1 ? "" : "s"} · <b>${w.website.offers}</b> offer${w.website.offers === 1 ? "" : "s"} · <b>${w.website.messages}</b> message${w.website.messages === 1 ? "" : "s"} <button class="ghost small" data-mjc>Open →</button></p>` : ""}
+        ${w.expenses ? `<p class="small muted">Expenses this week: ${usd(w.expenses)}</p>` : ""}
+      </div>
       <div class="panel">
         <div class="row space" style="margin:0"><h3 style="margin:0">Portfolio value</h3><button class="ghost small" data-go="inventory">Inventory →</button></div>
         ${lineChart(p.history)}
@@ -74,7 +95,7 @@ async function loadDashboard() {
           <button data-addinv>＋ Add inventory</button>
           <button data-expense>🧾 Log an expense</button>
         </div>
-        ${d.alerts.length ? `<h3>Alerts</h3>${d.alerts.map((a) => `<div class="small">${a.kind === "brief" ? "☀️ " + esc(a.text) : `🔔 ${esc(a.name)} → ${usd(a.value)} (target ${usd(a.target)})`}</div>`).join("")}<button class="ghost small" data-go="watch" style="margin-top:.4rem">See watchlist →</button>` : ""}
+        ${d.alerts.length ? `<h3>Alerts</h3>${d.alerts.map((a) => `<div class="small">${a.kind === "brief" ? "☀️ " + esc(a.text) : a.text ? `${{ order: "🛒", ticket: "✉", pricing: "📈" }[a.kind] || "🔔"} <b>${esc(a.name)}</b>: ${esc(a.text)}` : `🔔 ${esc(a.name)} → ${usd(a.value)} (target ${usd(a.target)})`}</div>`).join("")}<button class="ghost small" data-go="watch" style="margin-top:.4rem">See all alerts →</button>` : ""}
       </div>
       <div class="panel">
         <div class="row space" style="margin:0"><h3 style="margin:0">${d.hot ? `Hottest ${d.hot.period === "daily" ? "today" : "this week"}` : "Hottest cards"}</h3><button class="ghost small" data-go="hot">More →</button></div>
@@ -84,6 +105,11 @@ async function loadDashboard() {
       <div class="panel">
         <div class="row space" style="margin:0"><h3 style="margin:0">Inventory plan</h3><button class="ghost small" data-go="ask">${adv ? "Refresh →" : "Get advice →"}</button></div>
         ${adv ? `<div class="small muted">${esc(when(adv.at))}</div><div data-advice></div>` : `<p class="small muted">Ask the AI what to sell, hold, list, grade or re-price — based on what you actually own.</p>`}
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0">Your cards: biggest moves (7 days)</h3>
+        ${(d.stockMovers?.up.length || d.stockMovers?.down.length) ? `<table>${[...d.stockMovers.up, ...d.stockMovers.down].map(moversRow).join("")}</table>`
+          : `<p class="small muted">Shows once your cards have been re-valued for a few days (it happens daily for cards with a sales page).</p>`}
       </div>
       <div class="panel">
         <h3 style="margin-top:0">Watchlist movers (7 days)</h3>
@@ -106,6 +132,9 @@ async function loadDashboard() {
   if ($("#dash [data-findprices]")) $("#dash [data-findprices]").onclick = () => findPricesBulk(loadDashboard);
   if ($("#dash [data-revalue]")) $("#dash [data-revalue]").onclick = async (e) => { e.target.disabled = true; await fetch("/api/inventory/refresh", { method: "POST" }); toast("Values refreshed"); loadDashboard(); };
   $("#dash [data-lot]").onclick = () => { goTab("lookup"); $('#lookupMode [data-v="lot"]').click(); };
+  if ($("#dash [data-mjc]")) $("#dash [data-mjc]").onclick = () => { invView = "mjc"; goTab("inventory"); };
+  if ($("#dash [data-backupnow]")) $("#dash [data-backupnow]").onclick = async (e) => { e.target.disabled = true; const r = await fetch("/api/backup/now", { method: "POST" }); toast(r.ok ? "Backed up ✓" : "Backup failed — see Settings", { error: !r.ok }); loadDashboard(); };
+  if ($("#dash [data-backupset]")) $("#dash [data-backupset]").onclick = () => { openSettings(); setTimeout(() => $("#backupBlock")?.scrollIntoView({ block: "center" }), 300); };
   $("#dash [data-addinv]").onclick = () => { invView = "stock"; goTab("inventory"); setTimeout(() => openItemEditor(), 50); };
   $("#dash [data-expense]").onclick = () => { invView = "expenses"; goTab("inventory"); };
   $$("#dash [data-open]").forEach((el) => {
@@ -131,6 +160,7 @@ async function loadInventory() {
   if (invView === "expenses") return loadExpenses();
   if (invView === "want") return loadWant();
   if (invView === "mjc") return loadMjc();
+  if (invView === "show") return loadShow();
 }
 TAB_LOADERS.inventory = loadInventory;
 
@@ -138,6 +168,9 @@ TAB_LOADERS.inventory = loadInventory;
 
 let invRows = [];
 const invFilter = { q: "", status: "active", category: "", sort: "added" };
+// Big inventories stay fast: draw this many rows, then "Show more".
+const PAGE = 150;
+let invLimit = PAGE;
 
 async function loadStock() {
   $("#invActions").innerHTML = `
@@ -180,6 +213,8 @@ function drawStock() {
     sku: (a, b) => String(a.sku).localeCompare(String(b.sku)),
   };
   rows = rows.sort(sorters[invFilter.sort] || sorters.added);
+  const total = rows.length;
+  rows = rows.slice(0, invLimit);
 
   $("#invBody").innerHTML = `
     ${invRows.length ? `<div class="totals">
@@ -203,16 +238,27 @@ function drawStock() {
           <td><b>${esc(r.name)}</b><div class="small muted">${esc(r.sku || "")}${r.location ? " · 📍" + esc(r.location) : ""}${(r.tags || []).length ? " · " + r.tags.map((t) => "#" + esc(t)).join(" ") : ""}${r.priceUrl ? " · " + link(r.priceUrl, "sales") : ""}${r.addedBy ? " · " + esc(r.addedBy) : ""}</div></td>
           <td class="small">${esc(r.grade)}</td><td class="num">${esc(r.qty)}</td>
           <td class="num">${usd(r.cost)}</td>
-          <td class="num">${r.status === "sold" ? `sold ${usd(r.soldPrice)}` : r.priceUrl ? usd(r.value) : `<button class="small" data-findprice title="Link to a sales page so this card gets valued">💲 Find price</button>`}<div class="small muted">${r.status === "sold" ? esc(r.soldOn || "") : r.priceUrl ? `${esc(when(r.valuedAt))}${!r.valuedAt || Date.now() - Date.parse(r.valuedAt) > 7 * 86400000 ? ` <span class="chip warn" title="Older than a week">stale</span> <button class="ghost small" data-revalue aria-label="Re-value now">↻</button>` : ""}` : ""}</div></td>
+          <td class="num">${r.status === "sold" ? `sold ${usd(r.soldPrice)}` : r.priceUrl ? usd(r.value) + (r.valueLog?.length > 2 ? sparkline(r.valueLog.slice(-30).map(([, v]) => v)) : "") : `<button class="small" data-findprice title="Link to a sales page so this card gets valued">💲 Find price</button>`}<div class="small muted">${r.status === "sold" ? esc(r.soldOn || "") : r.priceUrl ? `${esc(when(r.valuedAt))}${!r.valuedAt || Date.now() - Date.parse(r.valuedAt) > 7 * 86400000 ? ` <span class="chip warn" title="Older than a week">stale</span> <button class="ghost small" data-revalue aria-label="Re-value now">↻</button>` : ""}` : ""}</div></td>
           <td class="num ${pl == null ? "" : pl >= 0 ? "pos" : "neg"}">${usd(pl)}</td>
           <td><span class="chip st-${r.status}">${esc(STATUS_LABEL[r.status])}</span>${r.status === "listed" && r.listedOn ? `<div class="small muted">${esc(r.listedOn)} ${usd(r.listPrice)}</div>` : ""}${r.web && r.status !== "sold" ? `<div><span class="chip st-web" title="${esc(r.webPricingNote || (r.priceLog?.at(-1)?.reason) || "On the MJC website")}">🌐 ${webPrice(r) ? usd(webPrice(r)) : "needs price"}</span></div>` : ""}</td>
           <td class="actions nowrap">${r.status !== "sold" ? `<button class="small" data-sell>Sold</button>` : ""}<button class="small ghost" data-edit aria-label="Edit">✎</button><button class="small ghost" data-del aria-label="Remove">🗑</button></td></tr>`;
       }).join("")}</table>
+      ${total > rows.length ? `<div class="row" style="justify-content:center"><span class="small muted">Showing ${rows.length} of ${total}</span><button class="small" data-more>Show ${Math.min(PAGE, total - rows.length)} more</button><button class="small ghost" data-allrows>Show all</button></div>` : ""}
       <div class="row bulk"><span class="small muted" data-selcount>0 selected</span><button class="small" data-bulk="grading" disabled>Send selected to grading</button><button class="small" data-bulk="labels" disabled>Labels for selected</button><button class="small" data-bulk="web-on" disabled>🌐 Sell selected on MJC</button><button class="small" data-bulk="web-off" disabled>Remove from MJC</button></div></div>`
     : `<div class="empty"><h2>${invRows.length ? "No cards match" : "No inventory yet"}</h2><p>${invRows.length ? "Change the filters above." : "Research a card and click <b>＋ Inventory</b>, add one by hand, or import your existing spreadsheet."}</p></div>`}`;
 
+  if ($("#invBody [data-more]")) $("#invBody [data-more]").onclick = () => { invLimit += PAGE; drawStock(); };
+  if ($("#invBody [data-allrows]")) $("#invBody [data-allrows]").onclick = () => { invLimit = Infinity; drawStock(); };
+  // A barcode scanner types the SKU and presses Enter: an exact SKU opens that card.
+  const qIn = $('#invBody [data-f="q"]');
+  if (qIn) qIn.onkeydown = (e) => {
+    if (e.key !== "Enter") return;
+    const hit = invRows.find((r) => r.sku && r.sku.toLowerCase() === qIn.value.trim().toLowerCase());
+    if (hit) { e.preventDefault(); openItemEditor(hit); }
+  };
   $$("#invBody [data-f]").forEach((el) => (el.oninput = () => {
     invFilter[el.dataset.f] = el.value;
+    invLimit = PAGE;
     const focus = el.dataset.f === "q";
     drawStock();
     if (focus) { const s = $('#invBody [data-f="q"]'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
@@ -318,21 +364,37 @@ function openItemEditor(row = null) {
 function openSellDialog(row) {
   const body = openModal(`Sold: ${row.name}`, `
     <form class="form-grid" data-form>
+      ${row.qty > 1 ? `<label>How many<select name="qty">${Array.from({ length: Math.min(row.qty, 100) }, (_, i) => `<option${i + 1 === row.qty ? " selected" : ""}>${i + 1}</option>`).join("")}</select></label>` : ""}
       <label>Sold for (each) $<input name="soldPrice" type="number" min="0" step="0.01" required value="${esc(row.listPrice ?? row.value ?? "")}"></label>
       <label>Where<select name="soldOn">${opts(SELL_PLATFORMS, row.listedOn || "eBay")}</select></label>
+      <label>Paid with<select name="payment"><option value="">—</option>${opts(status.payments || [], "")}</select></label>
       <label>Date<input name="soldDate" type="date" value="${today()}"></label>
       <label>Fees $ <span class="muted small">(blank = estimate)</span><input name="fees" type="number" min="0" step="0.01"></label>
-      <div class="span2 small muted">Paid ${usd(row.cost)} each × ${row.qty}.</div>
+      <div class="span2 small" data-preview></div>
       <div class="span2 row"><button class="primary">Mark sold</button></div>
     </form>`);
-  $("[data-form]", body).onsubmit = async (e) => {
+  const form = $("[data-form]", body);
+  // Profit after fees, as you type (the fee table is the server's, the same one Sales & profit uses).
+  const preview = () => {
+    const f = Object.fromEntries(new FormData(form));
+    const n = parseInt(f.qty || row.qty, 10), price = parseFloat(f.soldPrice) || 0;
+    const [p, fixed] = (status.fees || {})[f.soldOn] || [0, 0];
+    const fees = f.fees !== "" ? parseFloat(f.fees) || 0 : Math.round((price * n * p / 100 + (price ? fixed : 0)) * 100) / 100;
+    const profit = (price - row.cost) * n - fees;
+    $("[data-preview]", body).innerHTML = `${n} × ${usd(price)} = <b>${usd(price * n)}</b> · fees ${usd(fees)}${f.fees === "" && p ? ` <span class="muted">(est. ${p}% + ${usd(fixed)})</span>` : ""} · paid ${usd(row.cost * n)} → <b class="${profit >= 0 ? "pos" : "neg"}">${profit >= 0 ? "profit" : "loss"} ${usd(Math.abs(profit))}</b>${n < row.qty ? ` <span class="muted">· ${row.qty - n} stay in stock</span>` : ""}`;
+  };
+  form.oninput = preview;
+  preview();
+  form.onsubmit = async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
     if (f.fees === "") delete f.fees;
-    await fetch("/api/inventory/" + row.id, json("PATCH", { ...f, status: "sold" }));
+    if (!f.payment) delete f.payment;
+    const r = await fetch(`/api/inventory/${row.id}/sell`, json("POST", f));
+    const j = await r.json();
+    if (!r.ok) return toast(j.error || "Couldn't save", { error: true });
     modal.close();
-    const profit = (parseFloat(f.soldPrice) - row.cost) * row.qty;
-    toast(`Sold ✓ — ${profit >= 0 ? "profit" : "loss"} ${usd(Math.abs(profit))} before fees`);
+    toast(`Sold ✓ ${j.soldRow.qty} × ${row.name}${j.split ? ` — ${j.row.qty} still in stock` : ""}`);
     loadStock();
   };
 }
@@ -355,20 +417,59 @@ function openImport() {
   };
 }
 
+/**
+ * Code 128 (set B) barcode of a SKU as an SVG — what a USB/Bluetooth barcode scanner reads. Scanning it into
+ * the Stock search or Show mode finds the card instantly.
+ */
+const C128 = "212222 222122 222221 121223 121322 131222 122213 122312 132212 221213 221312 231212 112232 122132 122231 113222 123122 123221 223211 221132 221231 213212 223112 312131 311222 321122 321221 312212 322112 322211 212123 212321 232121 111323 131123 131321 112313 132113 132311 211313 231113 231311 112133 112331 132131 113123 113321 133121 313121 211331 231131 213113 213311 213131 311123 311321 331121 312113 312311 332111 314111 221411 431111 111224 111422 121124 121421 141122 141221 112214 112412 122114 122411 142112 142211 241211 221114 413111 241112 134111 111242 121142 121241 114212 124112 124211 411212 421112 421211 212141 214121 412121 111143 111341 131141 114113 114311 411113 411311 113141 114131 311141 411131 211412 211214 211232 2331112".split(" ");
+function code128(text) {
+  const vals = [...String(text)].map((ch) => ch.charCodeAt(0) - 32).filter((v) => v >= 0 && v <= 95);
+  if (!vals.length) return "";
+  const codes = [104, ...vals, (104 + vals.reduce((n, v, i) => n + v * (i + 1), 0)) % 103, 106];
+  let x = 10, bars = "";
+  for (const c of codes) {
+    [...C128[c]].forEach((wd, i) => {
+      if (i % 2 === 0) bars += `<rect x="${x}" y="0" width="${wd}" height="40"/>`;
+      x += +wd;
+    });
+  }
+  return `<svg class="bc" viewBox="0 0 ${x + 10} 40" preserveAspectRatio="none" role="img" aria-label="Barcode ${esc(text)}">${bars}</svg>`;
+}
+
 function printLabels(ids) {
   const list = (Array.isArray(ids) && ids.length ? invRows.filter((r) => ids.includes(r.id)) : invRows.filter((r) => r.status !== "sold"));
   if (!list.length) return toast("No cards to print.");
   const w = window.open("", "_blank");
   if (!w) return toast("Allow pop-ups to print labels.", { error: true });
+  const fmt = store.get("labelFormat") || "sheet";
   w.document.write(`<!doctype html><title>Labels</title><style>
-    body{font:12px/1.3 -apple-system,Segoe UI,Arial,sans-serif;margin:12px} .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-    .l{border:1px dashed #999;border-radius:6px;padding:8px;break-inside:avoid} .sku{font:700 16px monospace} .n{font-weight:600;margin:3px 0}
-    .p{font-size:15px;font-weight:700} @media print{.hint{display:none}}</style>
-    <p class="hint">Print on plain paper or a label sheet, then cut. (Close this tab when done.)</p>
-    <div class="grid">${list.map((r) => `<div class="l"><div class="sku">${esc(r.sku || "")}</div><div class="n">${esc(r.name)}</div><div>${esc(r.grade)}${r.location ? " · " + esc(r.location) : ""}</div><div class="p">${usd(r.listPrice ?? r.value)}</div></div>`).join("")}</div>`);
+    body{font:12px/1.3 -apple-system,Segoe UI,Arial,sans-serif;margin:12px} .bar{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+    .bar button{font:inherit;padding:6px 10px} .bar button.on{font-weight:700;outline:2px solid #1f8a70}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+    .l{border:1px dashed #999;border-radius:6px;padding:8px;break-inside:avoid} .sku{font:700 13px monospace} .n{font-weight:600;margin:3px 0}
+    .p{font-size:15px;font-weight:700} .bc{display:block;width:100%;height:34px;margin:2px 0}
+    body.thermal .grid{display:block} body.thermal .l{width:2.25in;height:1.25in;box-sizing:border-box;border:0;border-radius:0;padding:.06in .1in;page-break-after:always;overflow:hidden}
+    body.thermal .n{font-size:10px;max-height:2.6em;overflow:hidden;margin:1px 0} body.thermal .p{font-size:13px} body.thermal .bc{height:.36in}
+    @media print{.hint,.bar{display:none} body{margin:0}} @page{margin:.3in} body.thermal{} </style>
+    <style id="page"></style>
+    <div class="bar"><b>Labels:</b><button id="fmtSheet">Letter sheet (3 across)</button><button id="fmtThermal">Thermal roll 2.25" × 1.25"</button><button id="doPrint">🖨 Print</button></div>
+    <p class="hint">The barcode is the card's SKU — scan it into Stock search or Show mode to find the card. (Close this tab when done.)</p>
+    <div class="grid">${list.map((r) => `<div class="l">${r.sku ? code128(r.sku) : ""}<div class="sku">${esc(r.sku || "")}</div><div class="n">${esc(r.name)}</div><div>${esc(r.grade)}${r.location ? " · " + esc(r.location) : ""}</div><div class="p">${usd(r.listPrice ?? r.value)}</div></div>`).join("")}</div>`);
   w.document.close();
+  // Wired from this page (the pop-up allows no scripts of its own).
+  const doc = w.document;
+  const setFmt = (f) => {
+    store.set("labelFormat", f);
+    doc.body.className = f;
+    doc.getElementById("page").textContent = f === "thermal" ? "@page{size:2.25in 1.25in;margin:0}" : "";
+    doc.getElementById("fmtSheet").className = f === "sheet" ? "on" : "";
+    doc.getElementById("fmtThermal").className = f === "thermal" ? "on" : "";
+  };
+  doc.getElementById("fmtSheet").onclick = () => setFmt("sheet");
+  doc.getElementById("fmtThermal").onclick = () => setFmt("thermal");
+  doc.getElementById("doPrint").onclick = () => w.print();
+  setFmt(fmt);
   w.focus();
-  w.print();
 }
 
 // ------------------------------------------------------------------ GRADING
@@ -713,6 +814,101 @@ async function loadMjc() {
   };
 }
 
+// ------------------------------------------------------------------ SHOW MODE (a quick register for card shows)
+
+let showCart = []; // [{ id, qty, price }]
+let showPay = "Cash";
+async function loadShow() {
+  $("#invActions").innerHTML = `<span class="small muted">Scan a label or type a card / SKU, set the price, pick how they paid, Complete sale. Each card is marked sold on "Card show".</span>`;
+  const [rows, show] = await Promise.all([getJSON("/api/inventory"), getJSON("/api/show")]);
+  invRows = rows;
+  const inStock = rows.filter((r) => r.status !== "sold" && r.qty > 0);
+  const byId = Object.fromEntries(inStock.map((r) => [r.id, r]));
+  showCart = showCart.filter((l) => byId[l.id]);
+  const total = showCart.reduce((n, l) => n + (parseFloat(l.price) || 0) * l.qty, 0);
+  const t = show.totals;
+  $("#invBody").innerHTML = `
+    <div class="show-grid">
+      <div class="panel">
+        <input type="search" data-scan placeholder="Scan a label or type a card name / SKU…" aria-label="Find a card to sell" autocomplete="off" style="width:100%;font-size:1.1rem">
+        <div data-matches class="show-matches"></div>
+        ${showCart.length ? `<table class="show-cart"><tr><th>Card</th><th class="num">Qty</th><th class="num">Price each</th><th></th></tr>
+          ${showCart.map((l, i) => { const r = byId[l.id]; return `<tr data-i="${i}"><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.grade)} · ${esc(r.sku || "")} · paid ${usd(r.cost)}${r.value ? ` · value ${usd(r.value)}` : ""}</div></td>
+            <td class="num">${r.qty > 1 ? `<select data-qty aria-label="Quantity">${Array.from({ length: Math.min(r.qty, 50) }, (_, k) => `<option${k + 1 === l.qty ? " selected" : ""}>${k + 1}</option>`).join("")}</select>` : "1"}</td>
+            <td class="num"><input data-price type="number" min="0" step="0.01" value="${esc(l.price)}" aria-label="Price each" style="width:90px"></td>
+            <td><button class="ghost small" data-rm aria-label="Remove">✕</button></td></tr>`; }).join("")}</table>
+          <div class="row show-pay" role="group" aria-label="Paid with">${(status.payments || ["Cash", "Card", "Venmo"]).slice(0, 7).map((p) => `<button class="${p === showPay ? "primary" : ""}" data-pay="${esc(p)}" aria-pressed="${p === showPay}">${esc(p)}</button>`).join("")}</div>
+          <div class="row space"><span class="show-total">Total <b>${usd(total)}</b></span><button class="primary big" data-complete>✓ Complete sale</button></div>`
+          : `<p class="muted small" style="margin-top:.8rem">Nothing in this sale yet.</p>`}
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0">Today</h3>
+        <div class="week-grid"><div><b>${usd(t.total)}</b><span>${t.sales} sale${t.sales === 1 ? "" : "s"} · ${t.cards} card${t.cards === 1 ? "" : "s"}</span></div>
+          ${Object.entries(t.byPayment).map(([p, v]) => `<div><b>${usd(v)}</b><span>${esc(p)}</span></div>`).join("")}</div>
+        <div class="row"><button class="small" data-copy${t.sales ? "" : " disabled"}>📋 Copy today's summary</button></div>
+        ${show.today.length ? `<h3>Sales today</h3>${show.today.map((s, i) => `<div class="att-row"><span class="small muted nowrap">${esc(new Date(s.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))}</span><span class="small">${s.items.map((x) => `${x.qty > 1 ? x.qty + "× " : ""}${esc(x.name)}`).join(", ")} — <b>${usd(s.total)}</b> ${esc(s.payment)}</span>${i === 0 ? `<button class="small ghost" data-undo="${esc(s.id)}">Undo</button>` : ""}</div>`).join("")}` : ""}
+      </div>
+    </div>`;
+  const scan = $("#invBody [data-scan]");
+  scan.focus();
+  const add = (r) => {
+    const have = showCart.find((l) => l.id === r.id);
+    if (have) have.qty = Math.min(r.qty, have.qty + 1);
+    else showCart.push({ id: r.id, qty: 1, price: r.listPrice ?? (r.web ? webPrice(r) : null) ?? r.value ?? "" });
+    loadShow();
+  };
+  const matches = () => {
+    const q = scan.value.trim().toLowerCase();
+    if (!q) return [];
+    const words = q.split(/\s+/);
+    return inStock.filter((r) => words.every((w) => `${r.name} ${r.grade} ${r.sku || ""} ${r.location || ""}`.toLowerCase().includes(w))).slice(0, 8);
+  };
+  scan.oninput = () => {
+    $("#invBody [data-matches]").innerHTML = matches().map((r) => `<button class="mini-row" data-add="${esc(r.id)}"><span>${esc(r.name)} <span class="muted small">${esc(r.grade)} · ${esc(r.sku || "")} · qty ${r.qty}</span></span><b>${usd(r.listPrice ?? r.value)}</b></button>`).join("");
+    $$("#invBody [data-add]").forEach((b) => (b.onclick = () => add(byId[b.dataset.add])));
+  };
+  // A scanner types the SKU and presses Enter: an exact SKU (or a single match) goes straight into the sale.
+  scan.onkeydown = (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const q = scan.value.trim().toLowerCase();
+    const hit = inStock.find((r) => r.sku && r.sku.toLowerCase() === q) || (matches().length === 1 ? matches()[0] : null);
+    if (hit) add(hit);
+    else toast(q ? "No single card matches — pick one from the list" : "Type or scan a card first");
+  };
+  $$("#invBody tr[data-i]").forEach((tr) => {
+    const l = showCart[+tr.dataset.i];
+    const q = $("[data-qty]", tr);
+    if (q) q.onchange = () => { l.qty = +q.value; loadShow(); };
+    $("[data-price]", tr).onchange = (e) => { l.price = e.target.value; loadShow(); };
+    $("[data-rm]", tr).onclick = () => { showCart.splice(+tr.dataset.i, 1); loadShow(); };
+  });
+  $$("#invBody [data-pay]").forEach((b) => (b.onclick = () => { showPay = b.dataset.pay; loadShow(); }));
+  const done = $("#invBody [data-complete]");
+  if (done) done.onclick = async () => {
+    if (showCart.some((l) => !(parseFloat(l.price) >= 0) || l.price === "")) return toast("Every card needs a price.", { error: true });
+    done.disabled = true;
+    const r = await fetch("/api/show/sale", json("POST", { items: showCart, payment: showPay }));
+    const j = await r.json();
+    if (!r.ok) { done.disabled = false; return toast(j.error, { error: true }); }
+    showCart = [];
+    toast(`Sold ✓ ${usd(j.sale.total)} (${j.sale.payment})${j.skipped ? ` — ${j.skipped} card${j.skipped === 1 ? " was" : "s were"} already sold` : ""}`);
+    loadShow();
+  };
+  const undo = $("#invBody [data-undo]");
+  if (undo) undo.onclick = async () => {
+    const r = await fetch(`/api/show/sale/${undo.dataset.undo}/undo`, { method: "POST" });
+    toast(r.ok ? "Sale undone — the cards are back in stock" : "Couldn't undo", { error: !r.ok });
+    loadShow();
+  };
+  const copy = $("#invBody [data-copy]");
+  if (copy) copy.onclick = async () => {
+    const lines = [`Card show — ${new Date().toLocaleDateString()}`, `Total ${usd(t.total)} (${t.sales} sales, ${t.cards} cards)`, ...Object.entries(t.byPayment).map(([p, v]) => `  ${p}: ${usd(v)}`), "", ...show.today.slice().reverse().map((s) => `${new Date(s.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}  ${usd(s.total)} ${s.payment} — ${s.items.map((x) => `${x.qty > 1 ? x.qty + "× " : ""}${x.name}`).join(", ")}`)];
+    await navigator.clipboard.writeText(lines.join("\n"));
+    toast("Copied — paste it into a text or email");
+  };
+}
+
 // ------------------------------------------------------------------ WANT LIST
 
 async function loadWant() {
@@ -826,8 +1022,12 @@ async function loadExpenses() {
         <select name="kind" aria-label="Type">${opts(EXPENSE_KINDS)}</select>
         <input name="amount" type="number" min="0" step="0.01" placeholder="Amount $" required aria-label="Amount">
         <input name="note" type="text" placeholder="Note (e.g. toploaders, show table)" aria-label="Note" style="width:260px">
+        <input name="receiptHash" type="hidden">
         <button class="primary">Add</button>
+        <label class="button ghost" title="Take or choose a photo of a receipt — the AI fills in the expense for you to check">📷 Read a receipt<input type="file" accept="image/*" data-receipt hidden></label>
       </form>
+      <div data-receipt-progress class="progress hidden" aria-live="polite"></div>
+      <div data-receipt-msg class="small" role="status"></div>
       <p class="small muted">This month: <b>${usd(thisMonth)}</b> · all time: <b>${usd(list.reduce((n, e) => n + e.amount, 0))}</b>. Expenses come off your net profit in <b>Sales &amp; profit</b>.</p>
     </div>
     ${list.length ? `<div class="panel table-wrap"><table><tr><th>Date</th><th>Type</th><th>Note</th><th class="num">Amount</th><th></th></tr>
@@ -837,6 +1037,29 @@ async function loadExpenses() {
     await fetch("/api/expenses", json("POST", Object.fromEntries(new FormData(e.target))));
     toast("Expense added");
     loadExpenses();
+  };
+  $("#invBody [data-receipt]").onchange = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file || needKey()) return;
+    const form = $("#invBody [data-form]"), msg = $("#invBody [data-receipt-msg]");
+    try {
+      const { img, url } = await readAsImage(file);
+      const data = drawScaled(img, 1600).toDataURL("image/jpeg", 0.85).split(",")[1];
+      URL.revokeObjectURL(url);
+      msg.textContent = "";
+      const r = await streamPost("/api/expenses/receipt", { images: [{ mediaType: "image/jpeg", data }] }, $("#invBody [data-receipt-progress]"));
+      const x = r.receipt;
+      if (x.date) form.elements.date.value = x.date;
+      if (x.kind) form.elements.kind.value = x.kind;
+      if (x.total != null) form.elements.amount.value = x.total;
+      form.elements.note.value = [x.vendor, x.note].filter(Boolean).join(" — ").slice(0, 300);
+      form.elements.receiptHash.value = r.hash;
+      msg.innerHTML = `${r.duplicate ? `<span class="bad">⚠ This receipt looks already logged (${esc(day(r.duplicate.date))}, ${usd(r.duplicate.amount)}). </span>` : ""}${x.total == null ? `<span class="warn">The total couldn't be read — type it in. </span>` : ""}Check the fields and click <b>Add</b>.${x.confidence === "low" ? " <span class=\"warn\">(hard to read — double-check)</span>" : ""}`;
+      form.elements.amount.focus();
+    } catch (err) {
+      msg.innerHTML = `<span class="bad">${esc(err.message)}</span>`;
+    }
   };
   $$("#invBody tr[data-id]").forEach((tr) => ($("[data-del]", tr).onclick = () => removeWithUndo("/api/expenses/" + tr.dataset.id, "expense", loadExpenses)));
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.6.1
+- Fix: after updating from an older version, Home said "No backup in a while" even though the daily backups were
+  there (the new backup status only started recording on the next backup). It now reads the newest backup file.
+
 ## 3.6.0 — the third 10-10: run the business from it
 
 **Major**

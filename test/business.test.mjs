@@ -66,6 +66,15 @@ test("the daily re-value keeps a history; movers come from it", () => {
   assert.ok(Math.abs(m.down[0].pct + 0.25) < 1e-9);
 });
 
+test("an install from before backup tracking still reports its last backup (no false 'no backup' warning)", () => {
+  const dir = path.join(process.env.CARD_BOT_HOME, "data", "backups");
+  fs.writeFileSync(path.join(dir, "backup-2026-01-01.json"), "{}");
+  store.save("backup-state", {});
+  const st = store.backupState();
+  assert.ok(st.lastLocal, JSON.stringify(st));
+  assert.ok(st.lastLocalFile);
+});
+
 test("backups are copied to the chosen cloud folder and the copy is reported", () => {
   const cloud = fs.mkdtempSync(path.join(os.tmpdir(), "tcrb-cloud-"));
   process.env.CARD_BOT_BACKUP_DIR = cloud;

@@ -530,8 +530,9 @@ function wireWebExtras(row, body) {
       try {
         const { img, url } = await readAsImage(file);
         const data = drawScaled(img, 1800).toDataURL("image/jpeg", 0.9);
+        const thumb = drawScaled(img, 600).toDataURL("image/jpeg", 0.82); // what the website's grid shows
         URL.revokeObjectURL(url);
-        const r = await fetch(`/api/inventory/${row.id}/photos`, json("POST", { data }));
+        const r = await fetch(`/api/inventory/${row.id}/photos`, json("POST", { data, thumb }));
         const j = await r.json();
         if (!r.ok) { toast(j.error, { error: true }); break; }
         photos = j.photos;
@@ -566,6 +567,7 @@ function wireWebExtras(row, body) {
 // ------------------------------------------------------------------ MJC STORE (orders, messages, pricing, setup)
 
 let mjcTab = "orders";
+let mjcTickets = []; // the inbox as last loaded — its buttons act on these
 const ORDER_STATUS = ["paid", "packed", "shipped", "delivered", "refunded", "cancelled"];
 async function loadMjc() {
   $("#invActions").innerHTML = `<div class="pills" id="mjcTabs" role="group" aria-label="MJC store section">${[["orders", "📦 Orders"], ["messages", "✉ Messages"], ["pricing", "📈 Pricing engine"], ["setup", "⚙ Setup"]].map(([v, l]) => `<button data-v="${v}" class="${mjcTab === v ? "active" : ""}" aria-pressed="${mjcTab === v}">${l}</button>`).join("")}</div>`;
@@ -590,14 +592,27 @@ async function loadMjc() {
       </div>`).join("")
       : `<div class="empty"><h2>No website orders yet</h2><p>When a customer pays on the MJC site, the order shows up here within 5 minutes (and as an alert). The card is marked sold in your inventory automatically.</p><button id="mjcPull">↻ Check now</button></div>`;
   } else if (mjcTab === "messages") {
-    const tickets = await getJSON("/api/mjc/tickets");
-    bodyHtml = tickets.length ? tickets.map((t) => `<div class="panel ticket ${t.status}" data-id="${esc(t.id)}">
-        <div class="row space" style="margin:0"><div><b>${esc(t.name || t.email)}</b> <span class="muted small">${esc(t.email)} · ${esc(when(t.created))}</span> <span class="chip ${t.status === "open" ? "warn" : ""}">${esc(t.status)}</span></div>
-          <div class="actions"><a class="button small" href="mailto:${esc(t.email)}?subject=${encodeURIComponent("Re: your message to MJC (" + t.id + ")")}&body=${encodeURIComponent("\n\n— — —\n" + t.message)}">Reply by email</a>${t.status !== "closed" ? `<button class="small" data-close>Mark done</button>` : ""}</div></div>
-        <p style="white-space:pre-wrap">${esc(t.message)}</p>
+    const tickets = (mjcTickets = await getJSON("/api/mjc/tickets"));
+    const site = m.remote?.siteUrl || "";
+    const KIND = { offer: ["💲 Offer", "good"], sell: ["📦 Wants to sell / trade", "warn"], want: ["🎯 Card request", ""], message: ["✉ Message", ""] };
+    const mail = (t, subject, text) => `mailto:${t.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
+    const hi = (t) => `Hi${t.name ? " " + t.name.split(" ")[0] : ""},\n\n`;
+    bodyHtml = tickets.length ? tickets.map((t) => {
+      const [label, tone] = KIND[t.kind] || KIND.message;
+      const link = site && t.cardId ? `${site}/card/${encodeURIComponent(t.cardId)}/x` : "";
+      const pct = t.kind === "offer" && t.listPrice ? Math.round((t.amount / t.listPrice) * 100) : null;
+      return `<div class="panel ticket ${t.status}" data-id="${esc(t.id)}">
+        <div class="row space" style="margin:0"><div><span class="chip ${tone}">${label}</span> <b>${esc(t.name || t.email)}</b> <span class="muted small">${esc(t.email)} · ${esc(when(t.created))}</span> <span class="chip ${t.status === "open" ? "warn" : ""}">${esc(t.status)}</span></div>
+          <div class="actions">${t.kind === "offer" ? `<button class="small primary" data-accept title="Sets this card's website price to the offer (fixed) and opens an email to the buyer">Accept → set price &amp; email</button><a class="button small" href="${esc(mail(t, `Your offer on ${t.cardTitle}`, `${hi(t)}Thanks for your offer of $${t.amount} on ${t.cardTitle}. The best we can do is $____.${link ? `\n\nHere's the card: ${link}` : ""}\n\n— MJC`))}">Counter by email</a>` : ""}${t.kind === "want" ? `<button class="small" data-want>🎯 Add to want list</button>` : ""}<a class="button small" href="${esc(mail(t, `Re: your message to MJC (${t.id})`, `\n\n— — —\n${t.message}`))}">Reply by email</a>${t.status !== "closed" ? `<button class="small" data-close>Mark done</button>` : ""}</div></div>
+        ${t.kind === "offer" ? `<p><b>$${esc(t.amount)}</b> offered on <b>${esc(t.cardTitle)}</b> ${esc(t.cardGrade || "")} — listed at $${esc(t.listPrice)}${pct ? ` (${pct}% of the price)` : ""}.</p>` : ""}
+        ${t.kind === "sell" && (t.count || t.asking) ? `<p class="small">${t.count ? `About <b>${esc(t.count)}</b> card${t.count == 1 ? "" : "s"}` : ""}${t.count && t.asking ? " · " : ""}${t.asking ? `asking <b>$${esc(t.asking)}</b>` : ""}</p>` : ""}
+        ${t.kind === "want" && t.maxPrice ? `<p class="small">Would pay up to <b>$${esc(t.maxPrice)}</b></p>` : ""}
+        <p style="white-space:pre-wrap">${esc(t.kind === "offer" ? t.message.replace(/^Offer of[^\n]*\n*/, "") : t.message)}</p>
+        ${t.photos ? `<div class="row" style="gap:8px;flex-wrap:wrap">${Array.from({ length: t.photos }, (_, n) => `<a href="/api/mjc/tickets/${encodeURIComponent(t.id)}/photos/${n}" target="_blank" rel="noopener"><img src="/api/mjc/tickets/${encodeURIComponent(t.id)}/photos/${n}" alt="Photo ${n + 1} from ${esc(t.name || t.email)}" style="height:120px;border-radius:8px;border:1px solid var(--line)" loading="lazy"></a>`).join("")}</div>` : ""}
         ${t.transcript ? `<details><summary class="small">Chat with Pip before this message</summary><pre class="diag">${esc(t.transcript)}</pre></details>` : ""}
-      </div>`).join("")
-      : `<div class="empty"><h2>No customer messages</h2><p>When a shopper asks Pip for a person (offers, bulk buys, anything Pip can't do), their message lands here with the chat that led to it.</p></div>`;
+      </div>`;
+    }).join("")
+      : `<div class="empty"><h2>No customer messages</h2><p>Offers on cards, cards people want to sell or trade to you, requests for cards you don't have, and anything a shopper asks Pip to pass on all land here.</p></div>`;
   } else if (mjcTab === "pricing") {
     const p = await getJSON("/api/pricing");
     const s = p.settings;
@@ -633,6 +648,7 @@ async function loadMjc() {
           <label>Support email<input name="supportEmail" type="email" value="${esc(st.supportEmail || "")}" placeholder="you@yourdomain.com"></label>
           <label>Shipping charge $<input name="shippingFlat" type="number" min="0" step="0.01" value="${esc(st.shippingFlat ?? "")}" placeholder="e.g. 4.99"></label>
           <label>Free shipping over $<input name="freeShippingOver" type="number" min="0" step="1" value="${esc(st.freeShippingOver ?? "")}" placeholder="blank = never free"></label>
+          <label class="span2">About the shop <span class="muted">(the website's front page and its policies page show this; Pip uses it too)</span><textarea name="about" rows="3" placeholder="e.g. A father-and-son card shop out of Michigan. We buy, grade and sell sports cards — every card is photographed and priced from recent sold prices.">${esc(st.about || "")}</textarea></label>
           <label class="span2">Shipping details<textarea name="shipping" rows="2" placeholder="e.g. Ships within 1 business day in a top loader + bubble mailer, tracked. Cards over $250 ship insured with signature.">${esc(st.shipping || "")}</textarea></label>
           <label class="span2">Returns<textarea name="returns" rows="2" placeholder="e.g. Raw cards: returns within 14 days if not as described. Graded slabs: returnable only if damaged in transit.">${esc(st.returns || "")}</textarea></label>
           <label class="span2">Other policies &amp; facts for Pip<textarea name="policies" rows="5" placeholder="Payment methods, whether you buy collections, grading services, local pickup, card shows you'll be at, how to make an offer…">${esc(st.policies || "")}</textarea></label>
@@ -650,7 +666,29 @@ async function loadMjc() {
     const r = await fetch("/api/mjc/orders/" + el.dataset.id, json("PATCH", { status: $("[data-st]", el).value, carrier: $("[data-carrier]", el).value, tracking: $("[data-track]", el).value }));
     toast(r.ok ? "Saved — the customer can see it when they check their order" : (await r.json()).error, { error: !r.ok });
   }));
-  $$("#invBody .ticket").forEach((el) => { const b = $("[data-close]", el); if (b) b.onclick = async () => { await fetch("/api/mjc/tickets/" + el.dataset.id, json("PATCH", { status: "closed" })); loadMjc(); }; });
+  $$("#invBody .ticket").forEach((el) => {
+    const t = mjcTickets.find((x) => x.id === el.dataset.id);
+    const b = $("[data-close]", el);
+    if (b) b.onclick = async () => { await fetch("/api/mjc/tickets/" + el.dataset.id, json("PATCH", { status: "closed" })); loadMjc(); };
+    const acc = $("[data-accept]", el);
+    if (acc) acc.onclick = async () => {
+      const amount = t.amount;
+      if (!confirm(`Set this card's website price to $${amount} (fixed) so the buyer can check out at that price?\n\nAnyone on the site will see $${amount} — switch the card back to Automatic price later if they don't buy.`)) return;
+      const r = await fetch("/api/inventory/" + t.cardId, json("PATCH", { webMode: "fixed", webFixedPrice: amount }));
+      if (!r.ok) return toast((await r.json()).error || "That card isn't in your inventory anymore.", { error: true });
+      await fetch("/api/mjc/tickets/" + el.dataset.id, json("PATCH", { status: "answered" }));
+      const site = m.remote?.siteUrl || "";
+      location.href = `mailto:${t.email}?subject=${encodeURIComponent("Your offer was accepted")}&body=${encodeURIComponent(`Hi${t.name ? " " + t.name.split(" ")[0] : ""},\n\nGood news — we accepted your offer of $${amount} on ${t.cardTitle}. It's now $${amount} on our site${site ? `: ${site}/card/${encodeURIComponent(t.cardId)}/x` : ""}.\n\nWhoever checks out first gets it, so grab it soon.\n\n— MJC`)}`;
+      toast(`Website price set to $${amount} — it goes up within a minute`);
+      setTimeout(loadMjc, 800);
+    };
+    const want = $("[data-want]", el);
+    if (want) want.onclick = async () => {
+      const r = await fetch("/api/wantlist", json("POST", { name: t.message.slice(0, 200), maxPrice: t.maxPrice || null, notes: `Website request ${t.id} from ${t.email}` }));
+      toast(r.ok ? "Added to your want list" : "Couldn't add it", { error: !r.ok });
+      if (r.ok) { await fetch("/api/mjc/tickets/" + el.dataset.id, json("PATCH", { status: "answered" })); loadMjc(); }
+    };
+  });
   const pf = $("#invBody [data-pricing]");
   if (pf) {
     pf.onsubmit = async (e) => { e.preventDefault(); const f = Object.fromEntries(new FormData(pf)); f.enabled = pf.elements.enabled.checked; await fetch("/api/pricing/settings", json("PUT", f)); toast("Pricing settings saved"); loadMjc(); };

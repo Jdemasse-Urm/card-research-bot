@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.5.0 — the MJC store's new services, in your inbox
+
+- **Offers**: shoppers can make an offer on any website card. It arrives in Inventory → MJC store →
+  Messages with the amount and the list price. **Accept** sets that card's website price to the offer and
+  opens an email to the buyer with the link; **Counter** opens a ready-to-edit reply.
+- **Sell or trade to us**: shoppers send a description, how many cards, an asking price and up to 4 photos.
+  The photos are copied to this computer and shown in Messages (they're never public on the site).
+- **Card requests**: "find me this card" requests arrive in Messages; **Add to want list** puts them on your
+  want list with the shopper's max price.
+- **About the shop** (MJC store → Setup): your own words for the website's front page, its policies page
+  and Pip. Shipping, returns and policy text now keep their paragraphs.
+- **Faster website photos**: each listing photo also gets a small copy for the shop grid (the full photo
+  still shows on the card page).
+- Alerts name what came in ("Offer of $230 on …", "Cards to sell or trade to you", "Card request").
+
 ## 3.4.0 — the pricing engine and the AI, made dependable (10-10 on performance + service)
 
 **Major**

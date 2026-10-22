@@ -708,6 +708,10 @@ app.post("/api/inventory/:id/photos", (req, res) => {
   const f = mjc.photoPath(row.id, file);
   fs.mkdirSync(path.dirname(f), { recursive: true });
   fs.writeFileSync(f, buf);
+  // The small copy for the website's grid (optional — older photos simply have none).
+  const t = String(req.body?.thumb || "").match(/^(?:data:image\/jpeg;base64,)?([A-Za-z0-9+/=]+)$/);
+  const tbuf = t ? Buffer.from(t[1], "base64") : null;
+  if (tbuf && tbuf.length > 100 && tbuf.length < 1e6 && tbuf[0] === 0xff && tbuf[1] === 0xd8) fs.writeFileSync(mjc.photoPath(row.id, mjc.thumbName(file)), tbuf);
   const updated = store.setEngineFields(row.id, { photos: [...(row.photos || []), file] });
   if (row.web) mjc.scheduleSync();
   res.json({ ok: true, file, photos: updated.photos });
@@ -717,9 +721,11 @@ app.delete("/api/inventory/:id/photos/:file", (req, res) => {
   const row = store.inventory().find((r) => r.id === req.params.id);
   if (!row) return res.status(404).json({ error: "not found" });
   const photos = (row.photos || []).filter((x) => x !== req.params.file);
-  try {
-    fs.unlinkSync(mjc.photoPath(row.id, req.params.file));
-  } catch {}
+  for (const f of [req.params.file, mjc.thumbName(req.params.file)]) {
+    try {
+      fs.unlinkSync(mjc.photoPath(row.id, f));
+    } catch {}
+  }
   store.setEngineFields(row.id, { photos });
   if (row.web) mjc.scheduleSync();
   res.json({ ok: true, photos });
@@ -797,9 +803,10 @@ app.put("/api/mjc/store", async (req, res) => {
     supportEmail: store.clean.str(b.supportEmail, 254),
     shippingFlat: store.clean.money(b.shippingFlat) ?? 0,
     freeShippingOver: store.clean.money(b.freeShippingOver),
-    shipping: store.clean.str(b.shipping, 1000),
-    returns: store.clean.str(b.returns, 2000),
-    policies: store.clean.str(b.policies, 8000),
+    about: store.clean.text(b.about, 1500),
+    shipping: store.clean.text(b.shipping, 1000),
+    returns: store.clean.text(b.returns, 2000),
+    policies: store.clean.text(b.policies, 8000),
     checkoutEnabled: Boolean(b.checkoutEnabled),
   };
   try {
@@ -841,6 +848,12 @@ app.patch("/api/mjc/orders/:id", async (req, res) => {
 });
 
 app.get("/api/mjc/tickets", (_req, res) => res.json(mjc.localTickets()));
+app.get("/api/mjc/tickets/:id/photos/:n", (req, res) => {
+  const f = mjc.ticketPhotoPath(req.params.id, req.params.n);
+  if (!fs.existsSync(f)) return res.status(404).end();
+  res.setHeader("Cache-Control", "private, max-age=86400");
+  res.sendFile(f);
+});
 app.patch("/api/mjc/tickets/:id", async (req, res) => {
   try {
     await mjc.updateTicket(req.params.id, store.clean.oneOf(req.body?.status, ["open", "answered", "closed"], "answered"));
@@ -891,7 +904,8 @@ async function pullMjc() {
     await mjc.pullTickets({
       onTicket: (t) => {
         tickets++;
-        store.addAlert({ kind: "ticket", name: `Message from ${t.name || t.email}`, text: t.message.slice(0, 140) });
+        const what = { offer: `Offer of $${t.amount} on ${t.cardTitle}`, sell: "Cards to sell or trade to you", want: "Card request" }[t.kind] || "Message";
+        store.addAlert({ kind: "ticket", name: `${what} from ${t.name || t.email}`, text: t.message.slice(0, 140) });
       },
     });
     return { orders, tickets };

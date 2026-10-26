@@ -400,15 +400,32 @@ app.post("/api/lookup", (req, res) => {
   });
 });
 
+// Lot / binder page / bulk scan. Bulk scan sends a key per scanned file: each file's cards are kept
+// ("scan-queue") so re-opening the same folder after a pause or a crash never pays the AI twice.
 app.post("/api/lot", (req, res) => {
-  const images = cleanImages(req.body?.images, 6);
+  const images = cleanImages(req.body?.images, 10);
   if (!images.length) return res.status(400).json({ error: "Drop a photo of the lot or binder page." });
+  const keys = Array.isArray(req.body?.keys) ? req.body.keys.slice(0, images.length).map((k) => String(k).slice(0, 300)) : [];
   streamJob(req, res, async (send, signal) => {
     const lot = await lotLookup({ images, text: String(req.body?.text || "").slice(0, 1000) }, { onEvent: send, signal });
     for (const c of lot.cards) c.wanted = wantMatches(c.url, c.grade, c.name);
-    log(req, `valued a lot of ${lot.cards.length} cards ($${lot.total})`);
+    if (keys.length === images.length) {
+      const q = store.load("scan-queue", {});
+      const at = new Date().toISOString();
+      keys.forEach((k, i) => (q[k] = { at, cards: lot.cards.filter((c) => c.photo === i + 1) }));
+      // a month of scans at most, newest kept
+      store.save("scan-queue", Object.fromEntries(Object.entries(q).filter(([, v]) => Date.now() - Date.parse(v.at) < 30 * 86400000).slice(-5000)));
+      log(req, `scanned ${images.length} file${images.length === 1 ? "" : "s"}: ${lot.cards.length} cards`);
+    } else log(req, `valued a lot of ${lot.cards.length} cards ($${lot.total})`);
     return { lot };
   });
+});
+app.get("/api/scan", (_req, res) => res.json(store.load("scan-queue", {})));
+app.delete("/api/scan", (req, res) => {
+  const keys = Array.isArray(req.body?.keys) ? new Set(req.body.keys.map(String)) : null;
+  const q = store.load("scan-queue", {});
+  store.save("scan-queue", keys ? Object.fromEntries(Object.entries(q).filter(([k]) => !keys.has(k))) : {});
+  res.json({ ok: true });
 });
 
 app.post("/api/listing", (req, res) => {
@@ -444,7 +461,7 @@ app.get("/api/owned", (req, res) => {
   const url = store.clean.url(req.query.url);
   const grade = store.clean.str(req.query.grade, 30) || "Raw";
   res.json({
-    owned: url ? store.inventory().filter((r) => r.priceUrl === url && r.status !== "sold") : [],
+    owned: url ? store.inventoryView().filter((r) => r.priceUrl === url && r.status !== "sold") : [],
     wanted: wantMatches(url, grade, store.clean.str(req.query.name)),
   });
 });
@@ -650,7 +667,127 @@ app.post("/api/alerts/seen", (_req, res) => {
 
 // ---------------- inventory ----------------
 
-app.get("/api/inventory", (_req, res) => res.json(store.inventory()));
+// The Stock list: every card, slimmed for the table (no long text, no per-photo URL maps), with a short value
+// trend instead of the full history. The editor fetches the full card (GET /api/inventory/:id).
+app.get("/api/inventory", (_req, res) => {
+  const h = store.historyView();
+  const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  res.json(store.inventoryView().map(({ photoUrls, thumbUrls, webDescription, ...r }) => {
+    const v = h[r.id]?.v;
+    const base = v ? [...v].reverse().find(([d]) => d <= since) : null;
+    const last = v?.[v.length - 1];
+    return {
+      ...r,
+      ...(v?.length > 2 ? { spark: v.slice(-30).map(([, x]) => x) } : {}),
+      ...(base && last && base[1] > 0 && base[0] !== last[0] ? { trend30: Math.round(((last[1] - base[1]) / base[1]) * 1000) / 1000 } : {}),
+      ...(h[r.id]?.p?.length ? { lastPriceReason: h[r.id].p.at(-1).reason } : {}),
+      ...(webDescription ? { hasDescription: true } : {}),
+    };
+  }));
+});
+
+// ---- organising the inventory: bulk edit (+undo), cost splits, merges, locations, stock counts, data check, views
+app.post("/api/inventory/bulk", (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String).slice(0, 20000) : [];
+  const patch = req.body?.patch || {};
+  if (!ids.length) return res.status(400).json({ error: "Select some cards first." });
+  const r = store.updateMany(ids, patch, who(req));
+  const what = Object.keys(patch).filter((k) => patch[k] !== undefined && patch[k] !== "").join(", ");
+  log(req, `changed ${r.updated} card${r.updated === 1 ? "" : "s"} at once (${what})`);
+  if ("web" in patch) {
+    // one pricing pass for the whole batch, then one sync (the old per-card loop ran the engine per card)
+    if (patch.web) pricingJob.run({ ids }).then(() => mjc.scheduleSync()).catch(() => {});
+    else mjc.scheduleSync();
+  } else mjc.scheduleSync();
+  res.json(r);
+});
+app.post("/api/inventory/bulk/undo", (req, res) => {
+  if (!store.undoBulk(String(req.body?.token || ""))) return res.status(404).json({ error: "That change can't be undone anymore." });
+  log(req, "undid a bulk change");
+  mjc.scheduleSync();
+  res.json({ ok: true });
+});
+// Paid one price for a lot: spread it over the cards by what each is worth (equal shares when nothing is valued).
+app.post("/api/inventory/split-cost", (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+  const total = store.clean.money(req.body?.total);
+  if (!ids.length || !(total >= 0)) return res.status(400).json({ error: "Select the cards and enter what you paid for all of them." });
+  const rows = store.inventory().filter((r) => ids.includes(r.id));
+  const worth = (r) => (r.value ?? r.webMarket ?? 0) * r.qty;
+  const sum = rows.reduce((n, r) => n + worth(r), 0);
+  const units = rows.reduce((n, r) => n + r.qty, 0);
+  const patches = rows.map((r) => ({ id: r.id, cost: Math.round(((sum > 0 ? (total * worth(r)) / sum : (total * r.qty) / units) / r.qty) * 100) / 100 }));
+  const out = store.updateEach(patches, who(req));
+  log(req, `split $${total} across ${rows.length} cards by value`);
+  res.json({ ...out, byValue: sum > 0 });
+});
+app.post("/api/inventory/merge", (req, res) => {
+  const r = store.mergeRows(Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [], who(req));
+  if (!r) return res.status(400).json({ error: "Pick at least two cards that are still in stock." });
+  log(req, `merged ${r.merged + 1} rows of ${r.kept.name} into one (qty ${r.kept.qty})`);
+  mjc.scheduleSync();
+  res.json(r);
+});
+app.get("/api/inventory/locations", (_req, res) => res.json(store.locations()));
+// Stock count: what was scanned in a box vs what the records say is in it.
+app.post("/api/inventory/count", (req, res) => {
+  const loc = store.clean.str(req.body?.location, 80);
+  const skus = [...new Set((Array.isArray(req.body?.skus) ? req.body.skus : []).map((x) => String(x).trim().toLowerCase()).filter(Boolean))];
+  const inv = store.inventoryView();
+  const bySku = new Map(inv.filter((r) => r.sku).map((r) => [r.sku.toLowerCase(), r]));
+  const brief = (r) => ({ id: r.id, name: r.name, grade: r.grade, sku: r.sku, location: r.location || "", status: r.status, qty: r.qty });
+  const scanned = skus.map((k) => bySku.get(k)).filter(Boolean);
+  const scannedIds = new Set(scanned.map((r) => r.id));
+  res.json({
+    found: scanned.filter((r) => (r.location || "") === loc && r.status !== "sold").map(brief),
+    extra: scanned.filter((r) => (r.location || "") !== loc || r.status === "sold").map(brief),
+    missing: inv.filter((r) => (r.location || "") === loc && r.status !== "sold" && !scannedIds.has(r.id)).map(brief),
+    unknown: skus.filter((k) => !bySku.has(k)),
+  });
+});
+app.post("/api/inventory/count/apply", (req, res) => {
+  const loc = store.clean.str(req.body?.location, 80);
+  const ids = (a) => (Array.isArray(a) ? a.map(String) : []);
+  const counted = store.markCounted([...ids(req.body?.found), ...ids(req.body?.moveHere)], loc, who(req));
+  let missing = 0;
+  if (ids(req.body?.missing).length) missing = store.updateMany(ids(req.body.missing), { location: `Not found (count ${new Date().toISOString().slice(0, 10)})` }, who(req)).updated;
+  log(req, `counted ${loc || "the unlabelled cards"}: ${counted.counted} found${counted.moved ? `, ${counted.moved} moved here` : ""}${missing ? `, ${missing} not found` : ""}`);
+  res.json({ ...counted, missing });
+});
+app.get("/api/inventory/check", (_req, res) => res.json(store.dataCheck()));
+app.post("/api/inventory/check/fix", (req, res) => {
+  try {
+    const r = store.fixData(String(req.body?.type || ""), who(req));
+    log(req, `fixed ${r.fixed} record${r.fixed === 1 ? "" : "s"} (${req.body?.type})`);
+    if (req.body?.type === "webSold") mjc.scheduleSync();
+    res.json(r);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+// Saved views (filters with a name), shared by every computer using this bot.
+app.get("/api/inventory/views", (_req, res) => res.json(store.load("saved-views", [])));
+app.put("/api/inventory/views", (req, res) => {
+  const views = (Array.isArray(req.body) ? req.body : []).slice(0, 40).map((v) => ({
+    name: store.clean.str(v.name, 40) || "View",
+    filter: Object.fromEntries(Object.entries(v.filter || {}).filter(([k]) => ["q", "status", "category", "sort", "location", "group"].includes(k)).map(([k, x]) => [k, store.clean.str(x, 120)])),
+  }));
+  store.save("saved-views", views);
+  res.json(views);
+});
+// Duplicate check for hand-added cards: same name + grade already in stock?
+app.get("/api/inventory/duplicate", (req, res) => {
+  const name = stripGrade(req.query.name).toLowerCase(), grade = String(req.query.grade || "Raw").toUpperCase();
+  const hit = name && store.inventoryView().find((r) => r.status !== "sold" && stripGrade(r.name).toLowerCase() === name && String(r.grade).toUpperCase() === grade);
+  res.json(hit || null);
+});
+
+// One card in full, with its history (the editor). Keep every static /api/inventory/<word> GET above this.
+app.get("/api/inventory/:id", (req, res) => {
+  const row = store.inventoryView().find((r) => r.id === req.params.id);
+  if (!row) return res.status(404).json({ error: "not found" });
+  res.json({ ...row, history: store.cardHistory(row.id) });
+});
 
 app.post("/api/inventory", (req, res) => {
   const b = req.body || {};
@@ -670,8 +807,8 @@ app.post("/api/inventory", (req, res) => {
 });
 
 app.patch("/api/inventory/:id", (req, res) => {
-  const before = store.inventory().find((r) => r.id === req.params.id);
-  const row = store.updateInventory(req.params.id, req.body || {});
+  const before = store.inventoryView().find((r) => r.id === req.params.id);
+  const row = store.updateInventory(req.params.id, req.body || {}, who(req));
   if (!row) return res.status(404).json({ error: "not found" });
   if (before && before.status !== "sold" && row.status === "sold") log(req, `sold ${row.name} for $${row.soldPrice ?? "?"}${row.soldOn ? " on " + row.soldOn : ""}`);
   else if (before && before.status !== row.status) log(req, `marked ${row.name} as ${row.status.replace("_", " ")}`);
@@ -751,21 +888,47 @@ app.get("/api/photos/:id/:file", (req, res) => {
   res.sendFile(f);
 });
 
-app.post("/api/inventory/:id/photos", (req, res) => {
-  const row = store.inventory().find((r) => r.id === req.params.id);
-  if (!row) return res.status(404).json({ error: "not found" });
-  const m = String(req.body?.data || "").match(/^(?:data:image\/jpeg;base64,)?([A-Za-z0-9+/=]+)$/);
-  const buf = m ? Buffer.from(m[1], "base64") : null;
-  if (!buf || buf.length < 100 || buf.length > 4.5e6 || buf[0] !== 0xff || buf[1] !== 0xd8) return res.status(400).json({ error: "Send a JPEG photo under 4.5 MB." });
-  if ((row.photos || []).length >= 8) return res.status(400).json({ error: "Up to 8 photos per card." });
+/** Write one JPEG (+ its small website copy) for a card; returns the file name, or null if it isn't a usable JPEG. */
+function writePhoto(rowId, data, thumb) {
+  const jpeg = (v, max) => {
+    const m = String(v || "").match(/^(?:data:image\/jpeg;base64,)?([A-Za-z0-9+/=]+)$/);
+    const b = m ? Buffer.from(m[1], "base64") : null;
+    return b && b.length > 100 && b.length < max && b[0] === 0xff && b[1] === 0xd8 ? b : null;
+  };
+  const buf = jpeg(data, 4.5e6);
+  if (!buf) return null;
   const file = `${store.newId()}.jpg`;
-  const f = mjc.photoPath(row.id, file);
+  const f = mjc.photoPath(rowId, file);
   fs.mkdirSync(path.dirname(f), { recursive: true });
   fs.writeFileSync(f, buf);
   // The small copy for the website's grid (optional — older photos simply have none).
-  const t = String(req.body?.thumb || "").match(/^(?:data:image\/jpeg;base64,)?([A-Za-z0-9+/=]+)$/);
-  const tbuf = t ? Buffer.from(t[1], "base64") : null;
-  if (tbuf && tbuf.length > 100 && tbuf.length < 1e6 && tbuf[0] === 0xff && tbuf[1] === 0xd8) fs.writeFileSync(mjc.photoPath(row.id, mjc.thumbName(file)), tbuf);
+  const tbuf = jpeg(thumb, 1e6);
+  if (tbuf) fs.writeFileSync(mjc.photoPath(rowId, mjc.thumbName(file)), tbuf);
+  return file;
+}
+
+// Many new cards in one write, each with its photos (bulk scan). Up to 40 per request.
+app.post("/api/inventory/many", (req, res) => {
+  const items = (Array.isArray(req.body?.items) ? req.body.items : []).slice(0, 40);
+  if (!items.length) return res.status(400).json({ error: "No cards to add." });
+  const by = who(req);
+  const rows = store.addInventoryMany(items.map(({ photos, ...it }) => ({ ...it, addedBy: by })));
+  const patches = [];
+  rows.forEach((row, i) => {
+    const files = (Array.isArray(items[i].photos) ? items[i].photos : []).slice(0, 8).map((p) => writePhoto(row.id, p?.data, p?.thumb)).filter(Boolean);
+    if (files.length) patches.push({ id: row.id, photos: files });
+  });
+  store.setEngineFieldsMany(patches);
+  log(req, `added ${rows.length} scanned card${rows.length === 1 ? "" : "s"} to inventory`);
+  res.json({ added: rows.length, rows: rows.map((r) => ({ id: r.id, sku: r.sku, name: r.name })) });
+});
+
+app.post("/api/inventory/:id/photos", (req, res) => {
+  const row = store.inventoryView().find((r) => r.id === req.params.id);
+  if (!row) return res.status(404).json({ error: "not found" });
+  if ((row.photos || []).length >= 8) return res.status(400).json({ error: "Up to 8 photos per card." });
+  const file = writePhoto(row.id, req.body?.data, req.body?.thumb);
+  if (!file) return res.status(400).json({ error: "Send a JPEG photo under 4.5 MB." });
   const updated = store.setEngineFields(row.id, { photos: [...(row.photos || []), file] });
   if (row.web) mjc.scheduleSync();
   res.json({ ok: true, file, photos: updated.photos });
@@ -1185,7 +1348,7 @@ app.get("/api/analytics", (req, res) => {
 // ---------------- dashboard + activity ----------------
 
 app.get("/api/dashboard", (_req, res) => {
-  const inv = store.inventory();
+  const inv = store.inventoryView();
   const stock = inv.filter((r) => r.status !== "sold");
   const port = store.portfolio();
   const value = stock.reduce((n, r) => n + (r.value ?? r.cost ?? 0) * r.qty, 0);
@@ -1241,7 +1404,7 @@ app.get("/api/activity", (_req, res) => res.json(store.activity(100)));
 // ---------------- export / backup ----------------
 
 app.get("/api/export/inventory.csv", (_req, res) => {
-  sendCsv(res, "inventory", csv(store.inventory(), [
+  sendCsv(res, "inventory", csv(store.inventoryView(), [
     ["SKU", (r) => r.sku], ["Card", (r) => r.name], ["Category", (r) => r.category], ["Grade", (r) => r.grade], ["Qty", (r) => r.qty],
     ["Cost each", (r) => r.cost], ["Value each", (r) => r.value], ["Unrealized P/L", (r) => (r.value != null && r.status !== "sold" ? ((r.value - r.cost) * r.qty).toFixed(2) : "")],
     ["Status", (r) => r.status], ["Listed on", (r) => r.listedOn], ["List price", (r) => r.listPrice], ["Location", (r) => r.location], ["Tags", (r) => (r.tags || []).join("; ")],
@@ -1269,7 +1432,7 @@ app.get("/api/export/watchlist.csv", (_req, res) => {
 });
 
 app.get("/api/export/sales.csv", (_req, res) => {
-  sendCsv(res, "sales", csv(store.inventory().filter((r) => r.status === "sold"), [
+  sendCsv(res, "sales", csv(store.inventoryView().filter((r) => r.status === "sold"), [
     ["Sold date", (r) => r.soldDate], ["Card", (r) => r.name], ["Grade", (r) => r.grade], ["Qty", (r) => r.qty], ["Sold on", (r) => r.soldOn], ["Sold price each", (r) => r.soldPrice],
     ["Cost each", (r) => r.cost], ["Fees", (r) => feeFor(r)], ["Profit", (r) => ((r.soldPrice - r.cost) * r.qty - feeFor(r)).toFixed(2)], ["Purchased", (r) => r.purchased], ["SKU", (r) => r.sku],
   ]));
@@ -1322,7 +1485,7 @@ app.post("/api/restore", (req, res) => {
 // Year summary for taxes: every sale line, then every expense line, then totals.
 app.get("/api/export/tax.csv", (req, res) => {
   const year = /^\d{4}$/.test(String(req.query.year || "")) ? String(req.query.year) : new Date().getFullYear().toString();
-  const sold = store.inventory().filter((r) => r.status === "sold" && r.soldPrice != null && (r.soldDate || r.added).startsWith(year));
+  const sold = store.inventoryView().filter((r) => r.status === "sold" && r.soldPrice != null && (r.soldDate || r.added).startsWith(year));
   const exps = store.expenses().filter((e) => e.date.startsWith(year));
   const lines = [
     ...sold.map((r) => ({ date: r.soldDate, type: "Sale", item: `${r.name} (${r.grade}) x${r.qty}`, where: r.soldOn || "", gross: r.soldPrice * r.qty, cogs: (r.cost || 0) * r.qty, fees: feeFor(r), expense: "" })),
@@ -1413,13 +1576,6 @@ app.post("/api/inventory/find-prices", async (req, res) => {
   res.json({ attached, review, remaining: Math.max(0, store.inventory().filter((r) => !r.priceUrl && r.status !== "sold").length - review.length) });
 });
 
-// Duplicate check for hand-added cards: same name + grade already in stock?
-app.get("/api/inventory/duplicate", (req, res) => {
-  const name = stripGrade(req.query.name).toLowerCase(), grade = String(req.query.grade || "Raw").toUpperCase();
-  const hit = name && store.inventory().find((r) => r.status !== "sold" && stripGrade(r.name).toLowerCase() === name && String(r.grade).toUpperCase() === grade);
-  res.json(hit || null);
-});
-
 // Lot: a card was misread — re-price it from a corrected name without re-running the AI.
 app.post("/api/lot/reprice", async (req, res) => {
   const name = store.clean.str(req.body?.name), grade = store.clean.str(req.body?.grade, 30) || "Raw", category = store.clean.str(req.body?.category, 20) || "other";
@@ -1493,7 +1649,7 @@ app.post("/api/trade", async (req, res) => {
 app.get("/api/attention", (_req, res) => {
   const days = (iso) => (iso ? Math.round((Date.now() - Date.parse(iso)) / 86400000) : null);
   const items = [];
-  for (const r of store.inventory()) {
+  for (const r of store.inventoryView()) {
     if (r.status === "sold") continue;
     const base = r.listPrice ?? r.value;
     if (r.status === "listed") {
@@ -1508,8 +1664,8 @@ app.get("/api/attention", (_req, res) => {
     }
     if (r.value != null && r.cost > 0 && r.value < r.cost * 0.85) items.push({ type: "value_drop", id: r.id, name: r.name, grade: r.grade, pct: Math.round((1 - r.value / r.cost) * 100), text: `Worth ${Math.round((1 - r.value / r.cost) * 100)}% less than you paid (${usdText(r.cost)} → ${usdText(r.value)})` });
   }
-  const unpriced = store.inventory().filter((r) => !r.priceUrl && r.status !== "sold").length;
-  const stale = store.inventory().filter((r) => r.priceUrl && r.status !== "sold" && (!r.valuedAt || days(r.valuedAt) > 7)).length;
+  const unpriced = store.inventoryView().filter((r) => !r.priceUrl && r.status !== "sold").length;
+  const stale = store.inventoryView().filter((r) => r.priceUrl && r.status !== "sold" && (!r.valuedAt || days(r.valuedAt) > 7)).length;
   res.json({ items: items.slice(0, 30), unpriced, staleValues: stale });
 });
 const usdText = (n) => (n == null ? "—" : "$" + Number(n).toLocaleString("en-US", { maximumFractionDigits: n < 100 ? 2 : 0 }));
@@ -1531,7 +1687,7 @@ app.get("/api/search", (req, res) => {
   if (q.length < 2) return res.json({ inventory: [], lookups: [], watchlist: [], wantlist: [] });
   const has = (...fields) => fields.some((f) => String(f || "").toLowerCase().includes(q));
   res.json({
-    inventory: store.inventory().filter((r) => has(r.name, r.sku, r.location, (r.tags || []).join(" "), r.notes)).slice(0, 8).map((r) => ({ id: r.id, name: r.name, grade: r.grade, status: r.status, value: r.value, sku: r.sku })),
+    inventory: store.inventoryView().filter((r) => has(r.name, r.sku, r.location, (r.tags || []).join(" "), r.notes)).slice(0, 8).map((r) => ({ id: r.id, name: r.name, grade: r.grade, status: r.status, value: r.value, sku: r.sku })),
     lookups: store.load("lookups", []).filter((r) => has(r.card?.name, r.card?.player_or_character)).slice(0, 8).map((r) => ({ id: r.id, name: r.card?.name, value: r.pricing?.estimated_value_usd, at: r.at })),
     watchlist: store.watchlist().filter((w) => has(w.card?.name)).slice(0, 5).map((w) => ({ id: w.id, name: w.card?.name })),
     wantlist: store.wantlist().filter((w) => has(w.name)).slice(0, 5).map((w) => ({ id: w.id, name: w.name, grade: w.grade, maxPrice: w.maxPrice })),
@@ -1543,12 +1699,12 @@ app.get("/api/search", (req, res) => {
 app.post("/api/advisor", (req, res) => {
   streamJob(req, res, async (send, signal) => {
     const days = (iso) => (iso ? Math.round((Date.now() - Date.parse(iso)) / 86400000) : null);
-    const inventory = store.inventory().filter((r) => r.status !== "sold")
+    const inventory = store.inventoryView().filter((r) => r.status !== "sold")
       .sort((a, b) => (b.value ?? b.cost ?? 0) * b.qty - (a.value ?? a.cost ?? 0) * a.qty)
       .map((r) => ({ card: `${r.name} (${r.grade})`, qty: r.qty, paid: r.cost, value: r.value, status: r.status, days_held: days(r.purchased ? r.purchased + "T12:00:00" : r.added), ...(r.status === "listed" ? { listed_on: r.listedOn, list_price: r.listPrice, listed_days: days(r.listedAt || r.added) } : {}) }));
     if (!inventory.length) throw new Error("Add some cards to Inventory first — the advisor works from what you own.");
     const hot = store.load("hot", {});
-    const recentSales = store.inventory().filter((r) => r.status === "sold").slice(-10).map((r) => ({ card: r.name, paid: r.cost, sold: r.soldPrice, on: r.soldOn, date: r.soldDate }));
+    const recentSales = store.inventoryView().filter((r) => r.status === "sold").slice(-10).map((r) => ({ card: r.name, paid: r.cost, sold: r.soldPrice, on: r.soldOn, date: r.soldDate }));
     const result = await adviseInventory({ inventory, movers: { week: store.movers(7).slice(0, 10), month: store.movers(30).slice(0, 10) }, hot: hot["all:weekly"] || hot["all:daily"] || null, recentSales }, { onEvent: send, signal });
     const advice = { at: new Date().toISOString(), by: who(req), cards: inventory.length, ...result };
     store.saveAdvice(advice);
@@ -1618,6 +1774,19 @@ async function hourly() {
   const lastPoint = store.portfolio().slice(-1)[0];
   if (!lastPoint || lastPoint.date !== new Date().toISOString().slice(0, 10)) await revalueInventory();
   await refreshSubmissions();
+
+  // Daily data check: one alert a day when records need attention (duplicate SKUs, sold cards still on the website…).
+  const dayNow = new Date().toISOString().slice(0, 10);
+  if (store.load("check-state", {}).day !== dayNow) {
+    try {
+      const c = store.dataCheck();
+      const serious = c.issues.filter((i) => ["dupSku", "dupCard", "webSold", "soldNoPrice"].includes(i.type));
+      if (serious.length) store.addAlert({ kind: "check", name: "Inventory check", text: serious.map((i) => `${i.count} × ${i.title.toLowerCase()}`).join("; ") + ". Inventory → Data check fixes most of it in one click." });
+      store.save("check-state", { day: dayNow, issues: c.issues.length });
+    } catch (err) {
+      console.warn("data check failed:", err.message);
+    }
+  }
 
   // Daily website re-price (the pricing engine), then push the new prices to the MJC site.
   // A run that couldn't read the sold-price feed doesn't count as today's run — try again next hour.

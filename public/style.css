@@ -296,8 +296,25 @@ tr.best td { font-weight: 700; }
 .activity li { margin: .3rem 0; }
 
 /* inventory */
-.filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: .5rem; }
+.filters { display: grid; grid-template-columns: 2fr repeat(5, minmax(0, 1fr)) auto; gap: .5rem; align-items: center; }
+@media (max-width: 1100px) { .filters { grid-template-columns: 1fr 1fr 1fr; } .filters input { grid-column: span 3; } }
 @media (max-width: 760px) { .filters { grid-template-columns: 1fr 1fr; } .filters input { grid-column: span 2; } }
+/* inventory organising: quick views, groups, selection, compact rows, data check, bulk scan */
+.views { gap: .35rem; flex-wrap: wrap; margin: 0 0 .6rem; }
+.views button.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.saved-view { display: inline-flex; }
+.saved-view button + button { padding-left: .3rem; padding-right: .3rem; }
+tr.grp td { background: var(--chip); padding-top: .5rem; padding-bottom: .5rem; }
+tr.picked td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.inv-table.dense td { padding-top: .15rem; padding-bottom: .15rem; }
+.inv-table.dense td .small.muted { display: none; }
+.bulk { position: sticky; bottom: 0; background: var(--panel); padding: .5rem 0; border-top: 1px solid var(--line); flex-wrap: wrap; gap: .35rem; z-index: 1; }
+.check-item { border: 1px solid var(--line); border-radius: 10px; padding: .5rem .8rem; margin: .4rem 0; }
+.check-item.serious { border-color: color-mix(in srgb, var(--warn) 60%, var(--line)); }
+.check-item summary { cursor: pointer; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.scan-thumb { width: 64px; height: 88px; object-fit: contain; border-radius: 6px; background: var(--chip); display: block; }
+.scan-name { width: 100%; min-width: 16rem; }
+.scan-table td { vertical-align: middle; }
 .inv-table td { vertical-align: middle; }
 .chip.st-in_stock { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
 .chip.st-listed { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }

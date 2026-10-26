@@ -1,7 +1,7 @@
 {
   "name": "card-research-bot",
   "productName": "Card Research Bot",
-  "version": "3.7.0",
+  "version": "3.8.0",
   "description": "AI trading card research bot: drop a card photo, get recent sold prices, grading math, and the hottest cards by day/week/month.",
   "author": "Joseph DeMasse",
   "private": true,
@@ -80,7 +80,10 @@
       "icon": "build/icon.png",
       "identity": "-",
       "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "NSCameraUsageDescription": "Card Research Bot uses the camera to photograph cards for research and bulk scanning."
+      }
     },
     "dmg": {
       "artifactName": "CardResearchBot-${version}-Mac.${ext}",

@@ -1,5 +1,45 @@
 # Changelog
 
+## 3.8.0 — the inventory 10-10: scan the stack, organise it, and keep it fast
+
+**Major**
+- **📥 Bulk scan** (Inventory): choose a folder of scans (or files, or use a webcam / document camera) and every
+  card in every picture is found, cut out as its own photo, slab cert numbers read, and priced from recent
+  sales — up to 10 files per AI call. Check the list (unsure cards flagged, "have 2" when you already own it),
+  set the box and what you paid, and add them all at once. Pause, a quota stop or closing the app never pays
+  for the same file twice (what each file held is kept for a month). Duplex scanners: backs are paired as
+  each card's second photo.
+- **PSA slabs by barcode**: scan the cert barcode into Bulk scan → PSA's record gives the exact card and grade
+  (with the free PSA token). Slabs in a scanned picture are checked against PSA the same way.
+- **✎ Edit selected**: change location, status, category, grade, tags, cost, listing for any number of cards in
+  one step — with **Undo** (kept a week). Selection survives filters and "Show more"; "Select all N matching",
+  shift-click ranges, select a whole group.
+- **📍 Locations**: every box and binder with its cards, value and last count; open, rename, or **count** it.
+- **🔢 Stock count**: scan every label in a box → what's there, what's missing, what belongs elsewhere (and
+  cards scanned that are marked sold); apply moves the strays and can mark the missing ones "Not found".
+- **🩺 Data check**: duplicate SKUs, the same card on several rows, sold cards still on the website, sold without
+  a price, listed without a price, "at grading" without a submission, cost typos, website cards without a
+  photo, cards with no sales page — with one-click fixes, and a daily alert when something serious appears.
+- **Speed at 10,000 cards** (measured): the inventory file went from 104 MB to 4 MB; opening Stock reads it in
+  14 ms (was 387 ms) and the list sent to the screen is 5.8 MB (was 56 MB); an edit takes 31 ms (was 893 ms);
+  adding 1,000 cards takes 44 ms (was ~3 s). Value and price history moved to their own file; edits log to a
+  small change file.
+
+**Niche**
+- ⇉ **Merge** the same card kept on several rows into one (quantities added, cost averaged, Undo).
+- ÷ **Split lot cost** over the selected cards by value.
+- **Change history** in every card's editor (who changed what, when) and a value-over-time line.
+- **Quick views**: no sales page, stale value, on the website, listed 30+ days, no location, never counted, no
+  photo — with counts. **Saved views** shared by every computer.
+- **Group by** location / category / status / grade with subtotals; **Compact** rows; sort by 30-day trend
+  (▲/▼ % next to each value) or location.
+- **⬇ CSV** exports the selection or the current view, not just everything.
+- Keyboard: **N** add a card, **E** edit the selected cards, **F** search, **Esc** clear the selection.
+- "Sell on MJC" for many cards is one request and one pricing run (it was one per card).
+- Fix: cards added after 8 pm got tomorrow's date (the date was taken in UTC); sales recorded today were left
+  out of the website price before noon.
+- Mac: the camera permission text is set, so the camera works on a Mac.
+
 ## 3.7.0 — the website's new controls, in the app
 - **Setup switches for the website**: local pickup (with a note), promo codes, Stripe Tax, show/hide the demo
   parts of the site, the email list on/off, and your Instagram / eBay / Facebook / Whatnot / TikTok / YouTube

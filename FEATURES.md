@@ -65,7 +65,15 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Home dashboard | Inventory value, profit, "This week" (sales, profit after fees, best flip, cards added, website orders/offers/messages/visits), alerts, hottest cards, movers, recent lookups, who did what | 3.0 / 3.6 |
 | Watchlist | Price alerts, biggest movers (24h / 7d / 30d), buy-the-dip / at-peak badges, sparklines | 2.0 / 3.2 |
 | Search everything | Ctrl/⌘ + K across inventory, reports, watchlist, want list | 3.2 |
-| Big inventories | Stock draws 150 rows at a time | 3.6 |
+| Big inventories | Stock draws 150 rows at a time; at 10,000 cards a list opens in milliseconds and an edit takes ~30 ms (histories kept in their own files) | 3.6 / 3.8 |
+| Bulk scan | A folder of scans, files, or a webcam/document camera → every card found, cut out as its own photo, priced, slab certs read; review (unsure cards flagged, already-owned shown), set box + lot cost, add all; resumes without paying twice; duplex backs paired | 3.8 |
+| PSA slabs by barcode | Scan a slab's cert barcode → PSA's exact card + grade, priced, ready to add | 3.8 |
+| Bulk edit + Undo | Location, status, category, grade, tags, cost, listing for any number of cards; select all matching, shift-click, whole groups; Undo for a week | 3.8 |
+| Merge / split lot cost | The same card on several rows → one row (qty, averaged cost); spread what a lot cost over its cards by value | 3.8 |
+| Locations + stock count | Every box/binder with cards, value, last count; scan a box's labels → found / missing / belongs elsewhere; rename a box | 3.8 |
+| Data check | Duplicate SKUs, duplicate rows, sold-but-on-website, missing sold/list prices, grading without a submission, cost typos, website cards without photos, unpriced cards — one-click fixes and a daily alert | 3.8 |
+| Views | Quick views (no sales page, stale, on website, listed 30+ days, no location, never counted, no photo), saved views shared by both computers, group by with subtotals, compact rows, 30-day trend sort, CSV of the current view | 3.8 |
+| Change history | Who changed what on each card, when; value-over-time line in the editor | 3.8 |
 
 ## The MJC website connection
 

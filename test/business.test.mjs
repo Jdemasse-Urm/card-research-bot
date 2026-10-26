@@ -51,14 +51,15 @@ test("the daily re-value keeps a history; movers come from it", () => {
   const up = store.addInventory({ name: "Riser", grade: "PSA 10", qty: 2, cost: 50 });
   const down = store.addInventory({ name: "Faller", grade: "Raw", qty: 1, cost: 50 });
   store.recordValues([{ id: up.id, value: 100 }, { id: down.id, value: 80 }]);
-  // pretend the first values were recorded 10 days ago
-  const list = store.inventory();
+  // pretend the first values were recorded 10 days ago (the history lives in its own file, not the rows)
+  const h = store.history();
   const old = new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10);
-  for (const r of list) if (r.valueLog) r.valueLog = r.valueLog.map(([, v]) => [old, v]);
-  store.save("inventory", list);
+  for (const id of [up.id, down.id]) h[id].v = h[id].v.map(([, v]) => [old, v]);
+  store.saveHistory(h);
   assert.equal(store.recordValues([{ id: up.id, value: 130 }, { id: down.id, value: 60 }]), 2);
   assert.equal(find(up.id).value, 130);
-  assert.equal(find(up.id).valueLog.length, 2);
+  assert.equal(store.cardHistory(up.id).v.length, 2);
+  assert.equal(find(up.id).valueLog, undefined, "rows stay small");
   const m = store.stockMovers(7);
   assert.equal(m.up[0].name, "Riser");
   assert.equal(m.up[0].dollars, 60); // +$30 × 2 copies

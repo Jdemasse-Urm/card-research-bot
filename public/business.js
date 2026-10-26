@@ -8,7 +8,7 @@ const SELL_PLATFORMS = ["eBay", "TCGplayer", "Whatnot", "Facebook", "MJC site", 
 const webPrice = (r) => (r.webMode === "fixed" ? r.webFixedPrice : r.webPrice);
 const EXPENSE_KINDS = ["Supplies", "Shipping", "Grading", "Card show / table", "Fees", "Travel", "Software", "Other"];
 const COMPANIES = ["PSA", "BGS", "SGC", "CGC", "TAG", "Other"];
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD in local time (toISOString is UTC: tomorrow after 8 PM ET)
 const opts = (list, sel) => list.map((x) => `<option${x === sel ? " selected" : ""}>${esc(x)}</option>`).join("");
 
 // ------------------------------------------------------------------ small line chart (portfolio)
@@ -155,6 +155,8 @@ function syncInvPills() {
 async function loadInventory() {
   syncInvPills();
   if (invView === "stock") return loadStock();
+  if (invView === "scan") return loadScan();
+  if (invView === "locations") return loadLocations();
   if (invView === "grading") return loadGrading();
   if (invView === "sales") return loadSales();
   if (invView === "expenses") return loadExpenses();
@@ -167,31 +169,78 @@ TAB_LOADERS.inventory = loadInventory;
 // ------------------------------------------------------------------ STOCK
 
 let invRows = [];
-const invFilter = { q: "", status: "active", category: "", sort: "added" };
+// Filters are remembered on this computer (never the search box); a fresh install starts on "active".
+const invFilter = { status: "active", category: "", sort: "added", location: "", group: "", quick: "", ...store.get("invFilter", {}), q: "" };
+let invDense = store.get("invDense", false);
+const invSel = new Set(); // selected card ids — kept across redraws, filters and "Show more"
+let invViews = []; // named views anyone using this bot saved
 // Big inventories stay fast: draw this many rows, then "Show more".
 const PAGE = 150;
 let invLimit = PAGE;
+const NO_LOC = " none"; // the "No location" filter value (a real location can't start with a space)
+const SERIOUS = ["dupSku", "dupCard", "webSold", "soldNoPrice"];
+const ageDays = (iso) => (iso ? (Date.now() - Date.parse(iso)) / 86400000 : Infinity);
+const searchText = (r) => (r._s ??= [r.name, r.sku, r.location, r.grade, (r.tags || []).join(" "), r.notes].join(" ").toLowerCase());
+const byNumber = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+// One-click views for the jobs that come up every week.
+const QUICK = {
+  unpriced: ["💲 No sales page", (r) => r.status !== "sold" && !r.priceUrl],
+  stale: ["⏳ Value over a week old", (r) => r.status !== "sold" && r.priceUrl && ageDays(r.valuedAt) > 7],
+  web: ["🌐 On the website", (r) => r.web && r.status !== "sold"],
+  aged: ["🐢 Listed 30+ days", (r) => r.status === "listed" && ageDays(r.listedAt || r.added) > 30],
+  noloc: ["📍 No location", (r) => r.status !== "sold" && !r.location],
+  uncounted: ["🔢 Never counted", (r) => r.status !== "sold" && !r.countedAt],
+  nophoto: ["📷 No photo", (r) => r.status !== "sold" && !(r.photos || []).length],
+};
+const GROUPS = { "": "No grouping", location: "Group by location", category: "Group by category", status: "Group by status", grade: "Group by grade" };
+const groupLabel = (g, r) => (g === "location" ? (r.location ? "📍 " + r.location : "📍 No location") : g === "category" ? CAT_LABEL[r.category] || r.category : g === "status" ? STATUS_LABEL[r.status] : r.grade);
+const saveFilter = () => { const { q, ...keep } = invFilter; store.set("invFilter", keep); };
 
 async function loadStock() {
   $("#invActions").innerHTML = `
-    <button data-a="add">＋ Add card</button>
+    <button data-a="add" title="Shortcut: N">＋ Add card</button>
+    <button data-a="scan" title="Scan a stack or binder pages — every card found, cut out and priced">📥 Bulk scan</button>
     <button data-a="import">⬆ Import CSV</button>
     <button data-a="revalue">↻ Re-value</button>
     <button data-a="findprices" title="Link unpriced cards to their sales pages so they get valued">💲 Find prices</button>
-    <button data-a="labels">🏷 Print labels</button>
-    <a class="button" href="/api/export/inventory.csv">⬇ CSV</a>`;
+    <button data-a="labels" title="Labels for the selected cards, or every unsold card in this view">🏷 Print labels</button>
+    <button data-a="check" title="Duplicate SKUs, the same card on two rows, sold cards still on the website…">🩺 Data check <span data-checkn></span></button>
+    <button data-a="csv" title="The selected cards, or the cards in this view, as a spreadsheet">⬇ CSV</button>`;
   $("#invActions [data-a=add]").onclick = () => openItemEditor();
+  $("#invActions [data-a=scan]").onclick = () => { invView = "scan"; loadInventory(); };
   $("#invActions [data-a=import]").onclick = openImport;
-  $("#invActions [data-a=labels]").onclick = printLabels;
+  $("#invActions [data-a=labels]").onclick = () => printLabels(invSel.size ? [...invSel] : stockMatches().filter((r) => r.status !== "sold").map((r) => r.id));
   $("#invActions [data-a=findprices]").onclick = () => findPricesBulk(loadStock);
+  $("#invActions [data-a=check]").onclick = openDataCheck;
+  $("#invActions [data-a=csv]").onclick = () => exportRows(invSel.size ? invRows.filter((r) => invSel.has(r.id)) : stockMatches());
   $("#invActions [data-a=revalue]").onclick = async (e) => {
     e.target.disabled = true; e.target.textContent = "Re-valuing…";
     const r = await (await fetch("/api/inventory/refresh", { method: "POST" })).json();
     toast(`Updated ${r.updated} values from recent sales`);
     loadStock();
   };
-  invRows = await getJSON("/api/inventory");
+  [invRows, invViews] = await Promise.all([getJSON("/api/inventory"), getJSON("/api/inventory/views").catch(() => [])]);
+  const live = new Set(invRows.map((r) => r.id));
+  for (const id of invSel) if (!live.has(id)) invSel.delete(id);
   drawStock();
+  // the badge: problems that make the numbers or the website wrong (the full list is one click away)
+  getJSON("/api/inventory/check").then((c) => {
+    const n = c.issues.filter((i) => SERIOUS.includes(i.type)).reduce((k, i) => k + i.count, 0);
+    const el = $("#invActions [data-checkn]");
+    if (el && n) el.outerHTML = `<span class="chip warn" data-checkn>${n}</span>`;
+  }).catch(() => {});
+}
+
+function stockMatches() {
+  const q = invFilter.q.toLowerCase().trim();
+  const quick = QUICK[invFilter.quick]?.[1];
+  return invRows.filter((r) =>
+    (invFilter.status === "all" || (invFilter.status === "active" ? r.status !== "sold" : r.status === invFilter.status)) &&
+    (!invFilter.category || r.category === invFilter.category) &&
+    (!invFilter.location || (invFilter.location === NO_LOC ? !r.location : r.location === invFilter.location)) &&
+    (!quick || quick(r)) &&
+    (!q || searchText(r).includes(q)));
 }
 
 function drawStock() {
@@ -200,21 +249,53 @@ function drawStock() {
   const cost = sum(stock, (r) => r.cost * r.qty);
   const value = sum(stock, (r) => (r.value ?? r.cost) * r.qty);
   const cats = [...new Set(invRows.map((r) => r.category))].sort();
-  const q = invFilter.q.toLowerCase();
-  let rows = invRows.filter((r) =>
-    (invFilter.status === "all" || (invFilter.status === "active" ? r.status !== "sold" : r.status === invFilter.status)) &&
-    (!invFilter.category || r.category === invFilter.category) &&
-    (!q || [r.name, r.sku, r.location, r.grade, (r.tags || []).join(" "), r.notes].join(" ").toLowerCase().includes(q)));
+  const locs = [...new Set(stock.map((r) => r.location).filter(Boolean))].sort(byNumber);
   const sorters = {
     added: (a, b) => (a.added < b.added ? 1 : -1),
     name: (a, b) => a.name.localeCompare(b.name),
     value: (a, b) => (b.value ?? 0) * b.qty - (a.value ?? 0) * a.qty,
     profit: (a, b) => ((b.value ?? b.cost) - b.cost) * b.qty - ((a.value ?? a.cost) - a.cost) * a.qty,
-    sku: (a, b) => String(a.sku).localeCompare(String(b.sku)),
+    trend: (a, b) => (b.trend30 ?? -9) - (a.trend30 ?? -9),
+    sku: (a, b) => byNumber(a.sku, b.sku),
+    location: (a, b) => byNumber(a.location || "~", b.location || "~"),
   };
-  rows = rows.sort(sorters[invFilter.sort] || sorters.added);
+  let rows = stockMatches().sort(sorters[invFilter.sort] || sorters.added);
+  const g = invFilter.group;
+  const gstats = new Map();
+  if (g) {
+    rows.sort((a, b) => byNumber(groupLabel(g, a), groupLabel(g, b))); // stable: keeps the chosen order inside each group
+    for (const r of rows) {
+      const k = groupLabel(g, r), s = gstats.get(k) || { rows: 0, qty: 0, value: 0 };
+      s.rows++; s.qty += r.qty; s.value += (r.status === "sold" ? r.soldPrice ?? 0 : r.value ?? r.cost) * r.qty;
+      gstats.set(k, s);
+    }
+  }
   const total = rows.length;
-  rows = rows.slice(0, invLimit);
+  const shown = rows.slice(0, invLimit);
+  const quickCount = Object.fromEntries(Object.entries(QUICK).map(([k, [, f]]) => [k, invRows.reduce((n, r) => n + (f(r) ? 1 : 0), 0)]));
+  let lastG = null;
+  const rowHtml = (r) => {
+    const pl = r.status === "sold" ? (r.soldPrice != null ? (r.soldPrice - r.cost) * r.qty : null) : r.value != null ? (r.value - r.cost) * r.qty : null;
+    const trend = r.trend30 != null && Math.abs(r.trend30) >= 0.05 ? ` <span class="small ${r.trend30 > 0 ? "pos" : "neg"}" title="Value change, last 30 days">${r.trend30 > 0 ? "▲" : "▼"}${Math.round(Math.abs(r.trend30) * 100)}%</span>` : "";
+    return `<tr data-id="${esc(r.id)}" class="${r.status === "sold" ? "sold" : ""}${invSel.has(r.id) ? " picked" : ""}">
+      <td><input type="checkbox" data-sel aria-label="Select ${esc(r.name)}"${invSel.has(r.id) ? " checked" : ""}></td>
+      <td><b>${esc(r.name)}</b><div class="small muted">${esc(r.sku || "")}${r.location ? " · 📍" + esc(r.location) : ""}${(r.tags || []).length ? " · " + r.tags.map((t) => "#" + esc(t)).join(" ") : ""}${r.priceUrl ? " · " + link(r.priceUrl, "sales") : ""}${r.addedBy ? " · " + esc(r.addedBy) : ""}</div></td>
+      <td class="small">${esc(r.grade)}</td><td class="num">${esc(r.qty)}</td>
+      <td class="num">${usd(r.cost)}</td>
+      <td class="num">${r.status === "sold" ? `sold ${usd(r.soldPrice)}` : r.priceUrl ? usd(r.value) + (r.spark ? sparkline(r.spark) : "") + trend : `<button class="small" data-findprice title="Link to a sales page so this card gets valued">💲 Find price</button>`}<div class="small muted">${r.status === "sold" ? esc(r.soldOn || "") : r.priceUrl ? `${esc(when(r.valuedAt))}${!r.valuedAt || Date.now() - Date.parse(r.valuedAt) > 7 * 86400000 ? ` <span class="chip warn" title="Older than a week">stale</span> <button class="ghost small" data-revalue aria-label="Re-value now">↻</button>` : ""}` : ""}</div></td>
+      <td class="num ${pl == null ? "" : pl >= 0 ? "pos" : "neg"}">${usd(pl)}</td>
+      <td><span class="chip st-${r.status}">${esc(STATUS_LABEL[r.status])}</span>${r.status === "listed" && r.listedOn ? `<div class="small muted">${esc(r.listedOn)} ${usd(r.listPrice)}</div>` : ""}${r.web && r.status !== "sold" ? `<div><span class="chip st-web" title="${esc(r.webPricingNote || r.lastPriceReason || "On the MJC website")}">🌐 ${webPrice(r) ? usd(webPrice(r)) : "needs price"}</span></div>` : ""}</td>
+      <td class="actions nowrap">${r.status !== "sold" ? `<button class="small" data-sell>Sold</button>` : ""}<button class="small ghost" data-edit aria-label="Edit">✎</button><button class="small ghost" data-del aria-label="Remove">🗑</button></td></tr>`;
+  };
+  const body = shown.map((r) => {
+    let head = "";
+    if (g && groupLabel(g, r) !== lastG) {
+      lastG = groupLabel(g, r);
+      const s = gstats.get(lastG);
+      head = `<tr class="grp"><td colspan="9"><b>${esc(lastG)}</b> <span class="small muted">${plural(s.rows, "row")} · ${plural(s.qty, "card")} · ${usd(s.value)}</span> <button class="ghost small" data-gsel="${esc(lastG)}">Select these</button></td></tr>`;
+    }
+    return head + rowHtml(r);
+  }).join("");
 
   $("#invBody").innerHTML = `
     ${invRows.length ? `<div class="totals">
@@ -222,33 +303,52 @@ function drawStock() {
       <div><span>Total cost</span><b>${usd(cost)}</b></div>
       <div><span>Value today</span><b>${usd(value)}</b></div>
       <div><span>Unrealized profit</span><b class="${value - cost >= 0 ? "pos" : "neg"}">${usd(value - cost)}</b></div>
+    </div>
+    <div class="row views" role="group" aria-label="Quick views">
+      ${Object.entries(QUICK).filter(([k]) => quickCount[k] || invFilter.quick === k).map(([k, [label]]) => `<button class="small${invFilter.quick === k ? " active" : ""}" data-quick="${k}" aria-pressed="${invFilter.quick === k}">${label} <span class="muted">${quickCount[k]}</span></button>`).join("")}
+      ${invViews.map((v, i) => `<span class="saved-view"><button class="small" data-view="${i}">★ ${esc(v.name)}</button><button class="ghost small" data-unview="${i}" aria-label="Delete the view ${esc(v.name)}">×</button></span>`).join("")}
+      <button class="ghost small" data-saveview title="Keep these filters under a name (every computer sees it)">☆ Save this view</button>
     </div>` : ""}
     <div class="panel filters">
       <input type="search" data-f="q" placeholder="Search name, SKU, location, tag…" value="${esc(invFilter.q)}" aria-label="Search inventory">
       <select data-f="status" aria-label="Status">${[["active", "In stock + listed + grading"], ["in_stock", "In stock"], ["listed", "Listed"], ["grading", "At grading"], ["sold", "Sold"], ["all", "Everything"]].map(([v, l]) => `<option value="${v}"${invFilter.status === v ? " selected" : ""}>${l}</option>`).join("")}</select>
       <select data-f="category" aria-label="Category"><option value="">All categories</option>${cats.map((c) => `<option value="${esc(c)}"${invFilter.category === c ? " selected" : ""}>${esc(CAT_LABEL[c] || c)}</option>`).join("")}</select>
-      <select data-f="sort" aria-label="Sort">${[["added", "Newest first"], ["value", "Highest value"], ["profit", "Biggest gain"], ["name", "Name A–Z"], ["sku", "SKU"]].map(([v, l]) => `<option value="${v}"${invFilter.sort === v ? " selected" : ""}>${l}</option>`).join("")}</select>
+      <select data-f="location" aria-label="Location"><option value="">All locations</option><option value="${NO_LOC}"${invFilter.location === NO_LOC ? " selected" : ""}>No location</option>${locs.map((l) => `<option value="${esc(l)}"${invFilter.location === l ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>
+      <select data-f="sort" aria-label="Sort">${[["added", "Newest first"], ["value", "Highest value"], ["profit", "Biggest gain"], ["trend", "Rising fastest (30 days)"], ["name", "Name A–Z"], ["sku", "SKU"], ["location", "Location"]].map(([v, l]) => `<option value="${v}"${invFilter.sort === v ? " selected" : ""}>${l}</option>`).join("")}</select>
+      <select data-f="group" aria-label="Group">${Object.entries(GROUPS).map(([v, l]) => `<option value="${v}"${invFilter.group === v ? " selected" : ""}>${l}</option>`).join("")}</select>
+      <button class="ghost small" data-dense aria-pressed="${invDense}" title="Fit more rows on the screen">${invDense ? "☰ Roomy" : "≡ Compact"}</button>
     </div>
-    ${rows.length ? `<div class="panel table-wrap"><table class="inv-table">
-      <tr><th><input type="checkbox" data-all aria-label="Select all"></th><th>Card</th><th>Grade</th><th class="num">Qty</th><th class="num">Paid</th><th class="num">Value</th><th class="num">P/L</th><th>Status</th><th></th></tr>
-      ${rows.map((r) => {
-        const pl = r.status === "sold" ? (r.soldPrice != null ? (r.soldPrice - r.cost) * r.qty : null) : r.value != null ? (r.value - r.cost) * r.qty : null;
-        return `<tr data-id="${esc(r.id)}" class="${r.status === "sold" ? "sold" : ""}">
-          <td><input type="checkbox" data-sel aria-label="Select ${esc(r.name)}"></td>
-          <td><b>${esc(r.name)}</b><div class="small muted">${esc(r.sku || "")}${r.location ? " · 📍" + esc(r.location) : ""}${(r.tags || []).length ? " · " + r.tags.map((t) => "#" + esc(t)).join(" ") : ""}${r.priceUrl ? " · " + link(r.priceUrl, "sales") : ""}${r.addedBy ? " · " + esc(r.addedBy) : ""}</div></td>
-          <td class="small">${esc(r.grade)}</td><td class="num">${esc(r.qty)}</td>
-          <td class="num">${usd(r.cost)}</td>
-          <td class="num">${r.status === "sold" ? `sold ${usd(r.soldPrice)}` : r.priceUrl ? usd(r.value) + (r.valueLog?.length > 2 ? sparkline(r.valueLog.slice(-30).map(([, v]) => v)) : "") : `<button class="small" data-findprice title="Link to a sales page so this card gets valued">💲 Find price</button>`}<div class="small muted">${r.status === "sold" ? esc(r.soldOn || "") : r.priceUrl ? `${esc(when(r.valuedAt))}${!r.valuedAt || Date.now() - Date.parse(r.valuedAt) > 7 * 86400000 ? ` <span class="chip warn" title="Older than a week">stale</span> <button class="ghost small" data-revalue aria-label="Re-value now">↻</button>` : ""}` : ""}</div></td>
-          <td class="num ${pl == null ? "" : pl >= 0 ? "pos" : "neg"}">${usd(pl)}</td>
-          <td><span class="chip st-${r.status}">${esc(STATUS_LABEL[r.status])}</span>${r.status === "listed" && r.listedOn ? `<div class="small muted">${esc(r.listedOn)} ${usd(r.listPrice)}</div>` : ""}${r.web && r.status !== "sold" ? `<div><span class="chip st-web" title="${esc(r.webPricingNote || (r.priceLog?.at(-1)?.reason) || "On the MJC website")}">🌐 ${webPrice(r) ? usd(webPrice(r)) : "needs price"}</span></div>` : ""}</td>
-          <td class="actions nowrap">${r.status !== "sold" ? `<button class="small" data-sell>Sold</button>` : ""}<button class="small ghost" data-edit aria-label="Edit">✎</button><button class="small ghost" data-del aria-label="Remove">🗑</button></td></tr>`;
-      }).join("")}</table>
-      ${total > rows.length ? `<div class="row" style="justify-content:center"><span class="small muted">Showing ${rows.length} of ${total}</span><button class="small" data-more>Show ${Math.min(PAGE, total - rows.length)} more</button><button class="small ghost" data-allrows>Show all</button></div>` : ""}
-      <div class="row bulk"><span class="small muted" data-selcount>0 selected</span><button class="small" data-bulk="grading" disabled>Send selected to grading</button><button class="small" data-bulk="labels" disabled>Labels for selected</button><button class="small" data-bulk="web-on" disabled>🌐 Sell selected on MJC</button><button class="small" data-bulk="web-off" disabled>Remove from MJC</button></div></div>`
-    : `<div class="empty"><h2>${invRows.length ? "No cards match" : "No inventory yet"}</h2><p>${invRows.length ? "Change the filters above." : "Research a card and click <b>＋ Inventory</b>, add one by hand, or import your existing spreadsheet."}</p></div>`}`;
+    ${shown.length ? `<div class="panel"><div class="table-wrap"><table class="inv-table${invDense ? " dense" : ""}">
+      <tr><th><input type="checkbox" data-all aria-label="Select every card shown"></th><th>Card</th><th>Grade</th><th class="num">Qty</th><th class="num">Paid</th><th class="num">Value</th><th class="num">P/L</th><th>Status</th><th></th></tr>
+      ${body}</table></div>
+      ${total > shown.length ? `<div class="row" style="justify-content:center"><span class="small muted">Showing ${shown.length} of ${total}</span><button class="small" data-more>Show ${Math.min(PAGE, total - shown.length)} more</button><button class="small ghost" data-allrows>Show all</button></div>` : ""}
+      <div class="row bulk">
+        <span class="small" data-selcount></span>
+        <button class="ghost small" data-selall>Select all ${total} matching</button><button class="ghost small" data-selnone>Clear</button>
+        <button class="small" data-bulk="edit" title="Location, status, tags, price… for every selected card (shortcut: E)">✎ Edit selected</button>
+        <button class="small" data-bulk="merge" title="The same card kept on several rows → one row with the total quantity">⇉ Merge</button>
+        <button class="small" data-bulk="split" title="Paid one price for these? Spread it over them by value">÷ Split lot cost</button>
+        <button class="small" data-bulk="grading">Send to grading</button>
+        <button class="small" data-bulk="labels">Labels</button>
+        <button class="small" data-bulk="web-on">🌐 Sell on MJC</button>
+        <button class="small" data-bulk="web-off">Remove from MJC</button>
+      </div></div>`
+    : `<div class="empty"><h2>${invRows.length ? "No cards match" : "No inventory yet"}</h2><p>${invRows.length ? "Change the filters above." : "Use <b>📥 Bulk scan</b> to scan a stack, research a card and click <b>＋ Inventory</b>, add one by hand, or import your spreadsheet."}</p></div>`}`;
 
-  if ($("#invBody [data-more]")) $("#invBody [data-more]").onclick = () => { invLimit += PAGE; drawStock(); };
-  if ($("#invBody [data-allrows]")) $("#invBody [data-allrows]").onclick = () => { invLimit = Infinity; drawStock(); };
+  const redraw = () => { invLimit = PAGE; saveFilter(); drawStock(); };
+  const on = (sel, fn) => { const el = $("#invBody " + sel); if (el) el.onclick = fn; };
+  on("[data-more]", () => { invLimit += PAGE; drawStock(); });
+  on("[data-allrows]", () => { invLimit = Infinity; drawStock(); });
+  on("[data-dense]", () => { invDense = !invDense; store.set("invDense", invDense); drawStock(); });
+  on("[data-saveview]", openSaveView);
+  $$("#invBody [data-quick]").forEach((b) => (b.onclick = () => { invFilter.quick = invFilter.quick === b.dataset.quick ? "" : b.dataset.quick; redraw(); }));
+  $$("#invBody [data-view]").forEach((b) => (b.onclick = () => { Object.assign(invFilter, { q: "", status: "active", category: "", sort: "added", location: "", group: "", quick: "" }, invViews[+b.dataset.view].filter); redraw(); }));
+  $$("#invBody [data-unview]").forEach((b) => (b.onclick = async () => {
+    const gone = invViews[+b.dataset.unview];
+    invViews = await (await fetch("/api/inventory/views", json("PUT", invViews.filter((_, i) => i !== +b.dataset.unview)))).json();
+    drawStock();
+    toast(`Deleted the view "${gone.name}"`, { undo: async () => { invViews = await (await fetch("/api/inventory/views", json("PUT", [...invViews, gone]))).json(); drawStock(); } });
+  }));
   // A barcode scanner types the SKU and presses Enter: an exact SKU opens that card.
   const qIn = $('#invBody [data-f="q"]');
   if (qIn) qIn.onkeydown = (e) => {
@@ -258,31 +358,54 @@ function drawStock() {
   };
   $$("#invBody [data-f]").forEach((el) => (el.oninput = () => {
     invFilter[el.dataset.f] = el.value;
-    invLimit = PAGE;
     const focus = el.dataset.f === "q";
-    drawStock();
+    if (focus) { invLimit = PAGE; drawStock(); } else redraw();
     if (focus) { const s = $('#invBody [data-f="q"]'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
   }));
-  const selected = () => $$("#invBody tr[data-id]").filter((tr) => $("[data-sel]", tr).checked).map((tr) => tr.dataset.id);
+
+  // ---- selection (survives redraws; "Select all matching" reaches cards not drawn yet)
   const syncBulk = () => {
-    const n = selected().length;
-    $("#invBody [data-selcount]") && ($("#invBody [data-selcount]").textContent = `${n} selected`);
-    $$("#invBody [data-bulk]").forEach((b) => (b.disabled = !n));
+    const n = invSel.size;
+    const c = $("#invBody [data-selcount]");
+    if (c) c.innerHTML = n ? `<b>${n} selected</b>` : `<span class="muted">Tick cards to change many at once</span>`;
+    $$("#invBody [data-bulk]").forEach((b) => (b.disabled = b.dataset.bulk === "merge" ? n < 2 : !n));
+    const sn = $("#invBody [data-selnone]");
+    if (sn) sn.hidden = !n;
+    const sa = $("#invBody [data-selall]");
+    if (sa) sa.hidden = total <= shown.length || rows.every((r) => invSel.has(r.id));
+    const all = $("#invBody [data-all]");
+    if (all) all.checked = shown.length > 0 && shown.every((r) => invSel.has(r.id));
   };
-  $("#invBody [data-all]") && ($("#invBody [data-all]").onchange = (e) => { $$("#invBody [data-sel]").forEach((c) => (c.checked = e.target.checked)); syncBulk(); });
-  $$("#invBody [data-sel]").forEach((c) => (c.onchange = syncBulk));
-  $("#invBody [data-bulk=grading]") && ($("#invBody [data-bulk=grading]").onclick = () => openSubmissionEditor(selected()));
-  $("#invBody [data-bulk=labels]") && ($("#invBody [data-bulk=labels]").onclick = () => printLabels(selected()));
-  for (const on of [true, false]) {
-    const b = $(`#invBody [data-bulk=web-${on ? "on" : "off"}]`);
-    if (b) b.onclick = async () => {
-      const ids = selected();
-      b.disabled = true;
-      for (const id of ids) await fetch("/api/inventory/" + id, json("PATCH", { web: on }));
-      toast(on ? `${ids.length} card${ids.length > 1 ? "s" : ""} going on the MJC website — the pricing engine is setting prices now` : `${ids.length} card${ids.length > 1 ? "s" : ""} taken off the website`);
-      setTimeout(loadStock, on ? 2500 : 300);
-    };
-  }
+  const pick = (id, yes) => {
+    yes ? invSel.add(id) : invSel.delete(id);
+    const tr = $(`#invBody tr[data-id="${CSS.escape(id)}"]`);
+    if (tr) { tr.classList.toggle("picked", yes); $("[data-sel]", tr).checked = yes; }
+  };
+  syncBulk();
+  on("[data-all]", (e) => { shown.forEach((r) => pick(r.id, e.target.checked)); syncBulk(); });
+  on("[data-selall]", () => { rows.forEach((r) => invSel.add(r.id)); drawStock(); });
+  on("[data-selnone]", () => { invSel.clear(); drawStock(); });
+  $$("#invBody [data-gsel]").forEach((b) => (b.onclick = () => { rows.filter((r) => groupLabel(g, r) === b.dataset.gsel).forEach((r) => invSel.add(r.id)); drawStock(); }));
+  // shift-click ticks every row between the last tick and this one
+  let lastTick = null;
+  $$("#invBody [data-sel]").forEach((c) => (c.onclick = (e) => {
+    const id = c.closest("tr").dataset.id;
+    if (e.shiftKey && lastTick) {
+      const ids = shown.map((r) => r.id), a = ids.indexOf(lastTick), b = ids.indexOf(id);
+      if (a >= 0 && b >= 0) ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach((x) => pick(x, c.checked));
+    }
+    pick(id, c.checked);
+    lastTick = id;
+    syncBulk();
+  }));
+  const selected = () => [...invSel];
+  on("[data-bulk=edit]", () => openBulkEdit(selected()));
+  on("[data-bulk=merge]", () => mergeSelected(selected()));
+  on("[data-bulk=split]", () => openSplitCost(selected()));
+  on("[data-bulk=grading]", () => openSubmissionEditor(selected()));
+  on("[data-bulk=labels]", () => printLabels(selected()));
+  on("[data-bulk=web-on]", () => bulkPatch(selected(), { web: true }, "Going on the MJC website — the pricing engine is setting prices now"));
+  on("[data-bulk=web-off]", () => bulkPatch(selected(), { web: false }, "Taken off the website"));
   $$("#invBody tr[data-id]").forEach((tr) => {
     const row = invRows.find((r) => r.id === tr.dataset.id);
     $("[data-edit]", tr).onclick = () => openItemEditor(row);
@@ -296,7 +419,259 @@ function drawStock() {
   });
 }
 
-function openItemEditor(row = null) {
+/** Change many cards at once; the toast's Undo puts every one back (kept a week on the bot). */
+async function bulkPatch(ids, patch, what) {
+  const r = await fetch("/api/inventory/bulk", json("POST", { ids, patch }));
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return toast(j.error || "Couldn't save", { error: true });
+  toast(`${what} — ${plural(j.updated, "card")}`, { ms: 12000, undo: j.token ? () => undoBulk(j.token) : null });
+  loadStock();
+}
+async function undoBulk(token) {
+  const r = await fetch("/api/inventory/bulk/undo", json("POST", { token }));
+  toast(r.ok ? "Undone" : (await r.json()).error, { error: !r.ok });
+  loadStock();
+}
+
+function openBulkEdit(ids) {
+  if (!ids.length) return;
+  const locs = [...new Set(invRows.map((r) => r.location).filter(Boolean))].sort(byNumber);
+  const body = openModal(`Edit ${plural(ids.length, "card")}`, `
+    <p class="small muted">Only the boxes you fill in change. Undo stays available for a week.</p>
+    <form class="form-grid" data-form>
+      <label>Move to location<input name="location" list="bulkLocs" placeholder="unchanged" autocomplete="off"><datalist id="bulkLocs">${locs.map((l) => `<option value="${esc(l)}">`).join("")}</datalist></label>
+      <label>Status<select name="status"><option value="">unchanged</option>${Object.entries(STATUS_LABEL).filter(([v]) => v !== "sold").map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></label>
+      <label>Category<select name="category"><option value="">unchanged</option>${Object.keys(CAT_LABEL).map((c) => `<option value="${c}">${esc(CAT_LABEL[c])}</option>`).join("")}</select></label>
+      <label>Grade<input name="grade" placeholder="unchanged"></label>
+      <label>Add tags<input name="addTags" placeholder="rookie, flip"></label>
+      <label>Paid each $<input name="cost" type="number" min="0" step="0.01" placeholder="unchanged"></label>
+      <label>Listed on<select name="listedOn"><option value="">unchanged</option>${opts(SELL_PLATFORMS, "")}</select></label>
+      <label>List price $<input name="listPrice" type="number" min="0" step="0.01" placeholder="unchanged"></label>
+      <p class="span2 small muted">Selling goes through <b>Sold</b> on each card (or Show mode), so fees and profit stay right.</p>
+      <div class="span2 row"><button class="primary">Apply to ${plural(ids.length, "card")}</button></div>
+    </form>`);
+  $("[data-form]", body).onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(Object.entries(Object.fromEntries(new FormData(e.target))).filter(([, v]) => String(v).trim() !== ""));
+    if (f.addTags) f.addTags = f.addTags.split(",").map((t) => t.trim()).filter(Boolean);
+    if (!Object.keys(f).length) return toast("Fill in at least one box.", { error: true });
+    modal.close();
+    const said = Object.keys(f).map((k) => ({ location: `moved to ${f.location}`, status: STATUS_LABEL[f.status], category: CAT_LABEL[f.category], grade: `grade ${f.grade}`, addTags: "tagged", cost: `paid ${usd(+f.cost)} each`, listedOn: `listed on ${f.listedOn}`, listPrice: `list price ${usd(+f.listPrice)}` })[k]).join(", ");
+    bulkPatch(ids, f, said.charAt(0).toUpperCase() + said.slice(1));
+  };
+}
+
+async function mergeSelected(ids) {
+  const rows = invRows.filter((r) => ids.includes(r.id) && r.status !== "sold").sort((a, b) => (a.added < b.added ? -1 : 1));
+  if (rows.length < 2) return toast("Pick at least two cards that aren't sold.", { error: true });
+  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const same = rows.every((r) => norm(r.name) === norm(rows[0].name) && norm(r.grade) === norm(rows[0].grade));
+  if (!same && !confirm(`These aren't all the same card and grade:\n\n${rows.slice(0, 6).map((r) => `• ${r.name} (${r.grade})`).join("\n")}\n\nMerge them into "${rows[0].name}" anyway?`)) return;
+  const r = await fetch("/api/inventory/merge", json("POST", { ids: rows.map((x) => x.id) }));
+  const j = await r.json();
+  if (!r.ok) return toast(j.error, { error: true });
+  invSel.clear();
+  toast(`Merged into one row: ${j.kept.name} × ${j.kept.qty} (cost averaged to ${usd(j.kept.cost)})`, { ms: 12000, undo: () => undoBulk(j.token) });
+  loadStock();
+}
+
+function openSplitCost(ids) {
+  const rows = invRows.filter((r) => ids.includes(r.id));
+  const worth = rows.reduce((n, r) => n + (r.value ?? r.webMarket ?? 0) * r.qty, 0);
+  const body = openModal("Split what you paid", `
+    <p class="small">You bought these ${plural(rows.length, "card")} together. Enter the total and it's spread over them <b>by value</b>${worth ? ` (they're worth ${usd(worth)} together)` : " — none are valued yet, so evenly"}. Each card's "Paid each" is replaced.</p>
+    <form class="row" data-form><label>Paid for all of them $<input name="total" type="number" min="0" step="0.01" required autofocus></label><button class="primary">Split it</button></form>`);
+  $("[data-form]", body).onsubmit = async (e) => {
+    e.preventDefault();
+    const total = parseFloat(new FormData(e.target).get("total"));
+    const r = await fetch("/api/inventory/split-cost", json("POST", { ids, total }));
+    const j = await r.json();
+    if (!r.ok) return toast(j.error, { error: true });
+    modal.close();
+    toast(`Split ${usd(total)} over ${plural(j.updated, "card")} ${j.byValue ? "by value" : "evenly"}`, { ms: 12000, undo: j.token ? () => undoBulk(j.token) : null });
+    loadStock();
+  };
+}
+
+function openSaveView() {
+  const body = openModal("Save this view", `
+    <p class="small muted">Saves the current filters, sort and grouping (not the search box) as a button above the list — on every computer using this bot.</p>
+    <form class="row" data-form><label>Name<input name="name" required maxlength="40" placeholder="Box 3 rookies" autofocus></label><button class="primary">Save</button></form>`);
+  $("[data-form]", body).onsubmit = async (e) => {
+    e.preventDefault();
+    const { q, ...filter } = invFilter;
+    invViews = await (await fetch("/api/inventory/views", json("PUT", [...invViews, { name: new FormData(e.target).get("name"), filter }]))).json();
+    modal.close();
+    drawStock();
+  };
+}
+
+/** The given cards as a spreadsheet (what you see, not the whole inventory). */
+function exportRows(rows) {
+  if (!rows.length) return toast("No cards to export.");
+  const cols = [["SKU", "sku"], ["Card", "name"], ["Grade", "grade"], ["Category", "category"], ["Qty", "qty"], ["Paid each", "cost"], ["Value each", "value"], ["Status", (r) => STATUS_LABEL[r.status]], ["Location", "location"], ["Tags", (r) => (r.tags || []).join(", ")], ["Listed on", "listedOn"], ["List price", "listPrice"], ["Sold price", "soldPrice"], ["Sold date", "soldDate"], ["Website price", (r) => (r.web ? webPrice(r) : "")], ["Sales page", "priceUrl"], ["Last counted", (r) => (r.countedAt || "").slice(0, 10)], ["Notes", "notes"]];
+  const cell = (v) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const text = [cols.map(([h]) => h).join(","), ...rows.map((r) => cols.map(([, f]) => cell(typeof f === "function" ? f(r) : r[f])).join(","))].join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + text], { type: "text/csv" }));
+  a.download = `inventory-${today()}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+// ------------------------------------------------------------------ DATA CHECK
+
+const FIXABLE = new Set(["dupSku", "webSold", "orphanHistory"]);
+async function openDataCheck() {
+  const body = openModal("🩺 Data check", `<p class="muted">Checking every record…</p>`, { wide: true });
+  const draw = async () => {
+    const c = await getJSON("/api/inventory/check");
+    const cardLine = (r) => `<li><a href="#" data-open="${esc(r.id)}">${esc(r.name)}</a> <span class="muted">${esc(r.grade || "")}${r.sku ? " · " + esc(r.sku) : ""}${r.location ? " · 📍" + esc(r.location) : ""}${r.note ? " · " + esc(r.note) : ""}</span></li>`;
+    body.innerHTML = !c.issues.length
+      ? `<p class="ok">✓ Every record looks right — ${plural(c.cards, "card")} checked.</p>`
+      : `<p class="small muted">${plural(c.cards, "card")} checked. Problems that make profit, labels or the website wrong are at the top.</p>` +
+        c.issues.sort((a, b) => SERIOUS.includes(b.type) - SERIOUS.includes(a.type)).map((i) => `
+        <details class="check-item${SERIOUS.includes(i.type) ? " serious" : ""}"${SERIOUS.includes(i.type) ? " open" : ""}>
+          <summary><b>${i.count}</b> × ${esc(i.title)}
+            ${FIXABLE.has(i.type) ? `<button class="small" data-fix="${i.type}">${esc(i.fix)}</button>` : i.type === "dupCard" ? `<button class="small" data-mergeall>Merge all ${i.count}</button>` : i.type === "noPriceUrl" ? `<button class="small" data-findp>💲 Find prices</button>` : ""}</summary>
+          ${i.type === "dupCard"
+            ? `<ul class="tight small">${i.groups.slice(0, 50).map((grp, k) => `<li>${esc(grp[0].name)} (${esc(grp[0].grade)}) — ${grp.length} rows, qty ${grp.reduce((n, r) => n + r.qty, 0)} <button class="ghost small" data-merge="${k}">Merge</button></li>`).join("")}</ul>`
+            : i.rows?.length ? `<ul class="tight small">${i.rows.slice(0, 50).map(cardLine).join("")}${i.count > 50 ? `<li class="muted">…and ${i.count - 50} more</li>` : ""}</ul>` : ""}
+        </details>`).join("");
+    $$("[data-open]", body).forEach((a) => (a.onclick = (e) => { e.preventDefault(); openItemEditor({ id: a.dataset.open }); }));
+    $$("[data-fix]", body).forEach((b) => (b.onclick = async (e) => {
+      e.preventDefault();
+      b.disabled = true;
+      const r = await fetch("/api/inventory/check/fix", json("POST", { type: b.dataset.fix }));
+      const j = await r.json();
+      toast(r.ok ? `Fixed ${plural(j.fixed, "record")}` : j.error, { error: !r.ok });
+      draw();
+    }));
+    const dup = c.issues.find((i) => i.type === "dupCard");
+    const merge = async (grp) => {
+      const r = await fetch("/api/inventory/merge", json("POST", { ids: grp.map((x) => x.id) }));
+      return r.ok ? (await r.json()).token : null;
+    };
+    $$("[data-merge]", body).forEach((b) => (b.onclick = async () => { b.disabled = true; const t = await merge(dup.groups[+b.dataset.merge]); if (t) toast("Merged", { undo: () => undoBulk(t) }); draw(); }));
+    const all = $("[data-mergeall]", body);
+    if (all) all.onclick = async (e) => {
+      e.preventDefault();
+      all.disabled = true;
+      let n = 0;
+      for (const grp of dup.groups) if (await merge(grp)) n++;
+      toast(`Merged ${plural(n, "group")} — each card is on one row now (Undo is on each card's merge for a week)`);
+      draw();
+    };
+    const fp = $("[data-findp]", body);
+    if (fp) fp.onclick = (e) => { e.preventDefault(); modal.close(); findPricesBulk(loadStock); };
+  };
+  modal.addEventListener("close", () => { if (invView === "stock") loadStock(); }, { once: true });
+  draw().catch((err) => (body.innerHTML = `<p class="error">${esc(err.message)}</p>`));
+}
+
+// ------------------------------------------------------------------ LOCATIONS + STOCK COUNT
+
+async function loadLocations() {
+  $("#invActions").innerHTML = `<button data-a="count" class="primary" title="Scan every card in a box with the barcode scanner">🔢 Count a box</button>`;
+  $("#invActions [data-a=count]").onclick = () => openCount("");
+  const [locs, rows] = await Promise.all([getJSON("/api/inventory/locations"), getJSON("/api/inventory")]);
+  invRows = rows;
+  $("#invBody").innerHTML = locs.length ? `
+    <p class="small muted">Every box, binder and case with what's in it. <b>Count</b> it with the barcode scanner to find cards that walked off or were put back in the wrong box.</p>
+    <div class="panel table-wrap"><table>
+      <tr><th>Location</th><th class="num">Rows</th><th class="num">Cards</th><th class="num">Value</th><th class="num">Paid</th><th>Last counted</th><th></th></tr>
+      ${locs.map((l, i) => `<tr><td><b>${l.location ? "📍 " + esc(l.location) : `<span class="muted">No location</span>`}</b></td><td class="num">${l.cards}</td><td class="num">${l.qty}</td><td class="num">${usd(l.value)}</td><td class="num">${usd(l.cost)}</td>
+        <td class="small">${l.counted ? esc(day(l.counted)) + (l.uncounted ? ` <span class="chip warn">${l.uncounted} never counted</span>` : "") : `<span class="muted">never</span>`}</td>
+        <td class="actions nowrap"><button class="small" data-open="${i}">Open</button>${l.location ? `<button class="small" data-count="${i}">🔢 Count</button><button class="small ghost" data-rename="${i}" aria-label="Rename ${esc(l.location)}">✎</button>` : ""}</td></tr>`).join("")}
+    </table></div>` : `<div class="empty"><h2>No locations yet</h2><p>Give cards a location (Box 3, Binder A…) in the card editor or with <b>✎ Edit selected</b> on the Stock list.</p></div>`;
+  $$("#invBody [data-open]").forEach((b) => (b.onclick = () => { Object.assign(invFilter, { location: locs[+b.dataset.open].location || NO_LOC, quick: "", status: "active" }); saveFilter(); invView = "stock"; loadInventory(); }));
+  $$("#invBody [data-count]").forEach((b) => (b.onclick = () => openCount(locs[+b.dataset.count].location)));
+  $$("#invBody [data-rename]").forEach((b) => (b.onclick = () => {
+    const from = locs[+b.dataset.rename].location;
+    const body = openModal(`Rename ${from}`, `<form class="row" data-form><label>New name<input name="to" required maxlength="80" value="${esc(from)}" autofocus></label><button class="primary">Rename</button></form>`);
+    $("[data-form]", body).onsubmit = async (e) => {
+      e.preventDefault();
+      const to = new FormData(e.target).get("to").trim();
+      modal.close();
+      const ids = invRows.filter((r) => r.location === from && r.status !== "sold").map((r) => r.id);
+      const r = await fetch("/api/inventory/bulk", json("POST", { ids, patch: { location: to } }));
+      const j = await r.json();
+      toast(r.ok ? `Renamed — ${plural(j.updated, "card")} now in ${to}` : j.error, { error: !r.ok, undo: j.token ? async () => { await fetch("/api/inventory/bulk/undo", json("POST", { token: j.token })); loadLocations(); } : null });
+      loadLocations();
+    };
+  }));
+}
+
+/** Stock count: scan every label in a box; the bot says what's there, what's missing and what belongs elsewhere. */
+function openCount(location) {
+  const scanned = [];
+  const locs = [...new Set(invRows.map((r) => r.location).filter(Boolean))].sort(byNumber);
+  const body = openModal("🔢 Count a box", `
+    <form class="row" data-where><label>Which box / binder<input name="loc" list="countLocs" value="${esc(location)}" required autocomplete="off"><datalist id="countLocs">${locs.map((l) => `<option value="${esc(l)}">`).join("")}</datalist></label></form>
+    <label>Scan each card's label (or type the SKU and press Enter)<input data-sku autocomplete="off" placeholder="CRB-0001" ${location ? "autofocus" : ""}></label>
+    <div data-tally class="small" aria-live="polite" style="margin:.5rem 0"></div>
+    <div class="row"><button class="primary" data-finish disabled>Finish count</button><span class="small muted">Nothing changes until you check the result and apply it.</span></div>
+    <div data-result></div>`, { wide: true });
+  const loc = () => $("[name=loc]", body).value.trim();
+  const tally = () => {
+    const inBox = invRows.filter((r) => r.location === loc() && r.status !== "sold").length;
+    $("[data-tally]", body).innerHTML = `<b>${scanned.length}</b> scanned${inBox ? ` of ${inBox} recorded in ${esc(loc())}` : ""}${scanned.length ? ` · last: ${esc(scanned.at(-1).label)}` : ""}`;
+    $("[data-finish]", body).disabled = !scanned.length || !loc();
+  };
+  $("[data-where]", body).onsubmit = (e) => { e.preventDefault(); $("[data-sku]", body).focus(); };
+  $("[name=loc]", body).oninput = tally;
+  $("[data-sku]", body).onkeydown = (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const sku = e.target.value.trim();
+    e.target.value = "";
+    if (!sku) return;
+    if (scanned.some((s) => s.sku.toLowerCase() === sku.toLowerCase())) return toast(`${sku} was already scanned`, { ms: 1500 });
+    const r = invRows.find((x) => x.sku && x.sku.toLowerCase() === sku.toLowerCase());
+    scanned.push({ sku, label: r ? `${r.name} (${r.grade})` : `${sku} — not a SKU on file` });
+    tally();
+  };
+  tally();
+  $("[data-finish]", body).onclick = async () => {
+    const res = await (await fetch("/api/inventory/count", json("POST", { location: loc(), skus: scanned.map((s) => s.sku) }))).json();
+    const list = (rows, note) => `<ul class="tight small">${rows.slice(0, 100).map((r) => `<li>${esc(r.name)} <span class="muted">${esc(r.grade)} · ${esc(r.sku)}${note ? note(r) : ""}</span></li>`).join("")}</ul>`;
+    const extraMovable = res.extra.filter((r) => r.status !== "sold");
+    $("[data-result]", body).innerHTML = `
+      <h3>✓ ${res.found.length} where they should be</h3>
+      ${res.missing.length ? `<h3 class="bad">${res.missing.length} recorded in ${esc(loc())} but not scanned</h3>${list(res.missing)}
+        <label class="check small"><input type="checkbox" data-markmissing> Set their location to "Not found (count ${today()})" so they're easy to hunt down</label>` : ""}
+      ${res.extra.length ? `<h3 class="warn">${res.extra.length} scanned here but recorded somewhere else</h3>${list(res.extra, (r) => r.status === "sold" ? ` · <b class="bad">marked SOLD</b> — check that sale` : ` · records say ${esc(r.location || "no location")}`)}
+        ${extraMovable.length ? `<label class="check small"><input type="checkbox" data-movehere checked> Move ${plural(extraMovable.length, "card")} to ${esc(loc())}</label>` : ""}` : ""}
+      ${res.unknown.length ? `<p class="small"><b>${res.unknown.length}</b> scanned code${res.unknown.length === 1 ? " isn't" : "s aren't"} on file: ${res.unknown.slice(0, 20).map(esc).join(", ")}</p>` : ""}
+      <div class="row"><button class="primary" data-apply>Apply count</button></div>`;
+    $("[data-apply]", body).onclick = async () => {
+      const r = await fetch("/api/inventory/count/apply", json("POST", {
+        location: loc(),
+        found: res.found.map((x) => x.id),
+        moveHere: $("[data-movehere]", body)?.checked ? extraMovable.map((x) => x.id) : [],
+        missing: $("[data-markmissing]", body)?.checked ? res.missing.map((x) => x.id) : [],
+      }));
+      const j = await r.json();
+      if (!r.ok) return toast(j.error, { error: true });
+      modal.close();
+      toast(`Counted ${loc()}: ${j.counted} checked off${j.moved ? `, ${j.moved} moved here` : ""}${j.missing ? `, ${j.missing} marked not found` : ""}`);
+      if (invView === "locations") loadLocations();
+    };
+  };
+}
+
+async function openItemEditor(row = null) {
+  // The Stock list is slimmed (no descriptions, no history): edit the full card, or saving would blank them.
+  if (row?.id) {
+    try {
+      row = await getJSON("/api/inventory/" + encodeURIComponent(row.id));
+    } catch (err) {
+      return toast(/not found/.test(err.message) ? "That card isn't in the inventory anymore." : err.message, { error: true });
+    }
+  }
+  const hist = row?.history || { v: [], p: [], c: [] };
+  const FIELD_NAME = { name: "name", category: "category", grade: "grade", qty: "qty", cost: "paid", value: "value", purchased: "purchased", notes: "notes", tags: "tags", location: "location", sku: "SKU", priceUrl: "sales page", status: "status", listedOn: "listed on", listPrice: "list price", soldPrice: "sold price", soldDate: "sold date", soldOn: "sold on", fees: "fees", payment: "payment", web: "website", webMode: "website pricing", webFixedPrice: "fixed website price" };
+  const show = (k, v) => (v == null || v === "" ? "—" : Array.isArray(v) ? v.join(", ") || "—" : typeof v === "boolean" ? (v ? "on" : "off") : k === "status" ? STATUS_LABEL[v] || v : ["cost", "value", "listPrice", "soldPrice", "fees", "webFixedPrice"].includes(k) ? usd(v) : k === "priceUrl" ? "linked" : String(v).slice(0, 60));
   const r = row || { name: "", grade: "Raw", qty: 1, cost: "", value: "", category: "other", status: "in_stock", purchased: today(), tags: [] };
   const body = openModal(row ? "Edit card" : "Add a card", `
     <form class="form-grid" data-form>
@@ -311,7 +686,7 @@ function openItemEditor(row = null) {
       <label>Listed on<select name="listedOn"><option value="">—</option>${opts(SELL_PLATFORMS, r.listedOn)}</select></label>
       <label>List price $<input name="listPrice" type="number" min="0" step="0.01" value="${esc(r.listPrice ?? "")}"></label>
       <label>SKU<input name="sku" value="${esc(r.sku || "")}" placeholder="auto"></label>
-      <label>Location<input name="location" value="${esc(r.location || "")}" placeholder="Box 3, row 2"></label>
+      <label>Location<input name="location" value="${esc(r.location || "")}" placeholder="Box 3, row 2" list="editLocs" autocomplete="off"><datalist id="editLocs">${[...new Set(invRows.map((x) => x.location).filter(Boolean))].sort(byNumber).map((l) => `<option value="${esc(l)}">`).join("")}</datalist></label>
       <label class="span2">Tags (comma separated)<input name="tags" value="${esc((r.tags || []).join(", "))}" placeholder="rookie, flip, PC"></label>
       <label class="span2">Sales page URL (for automatic values)<input name="priceUrl" value="${esc(r.priceUrl || "")}" placeholder="https://www.sportscardspro.com/game/..."></label>
       <label class="span2">Notes <span class="muted">(private — never shown on the website)</span><textarea name="notes" rows="2">${esc(r.notes || "")}</textarea></label>
@@ -323,12 +698,14 @@ function openItemEditor(row = null) {
           <label>Fixed price $<input name="webFixedPrice" type="number" min="0" step="0.01" value="${esc(r.webFixedPrice ?? "")}" placeholder="only for fixed"></label>
         </div>
         ${row?.web ? `<div class="small" style="margin-top:.4rem">${webPrice(row) ? `On the site at <b>${usd(webPrice(row))}</b>${row.webMarket ? ` · market ${usd(row.webMarket)}` : ""}${row.webLiquidity ? ` · ${esc(row.webLiquidity)}` : ""}` : `<span class="bad">${esc(row.webPricingNote || "Waiting for its first price")}</span>`}
-          ${(row.priceLog || []).length ? `<details><summary>Price history (${row.priceLog.length})</summary><ul class="tight small">${row.priceLog.slice(-8).reverse().map((l) => `<li>${esc(when(l.at))}: ${usd(l.from)} → <b>${usd(l.to)}</b> — ${esc(l.reason)}</li>`).join("")}</ul></details>` : ""}</div>` : ""}
+          ${hist.p.length ? `<details><summary>Price history (${hist.p.length})</summary><ul class="tight small">${hist.p.slice(-8).reverse().map((l) => `<li>${esc(when(l.at))}: ${usd(l.from)} → <b>${usd(l.to)}</b> — ${esc(l.reason)}</li>`).join("")}</ul></details>` : ""}</div>` : ""}
         <label style="margin-top:.5rem">Website description <span class="muted">(blank = the research summary)</span><textarea name="webDescription" rows="3">${esc(r.webDescription || "")}</textarea></label>
         ${row ? `<div class="row" style="margin:.3rem 0 0"><button type="button" class="small" data-describe>✍ Write it with AI</button><span class="small muted">uses the card's research report</span></div>
         <div class="photo-strip" data-photos></div>
         <div class="row" style="margin:.3rem 0 0"><label class="button small" for="photoIn">📷 Add photos</label><input type="file" id="photoIn" accept="image/*" multiple hidden><span class="small muted">Front first. Your own photos — up to 8.</span></div>` : `<p class="small muted">Save the card first, then reopen it to add photos.</p>`}
       </fieldset>
+      ${hist.v.length > 1 ? `<div class="span2 small">Value over time ${sparkline(hist.v.slice(-60).map(([, v]) => v))} <span class="muted">${esc(day(hist.v[0][0]))} → ${esc(day(hist.v.at(-1)[0]))}</span></div>` : ""}
+      ${hist.c.length ? `<details class="span2 small"><summary>Change history (${hist.c.length})</summary><ul class="tight">${hist.c.slice().reverse().map((e) => `<li>${esc(when(e.at))}${e.by ? " · " + esc(e.by) : ""}: ${Object.entries(e.f).map(([k, [a, b]]) => `${esc(FIELD_NAME[k] || k)} ${esc(show(k, a))} → <b>${esc(show(k, b))}</b>`).join("; ")}</li>`).join("")}</ul></details>` : ""}
       <div class="span2 row"><button class="primary">${row ? "Save" : "Add card"}</button></div>
     </form>`, { wide: true });
   if (row) wireWebExtras(row, body);
@@ -357,9 +734,21 @@ function openItemEditor(row = null) {
     if (!res.ok) return toast((await res.json()).error || "Couldn't save", { error: true });
     modal.close();
     toast(row ? "Saved" : "Added to inventory");
-    if ($("#tab-inventory").classList.contains("active")) loadStock();
+    if ($("#tab-inventory").classList.contains("active") && invView === "stock") loadStock();
   };
 }
+
+// Stock shortcuts: N = add a card, E = edit the selected cards, F = search the list, Esc = clear the selection.
+SHORTCUTS.push(["N / E / F", "Inventory → Stock: add a card / edit the selected cards / search the list"]);
+document.addEventListener("keydown", (e) => {
+  if (!$("#tab-inventory")?.classList.contains("active") || invView !== "stock" || modal.open || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
+  const k = e.key.toLowerCase();
+  if (k === "n") { e.preventDefault(); openItemEditor(); }
+  else if (k === "e" && invSel.size) { e.preventDefault(); openBulkEdit([...invSel]); }
+  else if (k === "f") { e.preventDefault(); $('#invBody [data-f="q"]')?.focus(); }
+  else if (e.key === "Escape" && invSel.size) { invSel.clear(); drawStock(); }
+});
 
 function openSellDialog(row) {
   const body = openModal(`Sold: ${row.name}`, `
@@ -470,6 +859,415 @@ function printLabels(ids) {
   doc.getElementById("doPrint").onclick = () => w.print();
   setFmt(fmt);
   w.focus();
+}
+
+// ------------------------------------------------------------------ BULK SCAN
+// A stack of cards in, inventory rows out: scans (one card or a page of cards per file) are read by the
+// lot reader up to 10 files per AI call, every card is cut out of its scan as its own photo, priced from
+// recent sales, checked by a person, then added in one go. What each file held is kept on the bot, so
+// pausing, a quota stop or closing the app never pays for the same file twice.
+
+const scan = { pages: [], running: false, paused: false, ctrl: null, secsPerFile: null, usd: 0, msg: "", inv: [] };
+const fileKey = (f) => `${f.webkitRelativePath || f.name}|${f.size}|${f.lastModified}`;
+const scanCards = () => scan.pages.flatMap((p) => p.cards);
+const normName = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+async function loadScan() {
+  $("#invActions").innerHTML = "";
+  scan.inv = await getJSON("/api/inventory").catch(() => []);
+  drawScan();
+}
+
+function drawScan() {
+  const cards = scanCards();
+  $("#invBody").innerHTML = `
+    <div class="panel">
+      <h2 style="margin-top:0">📥 Bulk scan — the whole stack, not a photo per card</h2>
+      <ol class="small tight">
+        <li><b>Scan</b> the cards into a folder: a sheet-fed card scanner saves each card as its own file (fastest); a flatbed or a phone photo of a binder page gets 8–12 cards in one picture.</li>
+        <li><b>Choose the folder</b> (or the files). The bot finds every card, cuts each one out as its own photo, reads slab cert numbers, and prices them from recent sales — about 10 files per AI call.</li>
+        <li><b>Check the list</b> (cards it isn't sure about are flagged), set the box they're going in and what you paid, and add them all.</li>
+      </ol>
+      <details class="small"><summary>Which scanner, and tips</summary><ul class="tight">
+        <li><b>Sheet-fed card scanners</b> (photo scanners like the Epson FastFoto FF-680W, or a Raven) feed a stack at about a card a second and save front + back. Rollers touch the card: use them for commons and bulk, not for valuable raw cards.</li>
+        <li><b>Flatbed</b>: lay 9–12 cards on the glass with a little space between them and a dark sheet behind. Safe for anything; slabs fit too.</li>
+        <li><b>Phone</b>: binder pages or cards laid on a dark table, shot straight down in good light. 9-pocket pages read well.</li>
+        <li><b>Slabs</b>: scan the barcode on each slab into <b>PSA cert numbers</b> below (with the PSA token in Settings) — PSA's record gives the exact card and grade, no photo needed.</li>
+        <li>Name the folder after the box (e.g. "Box 3") — it's suggested as the location.</li>
+      </ul></details>
+      <div class="row" style="margin-top:.6rem">
+        <label class="button primary" for="scanDir">📁 Choose a folder of scans</label><input type="file" id="scanDir" webkitdirectory multiple hidden>
+        <label class="button" for="scanFiles">🖼 Choose files</label><input type="file" id="scanFiles" accept="image/*" multiple hidden>
+        <button data-camscan title="A webcam or document camera looking down at the cards: one key press per page">📷 Camera</button>
+        <label class="check small"><input type="checkbox" id="scanDuplex"${store.get("scanDuplex", false) ? " checked" : ""}> My scanner saves each card's <b>back as the next file</b> (one card per file)</label>
+      </div>
+      <form class="row" data-cert style="margin-top:.4rem"><label>PSA cert numbers <span class="small muted">— scan the slab barcode or type it, Enter</span><input name="cert" inputmode="numeric" autocomplete="off" placeholder="e.g. 81234567"></label></form>
+    </div>
+    <div id="scanProg"></div>
+    <div id="scanReview">${cards.length ? scanReviewHtml() : ""}</div>`;
+  const pickFiles = (e) => {
+    const files = [...e.target.files].filter((f) => /^image\/(jpeg|png|webp|gif)$/.test(f.type) || /\.(jpe?g|png|webp)$/i.test(f.name));
+    e.target.value = "";
+    if (!files.length) return toast("No JPEG, PNG or WebP images there.", { error: true });
+    addScanFiles(files);
+  };
+  $("#scanDir").onchange = pickFiles;
+  $("#scanFiles").onchange = pickFiles;
+  $("#scanDuplex").onchange = (e) => store.set("scanDuplex", e.target.checked);
+  $("#invBody [data-camscan]").onclick = openScanCamera;
+  $("[data-cert]").onsubmit = (e) => { e.preventDefault(); const n = e.target.cert.value.replace(/\D/g, ""); e.target.cert.value = ""; if (n) addCert(n); };
+  drawScanProgress();
+  wireScanReview();
+}
+
+function addScanFiles(files, { quiet = false } = {}) {
+  files.sort((a, b) => byNumber(a.webkitRelativePath || a.name, b.webkitRelativePath || b.name));
+  const duplex = !quiet && $("#scanDuplex")?.checked;
+  const have = new Set(scan.pages.map((p) => p.key));
+  let added = 0;
+  for (let i = 0; i < files.length; i += duplex ? 2 : 1) {
+    const key = fileKey(files[i]);
+    if (have.has(key)) continue;
+    scan.pages.push({ key, file: files[i], back: duplex ? files[i + 1] || null : null, status: "waiting", cards: [] });
+    added++;
+  }
+  // a folder named like a box is the likely location
+  const folder = files[0].webkitRelativePath?.split("/")[0];
+  if (folder && !scan.location) scan.location = folder;
+  if (!quiet) toast(`${plural(added, duplex ? "card" : "file")} added to the scan${added < files.length / (duplex ? 2 : 1) ? " (the rest were already in it)" : ""}`);
+  runScan();
+}
+
+function drawScanProgress() {
+  const el = $("#scanProg");
+  if (!el) return;
+  const p = scan.pages.filter((x) => x.file);
+  if (!p.length) return (el.innerHTML = "");
+  const done = p.filter((x) => x.status === "done").length, waiting = p.filter((x) => x.status !== "done").length;
+  const found = scanCards().length, empty = p.filter((x) => x.status === "done" && !x.cards.length).length;
+  const eta = scan.secsPerFile && waiting ? Math.ceil((scan.secsPerFile * waiting) / 60) : null;
+  el.innerHTML = `<div class="panel">
+    <div class="row space"><b>${done} of ${plural(p.length, "file")} read · ${plural(found, "card")} found</b>
+      <span class="row" style="margin:0">${scan.running ? `<button class="small" data-pause>⏸ Pause</button>` : waiting ? `<button class="small primary" data-resume>▶ ${done ? "Resume" : "Start"}</button>` : ""}
+      <button class="small ghost" data-clearscan title="Empty this list (what was read stays saved on the bot for a month)">Clear</button></span></div>
+    <progress max="${p.length}" value="${done}" style="width:100%"></progress>
+    <div class="small muted">${scan.running ? `Reading… ${eta ? `about ${eta} min left` : ""}` : waiting ? "Paused" : "All files read"}${empty ? ` · ${plural(empty, "file")} with no card found` : ""}${scan.usd ? ` · AI ≈ $${scan.usd.toFixed(2)} on the paid tier ($0 on the free tier)` : ""}</div>
+    ${scan.msg ? `<p class="small ${/Paused/.test(scan.msg) ? "bad" : ""}">${esc(scan.msg)}</p>` : ""}
+    <div class="progress small hidden" id="scanSteps"></div></div>`;
+  const b = (sel, fn) => { const x = $(sel, el); if (x) x.onclick = fn; };
+  b("[data-pause]", () => { scan.paused = true; scan.ctrl?.abort(); });
+  b("[data-resume]", () => runScan());
+  b("[data-clearscan]", () => { scan.paused = true; scan.ctrl?.abort(); Object.assign(scan, { pages: [], msg: "", usd: 0, location: "" }); drawScan(); });
+}
+
+/**
+ * Camera station: a document camera (or any webcam) looking straight down. Lay out cards, press Space,
+ * swap them, press Space… each shot joins the scan like a scanned file. Uses the camera's full resolution
+ * (card numbers need it: a 4K camera reads a 9-card spread, a 1080p webcam is good for 2–4 cards).
+ */
+async function openScanCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) return toast("This computer can't open a camera here.", { error: true });
+  let stream = null, shots = 0;
+  const body = openModal("📷 Camera scan", `
+    <div class="row"><label>Camera<select data-cam></select></label><span class="small muted" data-res></span></div>
+    <video data-video autoplay playsinline muted style="width:100%;max-height:60vh;background:#000;border-radius:10px"></video>
+    <div class="row"><button class="primary" data-shot>📸 Take picture (Space)</button><span class="small" data-count aria-live="polite">No pictures yet</span></div>
+    <p class="small muted">Dark background, cards not touching, camera straight down, no glare. Each picture is read with the rest of the scan.</p>`, { wide: true });
+  const video = $("[data-video]", body), sel = $("[data-cam]", body);
+  const start = async (deviceId) => {
+    stream?.getTracks().forEach((t) => t.stop());
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { ...(deviceId ? { deviceId: { exact: deviceId } } : {}), width: { ideal: 3840 }, height: { ideal: 2160 } } });
+    } catch (err) {
+      return ($("[data-res]", body).textContent = `Couldn't open the camera (${err.name === "NotAllowedError" ? "permission denied — allow the camera for Card Research Bot in the system settings" : err.message}).`);
+    }
+    video.srcObject = stream;
+    const s = stream.getVideoTracks()[0].getSettings();
+    $("[data-res]", body).textContent = s.width ? `${s.width} × ${s.height}${s.width < 1900 ? " — low for a full page; scan 2–4 cards at a time" : ""}` : "";
+    const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+    sel.innerHTML = cams.map((d, i) => `<option value="${esc(d.deviceId)}"${d.deviceId === s.deviceId ? " selected" : ""}>${esc(d.label || "Camera " + (i + 1))}</option>`).join("");
+  };
+  sel.onchange = () => start(sel.value);
+  const shoot = () => {
+    if (!video.videoWidth) return;
+    const c = document.createElement("canvas");
+    c.width = video.videoWidth;
+    c.height = video.videoHeight;
+    c.getContext("2d").drawImage(video, 0, 0);
+    c.toBlob((blob) => {
+      if (!blob) return;
+      shots++;
+      const at = Date.now();
+      addScanFiles([new File([blob], `camera-${new Date(at).toLocaleTimeString().replace(/\W/g, "")}-${shots}.jpg`, { type: "image/jpeg", lastModified: at })], { quiet: true });
+      $("[data-count]", body).textContent = `${plural(shots, "picture")} taken — swap the cards and go again`;
+      video.style.opacity = ".3";
+      setTimeout(() => (video.style.opacity = ""), 120);
+    }, "image/jpeg", 0.92);
+  };
+  $("[data-shot]", body).onclick = shoot;
+  const key = (e) => { if (e.code === "Space" && modal.open) { e.preventDefault(); shoot(); } };
+  document.addEventListener("keydown", key);
+  modal.addEventListener("close", () => { stream?.getTracks().forEach((t) => t.stop()); document.removeEventListener("keydown", key); drawScan(); }, { once: true });
+  start(store.get("scanCam") || null).then(() => sel.addEventListener("change", () => store.set("scanCam", sel.value)));
+}
+
+/** One file, as the AI sees it: redrawn as a JPEG (the crop boxes refer to this same orientation). */
+async function scanImage(file) {
+  const { img, url } = await readAsImage(file);
+  const data = drawScaled(img, 2000).toDataURL("image/jpeg", 0.85).split(",")[1];
+  URL.revokeObjectURL(url);
+  return { mediaType: "image/jpeg", data };
+}
+
+/** Cut one card out of its scan; box = [ymin, xmin, ymax, xmax] in 0–1000, null = the whole picture. */
+function cropCard(img, box, maxSide) {
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const [y0, x0, y1, x1] = box || [0, 0, 1000, 1000];
+  const py = box ? (y1 - y0) * 0.025 : 0, px = box ? (x1 - x0) * 0.025 : 0; // a sliver of margin so edges aren't clipped
+  const sx = Math.max(0, ((x0 - px) / 1000) * W), sy = Math.max(0, ((y0 - py) / 1000) * H);
+  const sw = Math.min(W, ((x1 + px) / 1000) * W) - sx, sh = Math.min(H, ((y1 + py) / 1000) * H) - sy;
+  const k = Math.min(1, maxSide / Math.max(sw, sh));
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(sw * k));
+  c.height = Math.max(1, Math.round(sh * k));
+  c.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c;
+}
+
+async function runScan() {
+  if (scan.running || needKey()) return;
+  scan.running = true;
+  scan.paused = false;
+  scan.msg = "";
+  drawScanProgress();
+  try {
+    // files read before (an earlier session, or before a pause) come back free
+    const saved = await getJSON("/api/scan").catch(() => ({}));
+    for (const p of scan.pages) if (p.status === "waiting" && saved[p.key]) await finishPage(p, saved[p.key].cards);
+    drawScanProgress();
+    while (!scan.paused) {
+      const waiting = scan.pages.filter((p) => p.status === "waiting" && p.file);
+      if (!waiting.length) break;
+      // as many files per call as keeps it near 30 cards (the reader's limit is 40); the first call learns the rate
+      const read = scan.pages.filter((p) => p.status === "done" && p.file);
+      const perFile = read.length ? Math.max(1, read.reduce((n, p) => n + p.cards.length, 0) / read.length) : null;
+      const batch = waiting.slice(0, perFile ? Math.max(1, Math.min(10, Math.floor(30 / perFile))) : 1);
+      const t0 = Date.now();
+      batch.forEach((p) => (p.status = "reading"));
+      try {
+        const images = await Promise.all(batch.map((p) => scanImage(p.file)));
+        scan.ctrl = new AbortController();
+        const { lot } = await streamPost("/api/lot", { images, keys: batch.map((p) => p.key) }, $("#scanSteps") || document.createElement("div"), scan.ctrl);
+        scan.usd += lot.usage?.usd || 0;
+        for (const [i, p] of batch.entries()) await finishPage(p, lot.cards.filter((c) => c.photo === i + 1));
+        const per = (Date.now() - t0) / 1000 / batch.length;
+        scan.secsPerFile = scan.secsPerFile ? scan.secsPerFile * 0.6 + per * 0.4 : per;
+      } catch (err) {
+        batch.forEach((p) => (p.status = "waiting"));
+        scan.paused = true;
+        scan.msg = /cancel/i.test(err.message) ? "" : `Paused: ${err.message}${/quota|limit|429/i.test(err.message) ? " Everything read so far is kept — press Resume later (or tomorrow)." : ""}`;
+      }
+      drawScanProgress();
+    }
+  } finally {
+    scan.running = false;
+    scan.ctrl = null;
+    drawScanProgress();
+  }
+}
+
+/** A file's cards → review rows (each with a small cut-out to check by eye). */
+async function finishPage(p, cards) {
+  p.status = "done";
+  p.cards = [];
+  if (!cards.length) return;
+  let img = null, url = null;
+  try {
+    ({ img, url } = await readAsImage(p.file));
+  } catch {
+    /* unreadable now — the cards still list, without the picture */
+  }
+  p.cards = cards.map((c, i) => ({ ...c, uid: `${p.key}#${i}`, page: p, include: true, thumb: img ? cropCard(img, cards.length > 1 || c.box ? c.box : null, 220).toDataURL("image/jpeg", 0.75) : null }));
+  if (url) URL.revokeObjectURL(url);
+  appendScanRows(p.cards);
+}
+
+async function addCert(n) {
+  if (!status.psa) return toast("Add your free PSA API token in Settings to look up slabs by cert number.", { error: true });
+  if (scan.pages.some((p) => p.key === "cert:" + n)) return toast(`Cert ${n} is already in the list`, { ms: 1500 });
+  try {
+    const { cert } = await getJSON("/api/psa/cert/" + n);
+    if (!cert.found) return toast(`PSA has no record of cert ${n} — check the number.`, { error: true });
+    const num = String(cert.grade || "").match(/(\d+(\.\d)?)\s*$/)?.[1];
+    const name = [cert.year, cert.brand, cert.subject, cert.cardNumber ? "#" + cert.cardNumber : "", cert.variety].filter(Boolean).join(" ");
+    const cat = String(cert.category || "").toLowerCase();
+    const category = ["baseball", "basketball", "football", "hockey", "soccer", "pokemon"].find((k) => cat.includes(k)) || (/yu.?gi/.test(cat) ? "yugioh" : /one.?piece/.test(cat) ? "onepiece" : "other");
+    const card = { uid: "cert:" + n, name, grade: num ? `PSA ${num}` : "PSA", category, cert: n, certUrl: cert.url, confidence: "high", certNote: "From PSA's record", position: "slab", include: true, thumb: null, value: null, url: null };
+    const page = { key: "cert:" + n, file: null, status: "done", cards: [card] };
+    card.page = page;
+    scan.pages.push(page);
+    const pr = await (await fetch("/api/lot/reprice", json("POST", { name, grade: card.grade, category }))).json().catch(() => ({}));
+    if (pr.url) Object.assign(card, { value: pr.value, url: pr.url, matched: pr.matched, volume: pr.volume });
+    appendScanRows([card]);
+    toast(`${name} (${card.grade})${card.value != null ? " — " + usd(card.value) : ""}`, { ms: 2500 });
+  } catch (err) {
+    toast(err.message, { error: true });
+  }
+}
+
+function dupNote(c) {
+  const have = scan.inv.filter((r) => r.status !== "sold" && ((c.url && r.priceUrl === c.url) || normName(r.name) === normName(c.name)) && normName(r.grade) === normName(c.grade));
+  return have.length ? `<span class="chip warn" title="${esc(have.map((r) => `${r.sku} ${r.location ? "· " + r.location : ""}`).join("\n"))}">have ${have.reduce((n, r) => n + r.qty, 0)}</span>` : "";
+}
+function scanRowHtml(c) {
+  const low = c.confidence === "low";
+  return `<tr data-uid="${esc(c.uid)}" class="${c.include ? "" : "sold"}">
+    <td><input type="checkbox" data-inc${c.include ? " checked" : ""} aria-label="Add ${esc(c.name)}"></td>
+    <td>${c.thumb ? `<img class="scan-thumb" src="${c.thumb}" alt="">` : `<span class="muted small">slab</span>`}</td>
+    <td><input data-name value="${esc(c.name)}" aria-label="Card name" class="scan-name">
+      <div class="small muted">${esc(c.page?.file?.name || "")}${c.position ? " · " + esc(c.position) : ""}${c.condition_note ? " · " + esc(c.condition_note) : ""}${c.cert ? ` · cert ${c.certUrl ? link(c.certUrl, c.cert) : esc(c.cert)}` : ""}${c.certNote ? " · " + esc(c.certNote) : ""}</div></td>
+    <td><input data-grade value="${esc(c.grade)}" size="7" aria-label="Grade"></td>
+    <td><span class="chip ${c.confidence === "high" ? "good" : low ? "bad" : "warn"}" title="How sure the reader is">${low ? "check" : esc(c.confidence || "")}</span> ${dupNote(c)}</td>
+    <td class="num" data-val>${usd(c.value)}<div class="small">${c.url ? link(c.url, "sales") : `<span class="muted">no match</span>`}</div></td>
+    <td><button class="ghost small" data-reprice title="Changed the name or grade? Re-price it (free, no AI)">↻</button></td></tr>`;
+}
+function scanReviewHtml() {
+  const cards = scanCards();
+  const locs = [...new Set(scan.inv.map((r) => r.location).filter(Boolean))].sort(byNumber);
+  return `<div class="panel">
+    <div class="row space"><h3 style="margin:0">Check the cards</h3><span class="small" data-scansum></span></div>
+    <div class="row small"><button class="ghost small" data-skiplow>Untick the ones to check</button><button class="ghost small" data-tickall>Tick all</button></div>
+    <div class="table-wrap"><table class="scan-table"><tr><th></th><th></th><th>Card</th><th>Grade</th><th>Sure?</th><th class="num">Value</th><th></th></tr>
+      <tbody data-scanrows>${cards.map(scanRowHtml).join("")}</tbody></table></div>
+    <form class="form-grid" data-scanadd style="margin-top:.8rem">
+      <label>Location<input name="location" list="scanLocs" value="${esc(scan.location || "")}" placeholder="Box 3" autocomplete="off"><datalist id="scanLocs">${locs.map((l) => `<option value="${esc(l)}">`).join("")}</datalist></label>
+      <label>Paid for all of them $ <span class="muted small">(split by value — unpriced cards get $0; price them later and use ÷ Split lot cost to re-split)</span><input name="total" type="number" min="0" step="0.01" placeholder="0"></label>
+      <label>Status<select name="status">${["in_stock", "listed", "grading"].map((v) => `<option value="${v}">${STATUS_LABEL[v]}</option>`).join("")}</select></label>
+      <label class="check"><input type="checkbox" name="combine" checked> Copies of the same card go on one row (qty)</label>
+      <div class="span2 row"><button class="primary" data-addscan>＋ Add to inventory</button><span class="small muted" data-addprog></span></div>
+    </form></div>`;
+}
+function appendScanRows(cards) {
+  if (!cards.length) return;
+  const tb = $("#scanReview [data-scanrows]");
+  if (!tb) { $("#scanReview").innerHTML = scanReviewHtml(); wireScanReview(); return; }
+  tb.insertAdjacentHTML("beforeend", cards.map(scanRowHtml).join(""));
+  scanSummary();
+}
+function scanSummary() {
+  const el = $("#scanReview [data-scansum]");
+  if (!el) return;
+  const on = scanCards().filter((c) => c.include);
+  const low = on.filter((c) => c.confidence === "low").length;
+  el.innerHTML = `<b>${plural(on.length, "card")}</b> ticked · worth ${usd(on.reduce((n, c) => n + (c.value || 0), 0))}${low ? ` · <span class="bad">${low} to check</span>` : ""}${on.some((c) => c.value == null) ? ` · ${on.filter((c) => c.value == null).length} unpriced (💲 Find prices later)` : ""}`;
+  const b = $("#scanReview [data-addscan]");
+  if (b && !b.dataset.busy) b.textContent = `＋ Add ${plural(on.length, "card")} to inventory`;
+}
+function wireScanReview() {
+  const box = $("#scanReview");
+  if (!box || !$("[data-scanrows]", box)) return;
+  const cardOf = (el) => scanCards().find((c) => c.uid === el.closest("tr").dataset.uid);
+  // one listener for every row, so rows added while scanning work too
+  box.onchange = (e) => {
+    const c = e.target.closest("tr[data-uid]") && cardOf(e.target);
+    if (!c) return;
+    if (e.target.matches("[data-inc]")) { c.include = e.target.checked; e.target.closest("tr").classList.toggle("sold", !c.include); }
+    if (e.target.matches("[data-name]")) { c.name = e.target.value.trim(); c.edited = true; }
+    if (e.target.matches("[data-grade]")) { c.grade = e.target.value.trim() || "Raw"; c.edited = true; }
+    scanSummary();
+  };
+  box.onclick = async (e) => {
+    const t = e.target;
+    if (t.matches("[data-skiplow], [data-tickall]")) {
+      for (const c of scanCards()) if (t.matches("[data-tickall]") || c.confidence === "low") c.include = t.matches("[data-tickall]");
+      $$("tr[data-uid]", box).forEach((tr) => { const c = cardOf(tr); $("[data-inc]", tr).checked = c.include; tr.classList.toggle("sold", !c.include); });
+      return scanSummary();
+    }
+    if (t.matches("[data-reprice]")) {
+      const c = cardOf(t), tr = t.closest("tr");
+      t.disabled = true;
+      const r = await (await fetch("/api/lot/reprice", json("POST", { name: c.name, grade: c.grade, category: c.category || "other" }))).json().catch(() => ({}));
+      t.disabled = false;
+      if (r.url) Object.assign(c, { value: r.value, url: r.url, matched: r.matched, volume: r.volume, confidence: "high" });
+      else toast(r.error || "No clear match — add year, set and number to the name, or add it and use 💲 Find price later.", { error: true });
+      tr.outerHTML = scanRowHtml(c);
+      scanSummary();
+    }
+    if (t.matches("[data-addscan]")) { e.preventDefault(); addScanned(t); }
+  };
+  $("[data-scanadd]", box).onsubmit = (e) => e.preventDefault(); // Enter in a box doesn't add anything by surprise
+  scanSummary();
+}
+
+async function addScanned(btn) {
+  const f = Object.fromEntries(new FormData($("#scanReview [data-scanadd]")));
+  const chosen = scanCards().filter((c) => c.include && c.name);
+  if (!chosen.length) return toast("Tick the cards to add.", { error: true });
+  if (scan.running) return toast("Wait for the scan to finish (or pause it) first.", { error: true });
+  // copies of the same card → one row with a quantity (photos from the first copy)
+  const groups = [];
+  const byKey = new Map();
+  for (const c of chosen) {
+    const k = f.combine ? `${c.url || normName(c.name)}|${normName(c.grade)}` : c.uid;
+    if (byKey.has(k)) byKey.get(k).push(c);
+    else { const g = [c]; byKey.set(k, g); groups.push(g); }
+  }
+  // what was paid for the lot, spread by value (evenly when nothing is priced)
+  const total = parseFloat(f.total) || 0;
+  const worth = chosen.reduce((n, c) => n + (c.value || 0), 0);
+  const costEach = (c) => (!total ? 0 : Math.round((worth > 0 ? (total * (c.value || 0)) / worth : total / chosen.length) * 100) / 100);
+  btn.disabled = true;
+  btn.dataset.busy = "1";
+  const prog = $("#scanReview [data-addprog]");
+  const imgs = new Map(); // file → decoded image, while its cards are being cut out
+  const image = async (file) => { if (!imgs.has(file)) imgs.set(file, readAsImage(file)); return (await imgs.get(file)).img; };
+  let added = 0;
+  const doneCards = new Set();
+  try {
+    for (let i = 0; i < groups.length; i += 20) {
+      const items = [];
+      for (const g of groups.slice(i, i + 20)) {
+        const c = g[0], photos = [];
+        try {
+          if (c.page.file) {
+            const img = await image(c.page.file);
+            const one = c.page.cards.length > 1 || c.box ? c.box : null;
+            photos.push({ data: cropCard(img, one, 1800).toDataURL("image/jpeg", 0.9), thumb: cropCard(img, one, 600).toDataURL("image/jpeg", 0.82) });
+            if (c.page.back) { const b = await image(c.page.back); photos.push({ data: cropCard(b, null, 1800).toDataURL("image/jpeg", 0.9), thumb: cropCard(b, null, 600).toDataURL("image/jpeg", 0.82) }); }
+          }
+        } catch {
+          /* the card is still added; photos can be added in the editor */
+        }
+        items.push({
+          name: c.name, grade: c.grade || "Raw", category: c.category || "other", qty: g.length,
+          cost: Math.round((g.reduce((n, x) => n + costEach(x), 0) / g.length) * 100) / 100,
+          value: c.value ?? null, priceUrl: c.url || null, location: f.location || "", status: f.status, purchased: today(),
+          notes: [`Scanned ${today()}`, c.condition_note, c.cert ? `cert ${c.cert}` : ""].filter(Boolean).join(" · "),
+          photos,
+        });
+      }
+      const r = await fetch("/api/inventory/many", json("POST", { items }));
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Couldn't add them");
+      added += j.added;
+      for (const g of groups.slice(i, i + 20)) g.forEach((c) => doneCards.add(c));
+      // free memory for files whose cards are all done
+      for (const [file] of imgs) if (!groups.slice(i + 20).some((g) => g[0].page.file === file || g[0].page.back === file)) { imgs.get(file).then((x) => URL.revokeObjectURL(x.url)).catch(() => {}); imgs.delete(file); }
+      if (prog) prog.textContent = `Added ${added} of ${groups.length} rows…`;
+    }
+  } catch (err) {
+    toast(`${err.message} — ${added} rows were added before it stopped.`, { error: true });
+  }
+  // the added cards leave the list, and a file any of them came from is forgotten on the bot (re-reading
+  // that folder later reads it again, and the "have 1" chip shows what's already in)
+  const keys = scan.pages.filter((p) => p.cards.some((c) => doneCards.has(c))).map((p) => p.key);
+  if (keys.length) await fetch("/api/scan", json("DELETE", { keys })).catch(() => {});
+  for (const p of scan.pages) p.cards = p.cards.filter((c) => !doneCards.has(c));
+  scan.pages = scan.pages.filter((p) => p.cards.length || p.status !== "done");
+  delete btn.dataset.busy;
+  if (added) toast(`Added ${plural(added, "row")} (${plural(doneCards.size, "card")}) to inventory${f.location ? " in " + f.location : ""} ✓`);
+  scan.inv = await getJSON("/api/inventory").catch(() => scan.inv);
+  drawScan();
 }
 
 // ------------------------------------------------------------------ GRADING

@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 import { exec, execFile } from "node:child_process";
 
 import { hasKey, resetClient, explainError, MODEL, FALLBACK_MODEL, monthlyBudget, FREE_GROUNDED_PER_MONTH, aiQueue } from "./lib/ai.js";
-import { cardLookup, hotCards, ask, lotLookup, writeListing, slabCheck, adviseInventory, readReceipt, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
+import { cardLookup, hotCards, ask, lotLookup, locateCards, readCards, writeListing, slabCheck, adviseInventory, readReceipt, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
 import { runSelfTest } from "./lib/selftest.js";
 import * as store from "./lib/store.js";
 import * as pricecharting from "./lib/sources/pricecharting.js";
@@ -400,24 +400,44 @@ app.post("/api/lookup", (req, res) => {
   });
 });
 
-// Lot / binder page / bulk scan. Bulk scan sends a key per scanned file: each file's cards are kept
-// ("scan-queue") so re-opening the same folder after a pause or a crash never pays the AI twice.
+// Lot / binder page evaluator (Card Lookup tab): one call, every card in the photo priced.
 app.post("/api/lot", (req, res) => {
-  const images = cleanImages(req.body?.images, 10);
+  const images = cleanImages(req.body?.images, 6);
   if (!images.length) return res.status(400).json({ error: "Drop a photo of the lot or binder page." });
-  const keys = Array.isArray(req.body?.keys) ? req.body.keys.slice(0, images.length).map((k) => String(k).slice(0, 300)) : [];
   streamJob(req, res, async (send, signal) => {
     const lot = await lotLookup({ images, text: String(req.body?.text || "").slice(0, 1000) }, { onEvent: send, signal });
     for (const c of lot.cards) c.wanted = wantMatches(c.url, c.grade, c.name);
-    if (keys.length === images.length) {
+    log(req, `valued a lot of ${lot.cards.length} cards ($${lot.total})`);
+    return { lot };
+  });
+});
+
+// Bulk scan, step 1: where the cards are in each picture (fronts and backs), so each can be cut out.
+app.post("/api/scan/locate", (req, res) => {
+  const images = cleanImages(req.body?.images, 12);
+  if (!images.length) return res.status(400).json({ error: "No pictures to look at." });
+  streamJob(req, res, (send, signal) => locateCards({ images }, { onEvent: send, signal }));
+});
+// Bulk scan, step 2: each card's own cut-out (+ its back) read up close and priced. Each scanned file's cards are
+// kept ("scan-queue", a month) so opening the same folder again after a pause or a crash never pays twice.
+// The browser sends whole files per call, with slots[i] = { key: the file, box, backBox } for cards[i].
+app.post("/api/scan/read", (req, res) => {
+  const raw = (Array.isArray(req.body?.cards) ? req.body.cards : []).slice(0, 16);
+  const cards = raw.map((c) => ({ front: cleanImages([c?.front], 1)[0], back: cleanImages([c?.back], 1)[0] || null }));
+  if (!cards.length || cards.some((c) => !c.front)) return res.status(400).json({ error: "Each card needs its picture." });
+  const box = (b) => (Array.isArray(b) && b.length === 4 && b.every((v) => Number.isFinite(+v)) ? b.map((v) => Math.min(1000, Math.max(0, Math.round(+v)))) : null);
+  const slots = (Array.isArray(req.body?.slots) ? req.body.slots : []).slice(0, cards.length).map((x) => ({ key: String(x?.key || "").slice(0, 300), box: box(x?.box), backBox: box(x?.backBox) }));
+  streamJob(req, res, async (send, signal) => {
+    const read = await readCards({ cards }, { onEvent: send, signal });
+    read.cards.forEach((c, i) => Object.assign(c, { wanted: wantMatches(c.url, c.grade, c.name), box: slots[i]?.box ?? null, backBox: slots[i]?.backBox ?? null }));
+    if (slots.length === cards.length && slots.every((x) => x.key)) {
       const q = store.load("scan-queue", {});
       const at = new Date().toISOString();
-      keys.forEach((k, i) => (q[k] = { at, cards: lot.cards.filter((c) => c.photo === i + 1) }));
-      // a month of scans at most, newest kept
+      for (const key of new Set(slots.map((x) => x.key))) q[key] = { at, cards: read.cards.filter((_, i) => slots[i].key === key) };
       store.save("scan-queue", Object.fromEntries(Object.entries(q).filter(([, v]) => Date.now() - Date.parse(v.at) < 30 * 86400000).slice(-5000)));
-      log(req, `scanned ${images.length} file${images.length === 1 ? "" : "s"}: ${lot.cards.length} cards`);
-    } else log(req, `valued a lot of ${lot.cards.length} cards ($${lot.total})`);
-    return { lot };
+    }
+    log(req, `scanned ${cards.length} card${cards.length === 1 ? "" : "s"} (${read.cards.filter((c) => c.value != null).length} priced)`);
+    return { read };
   });
 });
 app.get("/api/scan", (_req, res) => res.json(store.load("scan-queue", {})));

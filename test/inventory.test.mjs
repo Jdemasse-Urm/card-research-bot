@@ -109,6 +109,36 @@ test("an inventory file from before the history split is migrated on first read 
   assert.ok(!fs.readFileSync(file, "utf8").includes("valueLog"));
 });
 
+// ---------------------------------------------------------------- bulk scan's reader (no AI call: the shaping of its answers)
+
+const jobs = await import("../lib/jobs.js");
+
+test("a slab read becomes the grade the inventory keeps (PSA 8, BGS 9.5) and a name with every identifying detail", () => {
+  const psa8 = jobs.normalizeRead({ grading_company: "PSA", grade: "NM-MT 8", year: "1997", brand_set: "Topps Chrome", player_or_character: "Derek Jeter", card_number: "#55", parallel_or_variant: "Refractor", serial_number: null, rookie: false, autograph: false, memorabilia: false, identification_confidence: "high", cert_number: "12-345678", category: "baseball" }, 1);
+  assert.equal(psa8.grade, "PSA 8");
+  assert.equal(psa8.name, "1997 Topps Chrome Derek Jeter #55 Refractor");
+  assert.deepEqual(psa8.tags, ["refractor"]);
+  assert.equal(psa8.cert, "12345678");
+  assert.equal(jobs.normalizeRead({ grading_company: "bgs", grade: "9.5", player_or_character: "X" }, 1).grade, "BGS 9.5");
+});
+
+test("a raw card has no grade, base isn't called a parallel, and RC / auto / relic / serial all show", () => {
+  const r = jobs.normalizeRead({ grading_company: null, grade: null, year: "2018", brand_set: "2018 Panini Prizm", player_or_character: "Luka Doncic", card_number: "280", parallel_or_variant: "Base", serial_number: "23/99", rookie: true, autograph: true, memorabilia: true, parallel_check: "Silver Prizm or base? Tilt it under a light", identification_confidence: "medium" }, 2);
+  assert.equal(r.grade, "Raw");
+  assert.equal(r.name, "2018 Panini Prizm Luka Doncic #280 23/99 RC Auto Relic", "the year isn't doubled and 'Base' isn't added");
+  assert.deepEqual(r.tags, ["rookie", "auto", "relic", "numbered"]);
+  assert.match(r.parallel_check, /Silver/);
+  const missing = jobs.normalizeRead(undefined, 3);
+  assert.equal(missing.confidence, "low", "a card the model skipped is flagged, not dropped");
+});
+
+test("cards on a page are listed in reading order (rows top to bottom, left to right)", () => {
+  const grid = [];
+  for (let row = 0; row < 3; row++) for (let col = 0; col < 3; col++) grid.push([row * 330 + (col % 2) * 12, col * 330, row * 330 + 300, col * 330 + 300]);
+  const shuffled = [grid[5], grid[0], grid[8], grid[3], grid[1], grid[7], grid[2], grid[6], grid[4]];
+  assert.deepEqual(jobs.readingOrder(shuffled), grid);
+});
+
 // ---------------------------------------------------------------- the routes, on a real server
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -198,6 +228,9 @@ test("routes: slim list, full card, duplicate check, bulk + undo, many with phot
     assert.deepEqual(views, [{ name: "Box 1", filter: { location: "Box 1" } }]);
     assert.deepEqual((await call("GET", "/api/inventory/views")).body, views);
 
+    // bulk scan: both steps refuse an empty request before any AI is involved
+    assert.equal((await call("POST", "/api/scan/locate", { images: [] })).status, 400);
+    assert.equal((await call("POST", "/api/scan/read", { cards: [{ front: null }] })).status, 400);
     // bulk scan's saved readings
     assert.deepEqual((await call("GET", "/api/scan")).body, {});
     assert.equal((await call("DELETE", "/api/scan", { keys: ["x"] })).status, 200);

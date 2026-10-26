@@ -313,6 +313,7 @@ tr.picked td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .check-item.serious { border-color: color-mix(in srgb, var(--warn) 60%, var(--line)); }
 .check-item summary { cursor: pointer; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
 .scan-thumb { width: 64px; height: 88px; object-fit: contain; border-radius: 6px; background: var(--chip); display: block; }
+button.bare { padding: 0; border: 0; background: none; cursor: zoom-in; }
 .scan-name { width: 100%; min-width: 16rem; }
 .scan-table td { vertical-align: middle; }
 .inv-table td { vertical-align: middle; }

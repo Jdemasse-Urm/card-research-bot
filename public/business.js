@@ -885,8 +885,8 @@ function drawScan() {
       <h2 style="margin-top:0">📥 Bulk scan — the whole stack, not a photo per card</h2>
       <ol class="small tight">
         <li><b>Scan</b> the cards into a folder: a sheet-fed card scanner saves each card as its own file (fastest); a flatbed or a phone photo of a binder page gets 8–12 cards in one picture.</li>
-        <li><b>Choose the folder</b> (or the files). The bot finds every card, cuts each one out as its own photo, reads slab cert numbers, and prices them from recent sales — about 10 files per AI call.</li>
-        <li><b>Check the list</b> (cards it isn't sure about are flagged), set the box they're going in and what you paid, and add them all.</li>
+        <li><b>Choose the folder</b> (or the files). The bot finds every card, cuts each one out at full resolution and reads it up close — year, set, player, number, parallel, serial, RC, auto, relic, slab grade and cert — then prices it from recent sales. With <b>Backs too</b> it reads each back as well.</li>
+        <li><b>Check the list</b>: anything it isn't sure of is flagged with what to look at (e.g. "refractor or base? tilt it under a light"); click a picture to see it big. Set the box and what you paid, and add them all.</li>
       </ol>
       <details class="small"><summary>Which scanner, and tips</summary><ul class="tight">
         <li><b>Sheet-fed card scanners</b> (photo scanners like the Epson FastFoto FF-680W, or a Raven) feed a stack at about a card a second and save front + back. Rollers touch the card: use them for commons and bulk, not for valuable raw cards.</li>
@@ -899,7 +899,7 @@ function drawScan() {
         <label class="button primary" for="scanDir">📁 Choose a folder of scans</label><input type="file" id="scanDir" webkitdirectory multiple hidden>
         <label class="button" for="scanFiles">🖼 Choose files</label><input type="file" id="scanFiles" accept="image/*" multiple hidden>
         <button data-camscan title="A webcam or document camera looking down at the cards: one key press per page">📷 Camera</button>
-        <label class="check small"><input type="checkbox" id="scanDuplex"${store.get("scanDuplex", false) ? " checked" : ""}> My scanner saves each card's <b>back as the next file</b> (one card per file)</label>
+        <label class="check small" title="Scan the fronts, flip every card over where it lies, scan again. Each back is matched to its front by position."><input type="checkbox" id="scanDuplex"${store.get("scanDuplex", false) ? " checked" : ""}> <b>Backs too</b>: each picture's backs are the next file (flip the cards in place) — the back gives the number, year and set</label>
       </div>
       <form class="row" data-cert style="margin-top:.4rem"><label>PSA cert numbers <span class="small muted">— scan the slab barcode or type it, Enter</span><input name="cert" inputmode="numeric" autocomplete="off" placeholder="e.g. 81234567"></label></form>
     </div>
@@ -1011,13 +1011,8 @@ async function openScanCamera() {
   start(store.get("scanCam") || null).then(() => sel.addEventListener("change", () => store.set("scanCam", sel.value)));
 }
 
-/** One file, as the AI sees it: redrawn as a JPEG (the crop boxes refer to this same orientation). */
-async function scanImage(file) {
-  const { img, url } = await readAsImage(file);
-  const data = drawScaled(img, 2000).toDataURL("image/jpeg", 0.85).split(",")[1];
-  URL.revokeObjectURL(url);
-  return { mediaType: "image/jpeg", data };
-}
+/** A canvas as the JPEG the server takes. */
+const jpegPart = (canvas, q = 0.9) => ({ mediaType: "image/jpeg", data: canvas.toDataURL("image/jpeg", q).split(",")[1] });
 
 /** Cut one card out of its scan; box = [ymin, xmin, ymax, xmax] in 0–1000, null = the whole picture. */
 function cropCard(img, box, maxSide) {
@@ -1034,6 +1029,70 @@ function cropCard(img, box, maxSide) {
   return c;
 }
 
+/**
+ * The backs picture is the same cards flipped over in place, so each card's back sits at its front's position
+ * mirrored left↔right (flipped like a page) or top↕bottom. Try both, keep the better fit, pair closest-first.
+ */
+function matchBacks(fronts, backs) {
+  const mid = (b) => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+  const plan = (mirror) => {
+    const pairs = [];
+    fronts.forEach((f, i) => backs.forEach((b, j) => {
+      const [fy, fx] = mid(f), [by, bx] = mid(b);
+      pairs.push({ i, j, d: mirror === "x" ? Math.hypot(fy - by, 1000 - fx - bx) : Math.hypot(1000 - fy - by, fx - bx) });
+    }));
+    pairs.sort((p, q) => p.d - q.d);
+    const out = fronts.map(() => null), used = new Set();
+    let cost = 0;
+    for (const { i, j, d } of pairs) if (out[i] == null && !used.has(j) && d < 150) { out[i] = j; used.add(j); cost += d; }
+    return { out, cost: cost + 1000 * out.filter((x) => x == null).length };
+  };
+  const x = plan("x"), y = plan("y");
+  return (x.cost <= y.cost ? x : y).out.map((j) => (j == null ? null : backs[j]));
+}
+
+const imageCache = new Map(); // File → decoded picture, while its cards are being cut out
+const pictureOf = (file) => { if (!imageCache.has(file)) imageCache.set(file, readAsImage(file)); return imageCache.get(file).then((x) => x.img); };
+function forgetPicture(file) {
+  const p = file && imageCache.get(file);
+  if (!p) return;
+  imageCache.delete(file);
+  p.then((x) => URL.revokeObjectURL(x.url)).catch(() => {});
+}
+
+/** Step 1: where every card is in each picture (and its back, when the backs were scanned as the next file). */
+async function locatePages(pages) {
+  const files = pages.flatMap((p) => (p.back ? [p.file, p.back] : [p.file]));
+  const images = await Promise.all(files.map(async (f) => jpegPart(drawScaled(await pictureOf(f), 1600), 0.85)));
+  scan.ctrl = new AbortController();
+  const r = await streamPost("/api/scan/locate", { images }, $("#scanSteps") || document.createElement("div"), scan.ctrl);
+  scan.usd += r.usage?.usd || 0;
+  let i = 0;
+  for (const p of pages) {
+    const fronts = r.photos[i++]?.boxes || [];
+    const backs = p.back ? r.photos[i++]?.boxes || [] : [];
+    const paired = p.back ? matchBacks(fronts, backs) : fronts.map(() => null);
+    p.slots = fronts.map((box, k) => ({ box, backBox: paired[k] }));
+    if (!p.slots.length) { p.status = "done"; p.cards = []; forgetPicture(p.file); forgetPicture(p.back); }
+  }
+}
+
+/** Step 2: every card's own full-resolution cut-out (+ back) read up close and priced. Whole files per call. */
+async function readPages(pages) {
+  const cards = [], slots = [];
+  for (const p of pages) {
+    const img = await pictureOf(p.file), back = p.back ? await pictureOf(p.back) : null;
+    for (const sl of p.slots) {
+      cards.push({ front: jpegPart(cropCard(img, sl.box, 1400)), back: back && sl.backBox ? jpegPart(cropCard(back, sl.backBox, 1400)) : null });
+      slots.push({ key: p.key, box: sl.box, backBox: sl.backBox });
+    }
+  }
+  scan.ctrl = new AbortController();
+  const { read } = await streamPost("/api/scan/read", { cards, slots }, $("#scanSteps") || document.createElement("div"), scan.ctrl);
+  scan.usd += read.usage?.usd || 0;
+  for (const p of pages) await finishPage(p, read.cards.filter((_, i) => slots[i].key === p.key));
+}
+
 async function runScan() {
   if (scan.running || needKey()) return;
   scan.running = true;
@@ -1048,22 +1107,26 @@ async function runScan() {
     while (!scan.paused) {
       const waiting = scan.pages.filter((p) => p.status === "waiting" && p.file);
       if (!waiting.length) break;
-      // as many files per call as keeps it near 30 cards (the reader's limit is 40); the first call learns the rate
-      const read = scan.pages.filter((p) => p.status === "done" && p.file);
-      const perFile = read.length ? Math.max(1, read.reduce((n, p) => n + p.cards.length, 0) / read.length) : null;
-      const batch = waiting.slice(0, perFile ? Math.max(1, Math.min(10, Math.floor(30 / perFile))) : 1);
       const t0 = Date.now();
-      batch.forEach((p) => (p.status = "reading"));
+      // find the cards in up to 6 pictures at a time, then read whole files, up to 12 cards per call
+      const unlocated = waiting.filter((p) => !p.slots).slice(0, 6);
+      const batch = [];
+      if (!unlocated.length) {
+        let n = 0;
+        for (const p of waiting) { if (batch.length && n + p.slots.length > 12) break; batch.push(p); n += p.slots.length; }
+      }
+      const work = unlocated.length ? unlocated : batch;
+      work.forEach((p) => (p.status = "reading"));
       try {
-        const images = await Promise.all(batch.map((p) => scanImage(p.file)));
-        scan.ctrl = new AbortController();
-        const { lot } = await streamPost("/api/lot", { images, keys: batch.map((p) => p.key) }, $("#scanSteps") || document.createElement("div"), scan.ctrl);
-        scan.usd += lot.usage?.usd || 0;
-        for (const [i, p] of batch.entries()) await finishPage(p, lot.cards.filter((c) => c.photo === i + 1));
-        const per = (Date.now() - t0) / 1000 / batch.length;
-        scan.secsPerFile = scan.secsPerFile ? scan.secsPerFile * 0.6 + per * 0.4 : per;
+        if (unlocated.length) await locatePages(unlocated);
+        else {
+          await readPages(batch);
+          const per = (Date.now() - t0) / 1000 / batch.length;
+          scan.secsPerFile = scan.secsPerFile ? scan.secsPerFile * 0.6 + per * 0.4 : per;
+        }
+        work.forEach((p) => p.status === "reading" && (p.status = "waiting"));
       } catch (err) {
-        batch.forEach((p) => (p.status = "waiting"));
+        work.forEach((p) => p.status === "reading" && (p.status = "waiting"));
         scan.paused = true;
         scan.msg = /cancel/i.test(err.message) ? "" : `Paused: ${err.message}${/quota|limit|429/i.test(err.message) ? " Everything read so far is kept — press Resume later (or tomorrow)." : ""}`;
       }
@@ -1081,15 +1144,35 @@ async function finishPage(p, cards) {
   p.status = "done";
   p.cards = [];
   if (!cards.length) return;
-  let img = null, url = null;
+  let img = null;
   try {
-    ({ img, url } = await readAsImage(p.file));
+    img = await pictureOf(p.file);
   } catch {
     /* unreadable now — the cards still list, without the picture */
   }
-  p.cards = cards.map((c, i) => ({ ...c, uid: `${p.key}#${i}`, page: p, include: true, thumb: img ? cropCard(img, cards.length > 1 || c.box ? c.box : null, 220).toDataURL("image/jpeg", 0.75) : null }));
-  if (url) URL.revokeObjectURL(url);
+  p.cards = cards.map((c, i) => ({ ...c, uid: `${p.key}#${i}`, page: p, include: true, thumb: img ? cropCard(img, c.box || null, 220).toDataURL("image/jpeg", 0.75) : null }));
+  forgetPicture(p.file);
+  forgetPicture(p.back);
   appendScanRows(p.cards);
+}
+
+/** Look at a card big (front and back) before trusting the reading. */
+async function openScanZoom(c) {
+  const pics = [];
+  try {
+    if (c.page?.file) pics.push(["Front", cropCard(await pictureOf(c.page.file), c.box || null, 1100).toDataURL("image/jpeg", 0.9)]);
+    if (c.page?.back && c.backBox) pics.push(["Back", cropCard(await pictureOf(c.page.back), c.backBox, 1100).toDataURL("image/jpeg", 0.9)]);
+  } catch {
+    /* the file moved: show what was read */
+  }
+  forgetPicture(c.page?.file);
+  forgetPicture(c.page?.back);
+  const d = c.details || {};
+  const facts = [["Year", d.year], ["Set", d.set], ["Player / character", d.player], ["Number", d.number && "#" + d.number], ["Parallel", d.parallel || "base"], ["Serial", d.serial], ["Rookie", d.rookie && "yes"], ["Autograph", d.autograph && "yes"], ["Relic / patch", d.relic && "yes"], ["Grade", c.grade], ["Cert", c.cert]].filter(([, v]) => v);
+  openModal(c.name, `
+    <div class="row" style="align-items:flex-start;flex-wrap:wrap">${pics.map(([k, src]) => `<figure style="margin:0;flex:1 1 300px"><img src="${src}" alt="${k} of ${esc(c.name)}" style="width:100%;border-radius:8px"><figcaption class="small muted">${k}</figcaption></figure>`).join("") || `<p class="muted">No picture.</p>`}</div>
+    <table class="small" style="margin-top:.6rem">${facts.map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td><b>${esc(v)}</b></td></tr>`).join("")}</table>
+    ${c.parallel_check ? `<p class="small warn">⚠ Check by eye: ${esc(c.parallel_check)}</p>` : ""}${c.id_notes ? `<p class="small muted">${esc(c.id_notes)}</p>` : ""}${c.certNote ? `<p class="small">${esc(c.certNote)}</p>` : ""}`, { wide: true });
 }
 
 async function addCert(n) {
@@ -1120,14 +1203,17 @@ function dupNote(c) {
   return have.length ? `<span class="chip warn" title="${esc(have.map((r) => `${r.sku} ${r.location ? "· " + r.location : ""}`).join("\n"))}">have ${have.reduce((n, r) => n + r.qty, 0)}</span>` : "";
 }
 function scanRowHtml(c) {
-  const low = c.confidence === "low";
+  const low = c.confidence === "low" || c.parallel_check || /says|no record/.test(c.certNote || "");
   return `<tr data-uid="${esc(c.uid)}" class="${c.include ? "" : "sold"}">
     <td><input type="checkbox" data-inc${c.include ? " checked" : ""} aria-label="Add ${esc(c.name)}"></td>
-    <td>${c.thumb ? `<img class="scan-thumb" src="${c.thumb}" alt="">` : `<span class="muted small">slab</span>`}</td>
+    <td>${c.thumb ? `<button class="ghost bare" data-zoom title="Look at it big (front and back)"><img class="scan-thumb" src="${c.thumb}" alt="Card picture"></button>` : `<span class="muted small">slab</span>`}</td>
     <td><input data-name value="${esc(c.name)}" aria-label="Card name" class="scan-name">
-      <div class="small muted">${esc(c.page?.file?.name || "")}${c.position ? " · " + esc(c.position) : ""}${c.condition_note ? " · " + esc(c.condition_note) : ""}${c.cert ? ` · cert ${c.certUrl ? link(c.certUrl, c.cert) : esc(c.cert)}` : ""}${c.certNote ? " · " + esc(c.certNote) : ""}</div></td>
+      <div class="small">${(c.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ")}${c.backBox ? ` <span class="chip" title="The back was read too">+ back</span>` : ""}${c.certVerified ? ` <span class="chip good" title="${esc(c.certNote || "")}">✓ PSA</span>` : ""}</div>
+      ${c.parallel_check ? `<div class="small warn">⚠ Check: ${esc(c.parallel_check)}</div>` : ""}
+      ${c.certNote && !c.certVerified ? `<div class="small bad">${esc(c.certNote)}</div>` : c.certNote && /says/.test(c.certNote) ? `<div class="small warn">${esc(c.certNote)}</div>` : ""}
+      <div class="small muted">${esc(c.page?.file?.name || "")}${c.position ? " · " + esc(c.position) : ""}${c.condition_note ? " · " + esc(c.condition_note) : ""}${c.cert ? ` · cert ${c.certUrl ? link(c.certUrl, c.cert) : esc(c.cert)}` : ""}</div></td>
     <td><input data-grade value="${esc(c.grade)}" size="7" aria-label="Grade"></td>
-    <td><span class="chip ${c.confidence === "high" ? "good" : low ? "bad" : "warn"}" title="How sure the reader is">${low ? "check" : esc(c.confidence || "")}</span> ${dupNote(c)}</td>
+    <td><span class="chip ${c.confidence === "high" && !low ? "good" : low ? "bad" : "warn"}" title="How sure the reader is">${low ? "check" : esc(c.confidence || "")}</span> ${dupNote(c)}</td>
     <td class="num" data-val>${usd(c.value)}<div class="small">${c.url ? link(c.url, "sales") : `<span class="muted">no match</span>`}</div></td>
     <td><button class="ghost small" data-reprice title="Changed the name or grade? Re-price it (free, no AI)">↻</button></td></tr>`;
 }
@@ -1158,7 +1244,7 @@ function scanSummary() {
   const el = $("#scanReview [data-scansum]");
   if (!el) return;
   const on = scanCards().filter((c) => c.include);
-  const low = on.filter((c) => c.confidence === "low").length;
+  const low = on.filter((c) => c.confidence === "low" || c.parallel_check).length;
   el.innerHTML = `<b>${plural(on.length, "card")}</b> ticked · worth ${usd(on.reduce((n, c) => n + (c.value || 0), 0))}${low ? ` · <span class="bad">${low} to check</span>` : ""}${on.some((c) => c.value == null) ? ` · ${on.filter((c) => c.value == null).length} unpriced (💲 Find prices later)` : ""}`;
   const b = $("#scanReview [data-addscan]");
   if (b && !b.dataset.busy) b.textContent = `＋ Add ${plural(on.length, "card")} to inventory`;
@@ -1179,7 +1265,7 @@ function wireScanReview() {
   box.onclick = async (e) => {
     const t = e.target;
     if (t.matches("[data-skiplow], [data-tickall]")) {
-      for (const c of scanCards()) if (t.matches("[data-tickall]") || c.confidence === "low") c.include = t.matches("[data-tickall]");
+      for (const c of scanCards()) if (t.matches("[data-tickall]") || c.confidence === "low" || c.parallel_check) c.include = t.matches("[data-tickall]");
       $$("tr[data-uid]", box).forEach((tr) => { const c = cardOf(tr); $("[data-inc]", tr).checked = c.include; tr.classList.toggle("sold", !c.include); });
       return scanSummary();
     }
@@ -1193,6 +1279,7 @@ function wireScanReview() {
       tr.outerHTML = scanRowHtml(c);
       scanSummary();
     }
+    if (t.closest("[data-zoom]")) return openScanZoom(cardOf(t));
     if (t.matches("[data-addscan]")) { e.preventDefault(); addScanned(t); }
   };
   $("[data-scanadd]", box).onsubmit = (e) => e.preventDefault(); // Enter in a box doesn't add anything by surprise
@@ -1219,8 +1306,6 @@ async function addScanned(btn) {
   btn.disabled = true;
   btn.dataset.busy = "1";
   const prog = $("#scanReview [data-addprog]");
-  const imgs = new Map(); // file → decoded image, while its cards are being cut out
-  const image = async (file) => { if (!imgs.has(file)) imgs.set(file, readAsImage(file)); return (await imgs.get(file)).img; };
   let added = 0;
   const doneCards = new Set();
   try {
@@ -1230,10 +1315,9 @@ async function addScanned(btn) {
         const c = g[0], photos = [];
         try {
           if (c.page.file) {
-            const img = await image(c.page.file);
-            const one = c.page.cards.length > 1 || c.box ? c.box : null;
-            photos.push({ data: cropCard(img, one, 1800).toDataURL("image/jpeg", 0.9), thumb: cropCard(img, one, 600).toDataURL("image/jpeg", 0.82) });
-            if (c.page.back) { const b = await image(c.page.back); photos.push({ data: cropCard(b, null, 1800).toDataURL("image/jpeg", 0.9), thumb: cropCard(b, null, 600).toDataURL("image/jpeg", 0.82) }); }
+            const img = await pictureOf(c.page.file);
+            photos.push({ data: cropCard(img, c.box || null, 1800).toDataURL("image/jpeg", 0.9), thumb: cropCard(img, c.box || null, 600).toDataURL("image/jpeg", 0.82) });
+            if (c.page.back && c.backBox) { const b = await pictureOf(c.page.back); photos.push({ data: cropCard(b, c.backBox, 1800).toDataURL("image/jpeg", 0.9), thumb: cropCard(b, c.backBox, 600).toDataURL("image/jpeg", 0.82) }); }
           }
         } catch {
           /* the card is still added; photos can be added in the editor */
@@ -1242,7 +1326,8 @@ async function addScanned(btn) {
           name: c.name, grade: c.grade || "Raw", category: c.category || "other", qty: g.length,
           cost: Math.round((g.reduce((n, x) => n + costEach(x), 0) / g.length) * 100) / 100,
           value: c.value ?? null, priceUrl: c.url || null, location: f.location || "", status: f.status, purchased: today(),
-          notes: [`Scanned ${today()}`, c.condition_note, c.cert ? `cert ${c.cert}` : ""].filter(Boolean).join(" · "),
+          tags: c.tags || [],
+          notes: [`Scanned ${today()}`, c.condition_note, c.cert ? `cert ${c.cert}${c.certVerified ? " (matches PSA)" : ""}` : "", c.parallel_check ? `check: ${c.parallel_check}` : ""].filter(Boolean).join(" · "),
           photos,
         });
       }
@@ -1252,7 +1337,7 @@ async function addScanned(btn) {
       added += j.added;
       for (const g of groups.slice(i, i + 20)) g.forEach((c) => doneCards.add(c));
       // free memory for files whose cards are all done
-      for (const [file] of imgs) if (!groups.slice(i + 20).some((g) => g[0].page.file === file || g[0].page.back === file)) { imgs.get(file).then((x) => URL.revokeObjectURL(x.url)).catch(() => {}); imgs.delete(file); }
+      for (const [file] of imageCache) if (!groups.slice(i + 20).some((g) => g[0].page.file === file || g[0].page.back === file)) forgetPicture(file);
       if (prog) prog.textContent = `Added ${added} of ${groups.length} rows…`;
     }
   } catch (err) {

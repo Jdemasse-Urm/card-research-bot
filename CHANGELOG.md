@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.9.0 — bulk scan reads every card up close
+
+- **Find, then read up close**: a scan is now two steps. A quick pass finds every card in each picture; then each
+  card is cut out at full resolution and read on its own at high image detail. Before, a whole page went in at
+  once, so each card got a fraction of the picture and small print — card numbers, serial stamps, the word
+  "Refractor" — could be missed.
+- **Backs too**: scan the fronts, flip every card over where it lies, scan again — each back is matched to its
+  front by position (left↔right or top↕bottom flips both work) and read with it. Backs carry the card number,
+  year and set. Each card keeps its back as its second photo.
+- **Every detail, as its own field**: year, set, player/character, card number, parallel/refractor, stamped
+  serial (23/99), rookie, autograph, relic, grading company + grade, cert — the same fields a single-card lookup
+  uses. The name is built from them; RC / auto / relic / numbered / the parallel become tags.
+- **No guessing**: a raw card never gets a grade; a parallel is named only when the picture shows it, otherwise
+  the card is flagged with exactly what to check ("Silver Prizm or base? Tilt it under a light"). Flagged cards
+  count as "to check" and can be unticked in one click.
+- **PSA cross-check**: a PSA cert read off a slab is checked against PSA's record (with the free PSA token); if
+  the label was read as PSA 9 but PSA says 8, the card is flagged and PSA's grade is used. ✓ PSA shows on cards
+  that match.
+- Click a card's picture to see the front and back big with everything that was read.
+- AI calls for close reads ask Gemini for high image detail (dropped automatically if a model refuses it).
+
 ## 3.8.0 — the inventory 10-10: scan the stack, organise it, and keep it fast
 
 **Major**

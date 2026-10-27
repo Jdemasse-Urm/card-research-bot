@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 import { exec, execFile } from "node:child_process";
 
 import { hasKey, resetClient, explainError, MODEL, FALLBACK_MODEL, monthlyBudget, FREE_GROUNDED_PER_MONTH, aiQueue } from "./lib/ai.js";
-import { cardLookup, hotCards, ask, lotLookup, locateCards, readCards, writeListing, slabCheck, adviseInventory, readReceipt, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
+import { cardLookup, hotCards, ask, askBusiness, lotLookup, locateCards, readCards, writeListing, slabCheck, adviseInventory, readReceipt, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
 import { runSelfTest } from "./lib/selftest.js";
 import * as store from "./lib/store.js";
 import * as pricecharting from "./lib/sources/pricecharting.js";
@@ -693,6 +693,14 @@ app.post("/api/hot", (req, res) => {
 
 // ---------------- ask anything ----------------
 
+// A question about the shop's own records: the AI writes the query, the code counts, the AI words the answer.
+app.post("/api/ask-business", (req, res) => {
+  const question = store.clean.str(req.body?.question, 500);
+  if (!question) return res.status(400).json({ error: "Ask a question." });
+  const records = { inventory: store.inventoryView(), expenses: store.expenses(), customers: store.customers().map((c) => customerSummary(c)), feeFor, today: new Date().toLocaleDateString("en-CA") };
+  streamJob(req, res, async (send, signal) => ({ result: await askBusiness({ question, records }, { onEvent: send, signal }) }));
+});
+
 app.post("/api/ask", (req, res) => {
   const question = String(req.body?.question || "").trim().slice(0, 4000);
   if (!question) return res.status(400).json({ error: "Ask a question." });
@@ -1160,10 +1168,313 @@ app.post("/api/supplies/:id/restock", (req, res) => {
   const qty = parseFloat(req.body?.qty) || 0;
   if (qty <= 0) return res.status(400).json({ error: "How many came in?" });
   const paid = store.clean.money(req.body?.paid);
-  const list = store.saveSupply({ ...x, onHand: x.onHand + qty, cost: paid ? Math.round((paid / qty) * 100) / 100 : x.cost });
+  const list = store.saveSupply({ ...x, onHand: (x.onHand ?? 0) + qty, cost: paid ? Math.round((paid / qty) * 100) / 100 : x.cost });
   if (paid) store.addExpense({ kind: "Supplies", amount: paid, note: `${qty} ${x.name}`, addedBy: who(req) });
   log(req, `restocked ${qty} ${x.name}${paid ? ` ($${paid})` : ""}`);
   res.json(list);
+});
+
+// ---------------- books & taxes, sales from other sites, listings out, insurance, grading picks, weekly report, live
+
+/** The year's books: sales by where they sold, fees, cost of cards, expenses, inventory at the start and end of
+ *  the year (cost), sales tax, and each platform's 1099-K checked against what's recorded here. */
+app.get("/api/books", (req, res) => {
+  const year = /^\d{4}$/.test(String(req.query.year || "")) ? String(req.query.year) : String(new Date().getFullYear());
+  const inv = store.inventory();
+  const s = store.shopSettings();
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const sold = inv.filter((r) => r.status === "sold" && r.soldPrice != null && (r.soldDate || "").startsWith(year));
+  const channels = {};
+  for (const r of sold) {
+    const c = (channels[r.soldOn || "Other"] ||= { channel: r.soldOn || "Other", units: 0, gross: 0, fees: 0, cost: 0, consigned: 0 });
+    c.units += r.qty;
+    c.gross += r.soldPrice * r.qty;
+    c.fees += feeFor(r);
+    c.cost += (r.cost || 0) * r.qty;
+    if (r.consignorId) c.consigned += r.soldPrice * r.qty;
+  }
+  const byChannel = Object.values(channels).map((c) => ({ ...c, gross: r2(c.gross), fees: r2(c.fees), cost: r2(c.cost), consigned: r2(c.consigned), profit: r2(c.gross - c.fees - c.cost) })).sort((a, b) => b.gross - a.gross);
+  const exps = store.expenses().filter((e) => e.date.startsWith(year));
+  const byKind = {};
+  for (const e of exps) byKind[e.kind] = r2((byKind[e.kind] || 0) + e.amount);
+  const todayIso = new Date().toLocaleDateString("en-CA");
+  const start = `${Number(year) - 1}-12-31`, end = `${year}-12-31` < todayIso ? `${year}-12-31` : todayIso;
+  const atCost = (list) => r2(list.reduce((n, r) => n + (r.cost || 0) * r.qty, 0));
+  const startInv = atCost(store.inventoryAt(start, inv)), endInv = atCost(store.inventoryAt(end, inv));
+  const purchases = atCost(inv.filter((r) => !r.consignorId && (r.purchased || String(r.added || "").slice(0, 10)).startsWith(year)));
+  const sum = (list, k) => r2(list.reduce((n, x) => n + x[k], 0));
+  const gross = sum(byChannel, "gross"), fees = sum(byChannel, "fees"), cogs = sum(byChannel, "cost"), expenses = r2(exps.reduce((n, e) => n + e.amount, 0));
+  const inPerson = r2(sold.filter((r) => ["Card show", "Local / cash"].includes(r.soldOn)).reduce((n, r) => n + r.soldPrice * r.qty, 0));
+  const websiteTax = r2(mjc.localOrders().filter((o) => (o.created || "").startsWith(year)).reduce((n, o) => n + (o.tax || 0), 0));
+  const rate = s.salesTaxPct;
+  const k = s.k1099?.[year] || {};
+  const platforms = ["eBay", "Whatnot", "TCGplayer", "MJC site", "Facebook"];
+  res.json({
+    year, through: end, gross, fees, cogs, expenses, profit: r2(gross - fees - cogs), net: r2(gross - fees - cogs - expenses),
+    byChannel, expensesByKind: byKind,
+    inventory: { start: startInv, purchases, end: endInv, cogs: r2(startInv + purchases - endInv), note: "Cost of cards owned on Jan 1 + cards bought this year − cards owned at year end. Consigned cards aren't yours and aren't counted; boxes opened leave stock when opened." },
+    salesTax: { websiteCollected: websiteTax, inPerson, rate, included: s.taxIncluded, due: rate ? r2(s.taxIncluded ? (inPerson * rate) / (100 + rate) : (inPerson * rate) / 100) : null },
+    k1099: platforms.map((p) => { const rec = channels[p] ? r2(channels[p].gross) : 0; return { platform: p, recorded: rec, reported: k[p] ?? null, diff: k[p] != null ? r2(k[p] - rec) : null }; }).filter((x) => x.recorded || x.reported != null),
+    consignment: { sales: r2(sold.filter((r) => r.consignorId).reduce((n, r) => n + r.soldPrice * r.qty, 0)), paidOut: r2(sold.filter((r) => r.payout?.paidAt).reduce((n, r) => n + r.payout.owed, 0)), owed: r2(sold.filter((r) => r.payout && !r.payout.paidAt).reduce((n, r) => n + r.payout.owed, 0)) },
+  });
+});
+app.put("/api/books/1099", (req, res) => res.json(store.saveShopSettings({ k1099: req.body || {} }).k1099));
+// What you owned on a date, at cost (the year-end inventory list for the accountant).
+app.get("/api/export/inventory-at.csv", (req, res) => {
+  const d = store.clean.date(req.query.date) || new Date().toLocaleDateString("en-CA");
+  const rows = store.inventoryAt(d);
+  sendCsv(res, `inventory-on-${d}`, csv(rows, [["SKU", (r) => r.sku], ["Card", (r) => r.name], ["Grade", (r) => r.grade], ["Category", (r) => r.category], ["Qty", (r) => r.qty], ["Cost each", (r) => r.cost], ["Cost total", (r) => Math.round((r.cost || 0) * r.qty * 100) / 100], ["Bought", (r) => r.purchased || String(r.added || "").slice(0, 10)], ["Location", (r) => r.location]]));
+});
+
+// Insurance schedule: every card worth more than a set amount, with what it cost, its value today and where it is.
+app.get("/api/insurance", (req, res) => {
+  const min = parseFloat(req.query.min) || 100;
+  const rows = store.inventoryView().filter((r) => r.status !== "sold" && (r.value ?? r.cost ?? 0) >= min).sort((a, b) => (b.value ?? b.cost ?? 0) * b.qty - (a.value ?? a.cost ?? 0) * a.qty);
+  res.json({ min, at: new Date().toISOString(), total: Math.round(rows.reduce((n, r) => n + (r.value ?? r.cost ?? 0) * r.qty, 0) * 100) / 100, rows: rows.map((r) => ({ id: r.id, sku: r.sku, name: r.name, grade: r.grade, qty: r.qty, cost: r.cost, value: r.value, location: r.location, cert: r.facts?.cert || "", photo: (r.photos || [])[0] ? `/api/photos/${r.id}/${mjc.thumbName(r.photos[0])}` : null, consigned: Boolean(r.consignorId), valuedAt: r.valuedAt })) });
+});
+
+// Sales made on other sites (eBay's orders report, Whatnot's sales export, TCGplayer…): read the file, match each
+// line to a card (SKU = "Custom label" first, else the closest title), then mark the confirmed ones sold.
+const findCol = (head, res) => { for (const re of res) { const i = head.findIndex((h) => re.test(h)); if (i >= 0) return i; } return -1; };
+app.post("/api/import-sales/preview", (req, res) => {
+  const all = parseCsv(String(req.body?.text || "").slice(0, 5e6));
+  const hi = all.findIndex((r) => r.some((c) => /title|item|product|card|name/i.test(c)) && r.some((c) => /price|sold|total|amount/i.test(c)));
+  if (hi < 0) return res.status(400).json({ error: "Couldn't find the header row (a title column and a price column)." });
+  const head = all[hi].map((h) => String(h).trim());
+  const col = {
+    sku: findCol(head, [/^custom label/i, /\bsku\b/i, /custom label/i]),
+    title: findCol(head, [/^item title$/i, /title/i, /product name/i, /^item$/i, /listing/i, /card name/i, /name/i]),
+    qty: findCol(head, [/^quantity$/i, /quantity/i, /^qty/i]),
+    price: findCol(head, [/^sold for$/i, /item price/i, /sold price/i, /sale price/i, /^price$/i, /price/i, /total/i, /amount/i]),
+    date: findCol(head, [/sale date/i, /order date/i, /sold date/i, /paid on/i, /date/i]),
+    order: findCol(head, [/order number/i, /order id/i, /order #/i, /sales record/i, /order/i]),
+    buyer: findCol(head, [/buyer username/i, /buyer user/i, /buyer name/i, /buyer/i, /username/i, /customer/i]),
+  };
+  if (col.title < 0 || col.price < 0) return res.status(400).json({ error: "The file needs a title column and a price column." });
+  const platform = store.clean.oneOf(req.body?.platform, store.PLATFORMS, "eBay");
+  const done = new Set(store.load("sales-imports", []));
+  const stock = store.inventoryView().filter((r) => r.status !== "sold");
+  const words = (s) => new Set(String(s || "").toLowerCase().replace(/[^a-z0-9#]+/g, " ").split(" ").filter((w) => w.length > 1));
+  const totalPrice = /total|amount/i.test(head[col.price]);
+  const money = (v) => store.clean.money(String(v || "").replace(/[^0-9.]/g, ""));
+  const dateOf = (v) => { if (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "").trim())) return String(v).trim(); const t = Date.parse(String(v || "").replace(/ (PDT|PST|EDT|EST|CDT|CST|MDT|MST)$/, "")); return Number.isFinite(t) ? new Date(t).toLocaleDateString("en-CA") : null; };
+  const rows = all.slice(hi + 1).map((r, i) => {
+    const title = String(r[col.title] || "").trim(), sku = col.sku >= 0 ? String(r[col.sku] || "").trim() : "";
+    const qty = col.qty >= 0 ? Math.max(1, parseInt(r[col.qty], 10) || 1) : 1;
+    const price = money(r[col.price]);
+    if (!title || price == null) return null;
+    const order = col.order >= 0 ? String(r[col.order] || "").trim() : "";
+    const key = `${platform}|${order}|${sku}|${title}`.toLowerCase();
+    let match = sku ? stock.find((x) => x.sku && x.sku.toLowerCase() === sku.toLowerCase()) : null;
+    let how = match ? "sku" : null, score = match ? 1 : 0;
+    if (!match) {
+      const tw = words(title);
+      for (const x of stock) {
+        const xw = words(x.name);
+        const overlap = [...xw].filter((w) => tw.has(w)).length / Math.max(1, xw.size);
+        if (overlap > score) { score = overlap; match = x; }
+      }
+      how = score >= 0.6 ? "title" : null;
+      if (!how) match = null;
+    }
+    return { i, key, title, sku, qty, price: totalPrice ? Math.round((price / qty) * 100) / 100 : price, date: col.date >= 0 ? dateOf(r[col.date]) : null, order, buyer: col.buyer >= 0 ? String(r[col.buyer] || "").trim() : "", dup: done.has(key), match: match ? { id: match.id, name: match.name, sku: match.sku, grade: match.grade, qty: match.qty, how, score: Math.round(score * 100) / 100 } : null };
+  }).filter(Boolean);
+  res.json({ platform, columns: Object.fromEntries(Object.entries(col).map(([k, i]) => [k, i >= 0 ? head[i] : null])), rows });
+});
+app.post("/api/import-sales/apply", (req, res) => {
+  const platform = store.clean.oneOf(req.body?.platform, store.PLATFORMS, "eBay");
+  const done = store.load("sales-imports", []);
+  const seen = new Set(done);
+  let sold = 0, web = false;
+  for (const x of (Array.isArray(req.body?.rows) ? req.body.rows : []).slice(0, 2000)) {
+    const key = String(x.key || "").slice(0, 400);
+    if (!key || seen.has(key)) continue;
+    let customerId = null;
+    if (x.buyer) {
+      const handle = store.clean.str(x.buyer, 60);
+      customerId = (store.customers().find((c) => (c.handle || "").toLowerCase() === handle.toLowerCase()) || store.addCustomer({ name: handle, handle, notes: `Bought on ${platform}` })).id;
+    }
+    const r = store.sellUnits(String(x.rowId), { qty: x.qty, soldPrice: x.price, soldOn: platform, soldDate: store.clean.date(x.date), note: `${platform}${x.order ? " order " + store.clean.str(x.order, 60) : ""}`, customerId });
+    if (!r) continue;
+    web ||= Boolean(r.row.web);
+    seen.add(key);
+    done.push(key);
+    sold++;
+  }
+  store.save("sales-imports", done.slice(-20000));
+  if (sold) log(req, `marked ${sold} card${sold === 1 ? "" : "s"} sold from a ${platform} sales file`);
+  if (web) mjc.scheduleSync(); // sold on another site → off the MJC website too
+  res.json({ sold });
+});
+
+// Listings out: every field the selling sites ask for, one row per card — copy the columns into eBay's or Whatnot's
+// bulk-listing template (their column names differ, so this file has all of them under plain names).
+app.all("/api/export/listings.csv", (req, res) => {
+  if (!["GET", "POST"].includes(req.method)) return res.status(405).end();
+  const ids = new Set((Array.isArray(req.body?.ids) ? req.body.ids : String(req.query.ids || "").split(",")).map(String).filter(Boolean));
+  const site = (mjc.storeSettings()?.siteUrl || "").replace(/\/+$/, "");
+  const rows = store.inventory().filter((r) => r.status !== "sold" && (ids.size ? ids.has(r.id) : true));
+  const grader = (r) => String(r.grade || "").match(/^(PSA|BGS|SGC|CGC|TAG|HGA)\b/i)?.[1]?.toUpperCase() || "";
+  const title = (r) => { const t = /^raw$/i.test(r.grade) || r.name.includes(r.grade) ? r.name : `${r.name} ${r.grade}`; return t.length > 80 ? t.slice(0, 79).trim() + "…" : t; };
+  const photo = (r, n) => (r.photos || [])[n] ? r.photoUrls?.[r.photos[n]] || "" : "";
+  sendCsv(res, "listings", csv(rows, [
+    ["SKU (custom label)", (r) => r.sku], ["Title", title], ["Price", (r) => r.listPrice ?? (r.web ? (r.webMode === "fixed" ? r.webFixedPrice : r.webPrice) : null) ?? r.value], ["Quantity", (r) => r.qty],
+    ["Graded", (r) => (grader(r) ? "Yes" : "No")], ["Grader", grader], ["Grade", (r) => String(r.grade || "").match(/(\d+(\.\d)?)\s*$/)?.[1] || ""], ["Cert number", (r) => r.facts?.cert || ""],
+    ["Condition (raw)", (r) => (/^raw$/i.test(r.grade) && r.condition?.scale ? store.CONDITION_LABEL[r.condition.scale] : "")], ["Condition notes", (r) => (/^raw$/i.test(r.grade) ? [r.condition?.centering && "centering " + r.condition.centering, r.condition?.notes].filter(Boolean).join("; ") : "")],
+    ["Year", (r) => r.facts?.year || ""], ["Set", (r) => r.facts?.set || ""], ["Player / character", (r) => r.facts?.player || ""], ["Team", (r) => r.facts?.team || ""], ["Card number", (r) => r.facts?.number || ""],
+    ["Parallel / variety", (r) => r.facts?.parallel || ""], ["Serial numbered", (r) => r.facts?.serial || ""], ["Rookie", (r) => (r.facts?.rookie ? "Yes" : "")], ["Autographed", (r) => (r.facts?.auto ? "Yes" : "")], ["Relic / patch", (r) => (r.facts?.relic ? "Yes" : "")],
+    ["Category", (r) => r.category], ["Description", (r) => r.webDescription || ""],
+    ...[0, 1, 2, 3, 4, 5, 6, 7].map((n) => [`Photo URL ${n + 1}`, (r) => photo(r, n)]),
+    ["Website link", (r) => (site && r.web ? `${site}/card/${r.id}` : "")],
+  ]));
+});
+
+// What to grade next: your raw cards ranked by what grading should add after fees, from each grade's sold value
+// and grade odds from the card's condition (centering included). Estimates — the odds are rules of thumb.
+const GRADE_ODDS = { great: [0.25, 0.45, 0.2, 0.1], good: [0.1, 0.45, 0.3, 0.15], off: [0.02, 0.25, 0.45, 0.28], lp: [0, 0.05, 0.35, 0.6], unknown: [0.08, 0.35, 0.35, 0.22] };
+function gradeOdds(r) {
+  const k = r.condition;
+  if (["MP", "HP", "DMG"].includes(k?.scale)) return null;
+  if (k?.scale === "LP") return ["lp", GRADE_ODDS.lp];
+  // "55/45 L/R · 60/40 T/B": the worse side of each pair, either way round
+  const worst = Math.max(0, ...[...String(k?.centering || "").matchAll(/(\d{2})\s*\/\s*(\d{2})/g)].map((m) => Math.max(+m[1], +m[2])));
+  if (k?.scale !== "NM" || !worst) return ["unknown", GRADE_ODDS.unknown];
+  return worst <= 55 ? ["great", GRADE_ODDS.great] : worst <= 60 ? ["good", GRADE_ODDS.good] : ["off", GRADE_ODDS.off];
+}
+const guideCache = new Map(); // sales page → { at, d }
+app.post("/api/grading/candidates", (req, res) => {
+  const minRaw = parseFloat(req.body?.minRaw) || 5;
+  const fee = store.shopSettings().ownGradingFee || 25;
+  const [ebayPct, ebayFixed] = FEE_PCT.eBay;
+  const rows = store.inventoryView().filter((r) => ["in_stock", "listed"].includes(r.status) && /^raw$/i.test(r.grade) && r.priceUrl && r.kind !== "sealed" && !r.consignorId && (r.value ?? 0) >= minRaw).sort((a, b) => (b.value || 0) - (a.value || 0)).slice(0, 80);
+  streamJob(req, res, async (send, signal) => {
+    const out = [];
+    let i = 0;
+    const net = (v) => (v > 0 ? v * (1 - ebayPct / 100) - ebayFixed : 0);
+    await Promise.all(Array.from({ length: 4 }, async () => {
+      while (i < rows.length && !signal.aborted) {
+        const r = rows[i++];
+        const odds = gradeOdds(r);
+        if (!odds) continue;
+        send({ type: "step", text: `Grade values: ${r.name}` });
+        let d = guideCache.get(r.priceUrl);
+        if (!d || Date.now() - d.at > 6 * 3600000) {
+          try {
+            d = { at: Date.now(), d: await pricecharting.card(r.priceUrl) };
+            guideCache.set(r.priceUrl, d);
+          } catch {
+            continue;
+          }
+        }
+        const raw = pricecharting.valueAtGrade(d.d, "Raw") ?? r.value ?? 0;
+        const v = ["PSA 10", "PSA 9", "PSA 8", "PSA 7"].map((g) => pricecharting.valueAtGrade(d.d, g));
+        if (v[0] == null && v[1] == null) continue;
+        for (let k = 3; k >= 0; k--) if (v[k] == null) v[k] = k === 3 ? raw : v[k + 1]; // a missing grade counts as the next one down
+        const graded = odds[1].reduce((n, p, k) => n + p * net(v[k]), 0);
+        const gain = Math.round((graded - net(raw) - fee) * 100) / 100;
+        out.push({ id: r.id, name: r.name, sku: r.sku, location: r.location, condition: r.condition?.scale || "", centering: r.condition?.centering || "", oddsFrom: odds[0], odds: odds[1], raw, values: { psa10: v[0], psa9: v[1], psa8: v[2], psa7: v[3] }, gain, roi: Math.round((gain / fee) * 100) });
+      }
+    }));
+    return { fee, cards: out.sort((a, b) => b.gain - a.gain) };
+  });
+});
+
+// The weekly report: last week's numbers and what needs doing this week (Home → 📋 Weekly report; Monday alert).
+function weeklyReport() {
+  const inv = store.inventoryView();
+  const w = weekSummary(inv);
+  const todayIso = new Date().toLocaleDateString("en-CA");
+  const soon = new Date(Date.now() + 14 * 86400000).toLocaleDateString("en-CA");
+  const subs = store.submissions();
+  return {
+    ...w,
+    from: new Date(Date.now() - 7 * 86400000).toLocaleDateString("en-CA"), to: todayIso,
+    stockValue: Math.round(inv.filter((r) => r.status !== "sold").reduce((n, r) => n + (r.value ?? r.cost ?? 0) * r.qty, 0) * 100) / 100,
+    movers: store.stockMovers(7, 5),
+    toDo: {
+      unshipped: mjc.localOrders().filter((o) => o.status === "paid").length,
+      openMessages: mjc.localTickets().filter((t) => t.status === "open").length,
+      lowSupplies: store.supplies().filter((x) => x.onHand != null && x.onHand <= x.reorderAt).map((x) => x.name),
+      consignorsOwed: Math.round(store.consignments().filter((x) => x.owed && !x.paidAt).reduce((n, x) => n + x.owed, 0) * 100) / 100,
+      gradingBack: store.gradingOrders().filter((o) => store.gradingOrderStage(o, subs).step === 4 && o.status !== "returned").length,
+      shows: store.shows().filter((s) => s.date >= todayIso && s.date <= soon).map((s) => ({ name: s.name, date: s.date, table: s.table })),
+    },
+  };
+}
+app.get("/api/weekly", (_req, res) => res.json({ ...weeklyReport(), emailTo: store.shopSettings().weeklyTo }));
+
+// QR codes for packing slips and signs (an SVG; plain text in, at most 500 characters).
+app.get("/api/qr", async (req, res) => {
+  const text = String(req.query.text || "").slice(0, 500);
+  if (!text) return res.status(400).end();
+  res.setHeader("Content-Type", "image/svg+xml");
+  res.setHeader("Cache-Control", "private, max-age=86400");
+  res.send(await QRCode.toString(text, { type: "svg", margin: 1, errorCorrectionLevel: "M" }));
+});
+
+// ---- live stream (Whatnot): the queue, the card on screen, sold to @buyer — and the overlay OBS shows
+const liveRow = (id) => store.inventoryView().find((r) => r.id === id);
+const liveCard = (q) => { const r = q && liveRow(q.id); return r ? { id: r.id, name: r.name, grade: r.grade, qty: r.qty, sku: r.sku, location: r.location, value: r.value ?? null, price: q.price ?? null, status: r.status, photo: (r.photos || [])[0] ? `/api/photos/${r.id}/${r.photos[0]}` : null } : null; };
+app.get("/api/live", (_req, res) => {
+  const st = store.liveState();
+  res.json({ ...st, queue: st.queue.map(liveCard).filter(Boolean), now: liveCard(st.now), total: Math.round(st.sales.reduce((n, x) => n + x.price, 0) * 100) / 100, feePct: FEE_PCT.Whatnot });
+});
+app.put("/api/live/queue", (req, res) => {
+  const st = store.liveState();
+  st.queue = (Array.isArray(req.body?.queue) ? req.body.queue : []).slice(0, 500).filter((q) => liveRow(String(q?.id))).map((q) => ({ id: String(q.id), price: store.clean.money(q.price) }));
+  store.saveLive(st);
+  res.json({ ok: true, queue: st.queue.length });
+});
+app.post("/api/live/now", (req, res) => {
+  const st = store.liveState();
+  const q = st.queue.find((x) => x.id === String(req.body?.id));
+  if (!q) return res.status(404).json({ error: "That card isn't in the queue." });
+  st.now = q;
+  st.startedAt ||= new Date().toISOString();
+  store.saveLive(st);
+  res.json({ ok: true });
+});
+app.post("/api/live/sold", (req, res) => {
+  const st = store.liveState();
+  if (!st.now) return res.status(400).json({ error: "Put a card on screen first." });
+  const price = store.clean.money(req.body?.price);
+  if (price == null) return res.status(400).json({ error: "What did it sell for?" });
+  const buyer = store.clean.str(req.body?.buyer, 60).replace(/^@/, "");
+  const cust = buyer ? store.customers().find((c) => (c.handle || "").toLowerCase() === buyer.toLowerCase()) || store.addCustomer({ name: buyer, handle: buyer, notes: "Bought on a Whatnot stream" }) : null;
+  const r = store.sellUnits(st.now.id, { qty: 1, soldPrice: price, soldOn: "Whatnot", payment: "Card", note: `Whatnot stream${buyer ? " · @" + buyer : ""}`, customerId: cust?.id || null });
+  if (!r) return res.status(409).json({ error: "That card was already sold." });
+  st.sales.push({ at: new Date().toISOString(), rowId: r.row.id, soldRowId: r.soldRow.id, name: r.soldRow.name, grade: r.soldRow.grade, sku: r.soldRow.sku, location: r.soldRow.location || "", buyer, customerId: cust?.id || null, price });
+  // the next card in the queue goes on screen; a stack with copies left stays queued
+  const i = st.queue.findIndex((x) => x.id === st.now.id);
+  if (i >= 0 && r.soldRow === r.row) st.queue.splice(i, 1);
+  st.now = st.queue[i] || st.queue[0] || null;
+  store.saveLive(st);
+  log(req, `sold ${r.soldRow.name} on a Whatnot stream for $${price}${buyer ? " to @" + buyer : ""}`);
+  if (r.row.web) mjc.scheduleSync();
+  res.json({ ok: true, sale: st.sales.at(-1) });
+});
+app.post("/api/live/skip", (_req, res) => {
+  const st = store.liveState();
+  if (st.now) {
+    const i = st.queue.findIndex((x) => x.id === st.now.id);
+    const [q] = st.queue.splice(i, 1);
+    st.queue.push(q);
+    st.now = st.queue[i] || st.queue[0] || null;
+    store.saveLive(st);
+  }
+  res.json({ ok: true });
+});
+app.post("/api/live/end", (req, res) => {
+  const st = store.endLive();
+  log(req, `ended a Whatnot stream: ${st.sales.length} sales, $${Math.round(st.sales.reduce((n, x) => n + x.price, 0) * 100) / 100}`);
+  res.json({ ok: true, sales: st.sales });
+});
+app.get("/api/live/sessions", (_req, res) => res.json(store.liveSessions()));
+// The overlay page (OBS browser source → http://localhost:3737/overlay.html) asks this every second or two.
+app.get("/api/live/overlay", (_req, res) => {
+  const st = store.liveState();
+  const last = st.sales.at(-1);
+  res.json({ now: liveCard(st.now), last: last ? { name: last.name, buyer: last.buyer, price: last.price } : null, next: st.queue.length > 1 ? liveCard(st.queue[(st.queue.findIndex((x) => x.id === st.now?.id) + 1) % st.queue.length]) : null });
 });
 
 // ---------------- MJC website: listing photos + description ----------------
@@ -2136,6 +2447,18 @@ async function hourly() {
   if (!lastPoint || lastPoint.date !== new Date().toISOString().slice(0, 10)) await revalueInventory();
   await refreshSubmissions();
   await watchPops().catch((err) => console.warn("PSA population watch failed:", err.message));
+  // Monday morning: last week's report is ready (one alert a week)
+  const now = new Date();
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7)).toLocaleDateString("en-CA");
+  if (now.getHours() >= 8 && store.load("weekly-state", {}).week !== monday) {
+    try {
+      const w = weeklyReport();
+      store.addAlert({ kind: "weekly", name: "Weekly report", text: `Last week: ${w.sales} cards sold for $${w.revenue} (profit after fees $${w.profit}), ${w.added} added.${w.toDo.unshipped ? ` ${w.toDo.unshipped} orders to ship.` : ""}${w.toDo.lowSupplies.length ? ` Low: ${w.toDo.lowSupplies.join(", ")}.` : ""} Home → 📋 Weekly report.` });
+      store.save("weekly-state", { week: monday });
+    } catch (err) {
+      console.warn("weekly report failed:", err.message);
+    }
+  }
 
   // Daily data check: one alert a day when records need attention (duplicate SKUs, sold cards still on the website…).
   const dayNow = new Date().toISOString().slice(0, 10);

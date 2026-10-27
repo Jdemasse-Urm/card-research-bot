@@ -1201,10 +1201,46 @@ function md(src) {
   return html;
 }
 
+// Ask about the card market (Google-searched) or about your own business (counted from your records).
+let askMode = store.get("askMode", "market");
+function syncAskMode() {
+  $$("#askMode button").forEach((b) => { const on = b.dataset.v === askMode; b.classList.toggle("active", on); b.setAttribute("aria-pressed", on); });
+  $("#askInput").placeholder = askMode === "business" ? "e.g. What did Tigers cards make us this year? · What's been in stock over 90 days? · Best month for sales?" : "Ask a question…";
+}
+$$("#askMode button").forEach((b) => (b.onclick = () => { askMode = b.dataset.v; store.set("askMode", askMode); syncAskMode(); $("#askInput").focus(); }));
+syncAskMode();
+
+async function doAskBusiness(question) {
+  const chat = $("#chat");
+  $(".empty", chat)?.remove();
+  chat.insertAdjacentHTML("beforeend", `<div class="msg q">📊 ${esc(question)}</div>`);
+  $("#askInput").value = "";
+  $("#askBtn").disabled = true;
+  $("#askCancel").classList.remove("hidden");
+  askCtrl = new AbortController();
+  try {
+    const { result: r } = await streamPost("/api/ask-business", { question }, $("#askProgress"), askCtrl);
+    const cols = [["units", "Cards"], ["revenue", "Sales"], ["profit", "Profit"], ["cost", "Cost"], ["value", "Value now"], ["fees", "Fees"], ["avgDays", "Avg days"]].filter(([k]) => [r.totals, ...r.groups].some((g) => g[k]));
+    const cell = (g, k) => (k === "units" || k === "avgDays" ? g[k] ?? "—" : usd(g[k]));
+    chat.insertAdjacentHTML("beforeend", `<div class="msg a"><p>${esc(r.answer)}</p>
+      <p class="small muted">Counted: ${esc(r.query.explain)} — ${r.totals.rows} record${r.totals.rows === 1 ? "" : "s"}.</p>
+      ${r.groups.length ? `<div class="table-wrap"><table class="small"><tr><th></th>${cols.map(([, l]) => `<th class="num">${l}</th>`).join("")}</tr>${r.groups.map((g) => `<tr><td>${esc(g.group)}</td>${cols.map(([k]) => `<td class="num">${cell(g, k)}</td>`).join("")}</tr>`).join("")}<tr><td><b>All</b></td>${cols.map(([k]) => `<td class="num"><b>${cell(r.totals, k)}</b></td>`).join("")}</tr></table></div>`
+        : r.rows.length ? `<details class="small"><summary>The records (${Math.min(r.rows.length, 25)} shown)</summary><ul class="tight">${r.rows.map((x) => `<li>${esc(x.name)}${x.grade ? ` <span class="muted">${esc(x.grade)}</span>` : ""}${x.revenue ? ` · sold ${usd(x.revenue)}` : ""}${x.profit ? ` · profit ${usd(x.profit)}` : ""}${x.value ? ` · worth ${usd(x.value)}` : ""}${x.days != null ? ` · ${x.days} days` : ""}</li>`).join("")}</ul></details>` : ""}
+      <div class="small muted" style="margin-top:.4rem">${esc(costLine(r.usage))} · the numbers are counted from your records, not by the AI</div></div>`);
+    $("#askProgress").classList.add("hidden");
+  } catch (err) {
+    chat.insertAdjacentHTML("beforeend", `<div class="msg a error" role="alert">⚠ ${esc(err.message)}</div>`);
+  } finally {
+    $("#askBtn").disabled = false;
+    $("#askCancel").classList.add("hidden");
+  }
+}
+
 async function doAsk(question) {
   if (needKey()) return;
   question = (question || "").trim();
   if (!question) return;
+  if (askMode === "business") return doAskBusiness(question);
   const chat = $("#chat");
   $(".empty", chat)?.remove();
   chat.insertAdjacentHTML("beforeend", `<div class="msg q">${esc(question)}</div>`);

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live overlay</title>
+  <style>
+    /* For OBS: add a Browser source with http://localhost:3737/overlay.html, 1280 × 360; the background is transparent. */
+    html, body { margin: 0; background: transparent; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; }
+    .card { position: fixed; left: 24px; bottom: 24px; display: flex; gap: 18px; align-items: flex-end; max-width: calc(100% - 48px); }
+    .card img { height: 280px; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.55); background: #111; }
+    .info { background: rgba(10,10,14,.82); border: 2px solid #e2b33c; border-radius: 14px; padding: 14px 18px; min-width: 320px; }
+    .name { font-size: 28px; font-weight: 800; line-height: 1.15; }
+    .grade { font-size: 20px; color: #e2b33c; font-weight: 700; margin-top: 4px; }
+    .price { font-size: 34px; font-weight: 900; margin-top: 6px; }
+    .next { font-size: 15px; color: #c9c9d2; margin-top: 8px; }
+    .sold { position: fixed; right: 24px; bottom: 24px; background: #1f8a70; padding: 12px 18px; border-radius: 12px; font-size: 22px; font-weight: 800; box-shadow: 0 8px 30px rgba(0,0,0,.5); transition: opacity .6s; }
+    .hidden { opacity: 0; }
+  </style>
+</head>
+<body>
+  <div class="card hidden" id="card"><img id="photo" alt="" /><div class="info"><div class="name" id="name"></div><div class="grade" id="grade"></div><div class="price" id="price"></div><div class="next" id="next"></div></div></div>
+  <div class="sold hidden" id="sold"></div>
+  <script src="overlay.js"></script>
+</body>
+</html>

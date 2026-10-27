@@ -8,6 +8,8 @@ const SHOP_VIEWS = {
   grading: ["🏷 Grading service", () => loadGradingService()],
   shows: ["🎪 Shows", () => loadShows()],
   supplies: ["📦 Supplies", () => loadSupplies()],
+  live: ["📺 Live stream", () => loadLive()],
+  books: ["📚 Books & taxes", () => loadBooks()],
   settings: ["⚙ Shop settings", () => loadShopSettings()],
 };
 async function loadShop() {
@@ -356,12 +358,12 @@ async function loadSupplies() {
   const list = await getJSON("/api/supplies");
   $("#shopActions").innerHTML = `<button class="primary" data-addsup>＋ Add a supply</button>`;
   $("#shopActions [data-addsup]").onclick = () => openSupply();
-  const low = list.filter((x) => x.onHand <= x.reorderAt);
+  const low = list.filter((x) => x.onHand != null && x.onHand <= x.reorderAt);
   $("#shopBody").innerHTML = `
     <div class="panel small">Each website order uses up its "per order" amounts (a sleeve, a top loader, a team bag, a mailer…) and each card sold at a show its "per card" amounts. When something reaches its reorder point you get an alert. <b>＋ Restock</b> when a delivery comes in (it can file the expense too).</div>
     ${low.length ? `<div class="panel"><b class="neg">Time to reorder:</b> ${low.map((x) => `${esc(x.name)} (${x.onHand} left)`).join(" · ")}</div>` : ""}
     <div class="panel table-wrap"><table><tr><th>Supply</th><th class="num">On hand</th><th class="num">Reorder at</th><th class="num">Per order</th><th class="num">Per card</th><th class="num">Cost each</th><th></th></tr>
-      ${list.map((x) => `<tr data-sup="${esc(x.id)}" class="${x.onHand <= x.reorderAt ? "low" : ""}"><td><b>${esc(x.name)}</b>${x.link ? ` <span class="small">${link(x.link, "reorder")}</span>` : ""}</td><td class="num ${x.onHand <= x.reorderAt ? "neg" : ""}">${x.onHand}${x.unit ? " " + esc(x.unit) : ""}</td><td class="num">${x.reorderAt}</td><td class="num">${x.perOrder || "—"}</td><td class="num">${x.perCard || "—"}</td><td class="num">${usd(x.cost)}</td>
+      ${list.map((x) => `<tr data-sup="${esc(x.id)}" class="${x.onHand != null && x.onHand <= x.reorderAt ? "low" : ""}"><td><b>${esc(x.name)}</b>${x.link ? ` <span class="small">${link(x.link, "reorder")}</span>` : ""}</td><td class="num ${x.onHand != null && x.onHand <= x.reorderAt ? "neg" : ""}">${x.onHand == null ? `<span class="muted" title="Not counted yet — ✎ and type how many you have">—</span>` : x.onHand}${x.onHand != null && x.unit ? " " + esc(x.unit) : ""}</td><td class="num">${x.reorderAt}</td><td class="num">${x.perOrder || "—"}</td><td class="num">${x.perCard || "—"}</td><td class="num">${usd(x.cost)}</td>
         <td class="nowrap"><button class="small" data-restock>＋ Restock</button><button class="small ghost" data-edit aria-label="Edit">✎</button><button class="small ghost" data-del aria-label="Delete">🗑</button></td></tr>`).join("")}</table></div>`;
   $$("#shopBody tr[data-sup]").forEach((tr) => {
     const x = list.find((s) => s.id === tr.dataset.sup);
@@ -377,7 +379,7 @@ function openSupply(x = null) {
   const body = openModal(x ? `Edit — ${x.name}` : "Add a supply", `
     <form class="form-grid" data-supf>
       <label class="span2">Name<input name="name" required value="${esc(x?.name || "")}" placeholder="Top loaders"></label>
-      <label>On hand<input name="onHand" type="number" min="0" step="1" value="${esc(x?.onHand ?? 0)}"></label><label>Unit <span class="muted small">(optional)</span><input name="unit" value="${esc(x?.unit || "")}" placeholder="each, rolls…"></label>
+      <label>On hand<input name="onHand" type="number" min="0" step="1" value="${esc(x?.onHand ?? "")}" placeholder="count them"></label><label>Unit <span class="muted small">(optional)</span><input name="unit" value="${esc(x?.unit || "")}" placeholder="each, rolls…"></label>
       <label>Reorder when down to<input name="reorderAt" type="number" min="0" step="1" value="${esc(x?.reorderAt ?? 0)}"></label><label>Cost each $<input name="cost" type="number" min="0" step="0.01" value="${esc(x?.cost ?? "")}"></label>
       <label>Used per website order<input name="perOrder" type="number" min="0" step="0.5" value="${esc(x?.perOrder ?? 0)}"></label><label>Used per card sold at a show<input name="perCard" type="number" min="0" step="0.5" value="${esc(x?.perCard ?? 0)}"></label>
       <label class="span2">Where to reorder (link)<input name="link" value="${esc(x?.link || "")}" placeholder="https://…"></label>
@@ -400,6 +402,12 @@ async function loadShopSettings() {
   const priceRow = (p = {}) => `<div class="row" data-price style="margin:.2rem 0"><input name="service" value="${esc(p.service || "")}" placeholder="PSA Value" style="flex:1" aria-label="Service"><input name="fee" type="number" min="0" step="0.01" value="${esc(p.fee ?? "")}" placeholder="$ per card" style="width:110px" aria-label="Fee per card"><button type="button" class="ghost small" data-rm aria-label="Remove">✕</button></div>`;
   $("#shopBody").innerHTML = `<div class="panel"><form class="form-grid" data-shopset>
     <label>Consignment commission % <span class="muted small">(what the shop keeps of each sale)</span><input name="consignPct" type="number" min="0" max="60" step="0.5" value="${esc(s.consignPct)}"></label>
+    <label>Grading one of your own cards costs $ <span class="muted small">(fee + shipping share — "what to grade next")</span><input name="ownGradingFee" type="number" min="0" step="0.5" value="${esc(s.ownGradingFee)}"></label>
+    <label>Sales tax on in-person sales % <span class="muted small">(Michigan: 6 — check with your accountant)</span><input name="salesTaxPct" type="number" min="0" max="20" step="0.01" value="${esc(s.salesTaxPct ?? "")}" placeholder="not set"></label>
+    <label class="check"><input type="checkbox" name="taxIncluded"${s.taxIncluded ? " checked" : ""}> Show and local prices include the tax</label>
+    <label>Insure packages worth over $<input name="insureOver" type="number" min="0" step="1" value="${esc(s.insureOver)}"></label>
+    <label>Signature required over $<input name="signatureOver" type="number" min="0" step="1" value="${esc(s.signatureOver)}"></label>
+    <label class="span2">Weekly report goes to <span class="muted small">(emails, comma separated)</span><input name="weeklyTo" value="${esc(s.weeklyTo || "")}" placeholder="jeff@…, joseph@…"></label>
     <div class="span2"><b>Grading service prices</b> <span class="small muted">— what you charge a customer per card, by service</span><div data-prices>${(s.gradingPrices.length ? s.gradingPrices : [{}]).map(priceRow).join("")}</div><button type="button" class="small" data-addprice>＋ Service</button></div>
     <div class="span2 row"><button class="primary">Save</button></div></form></div>`;
   const box = $("#shopBody [data-prices]");
@@ -409,7 +417,214 @@ async function loadShopSettings() {
   $("#shopBody [data-shopset]").onsubmit = async (e) => {
     e.preventDefault();
     const gradingPrices = $$("[data-price]", box).map((r) => ({ service: $('[name="service"]', r).value, fee: $('[name="fee"]', r).value })).filter((g) => g.service.trim());
-    await fetch("/api/shop/settings", json("PUT", { consignPct: e.target.consignPct.value, gradingPrices }));
+    const f = e.target;
+    await fetch("/api/shop/settings", json("PUT", { consignPct: f.consignPct.value, gradingPrices, ownGradingFee: f.ownGradingFee.value, salesTaxPct: f.salesTaxPct.value, taxIncluded: f.taxIncluded.checked, insureOver: f.insureOver.value, signatureOver: f.signatureOver.value, weeklyTo: f.weeklyTo.value }));
     toast("Saved");
   };
+}
+
+// ------------------------------------------------------------------ WEEKLY REPORT (Home → 📋)
+
+async function openWeeklyReport() {
+  const w = await getJSON("/api/weekly");
+  const t = w.toDo;
+  const lines = [
+    `${shopName()} — week of ${day(w.from)} to ${day(w.to)}`, "",
+    `Sold ${w.sales} cards for ${usd(w.revenue)} — profit after fees ${usd(w.profit)}.`,
+    w.best ? `Best flip: ${w.best.name} ${w.best.grade || ""} (+${usd(w.best.profit)}${w.best.soldOn ? " on " + w.best.soldOn : ""}).` : "",
+    `Added ${w.added} cards. Expenses ${usd(w.expenses)}. Stock is worth ${usd(w.stockValue)}.`,
+    w.website ? `Website: ${w.website.orders} orders, ${w.website.offers} offers, ${w.website.messages} messages${w.website.visits != null ? `, ${w.website.visits} visits` : ""}.` : "",
+    [...(w.movers?.up || []), ...(w.movers?.down || [])].length ? `Biggest moves: ${[...(w.movers.up || []), ...(w.movers.down || [])].slice(0, 6).map((m) => `${m.name} ${m.dollars > 0 ? "+" : "−"}${usd(Math.abs(m.dollars))}`).join("; ")}.` : "", "",
+    "This week:",
+    t.unshipped ? `• ${t.unshipped} website order(s) to ship` : "",
+    t.openMessages ? `• ${t.openMessages} website message(s) to answer` : "",
+    t.consignorsOwed ? `• ${usd(t.consignorsOwed)} owed to consignors` : "",
+    t.gradingBack ? `• ${t.gradingBack} customer grading order(s) back — tell them` : "",
+    t.lowSupplies.length ? `• Reorder: ${t.lowSupplies.join(", ")}` : "",
+    ...t.shows.map((s) => `• Show: ${s.name} on ${day(s.date)}${s.table ? " (table " + s.table + ")" : ""}`),
+  ].filter((x, i, a) => x !== "" || a[i - 1] !== "");
+  const text = lines.join("\n").replace(/This week:\n$/, "This week: nothing waiting.");
+  const body = openModal("📋 Weekly report", `<pre class="small" style="white-space:pre-wrap;font:inherit">${esc(text)}</pre>
+    <div class="row"><button data-copy>📋 Copy</button><a class="button primary" href="mailto:${esc(w.emailTo || "")}?subject=${encodeURIComponent(`${shopName()} — weekly report`)}&body=${encodeURIComponent(text)}">✉ Email it</a><span class="small muted">${w.emailTo ? "to " + esc(w.emailTo) : "set who it goes to in Shop → Shop settings"}</span></div>`);
+  $("[data-copy]", body).onclick = async () => { await navigator.clipboard.writeText(text); toast("Copied"); };
+}
+
+// ------------------------------------------------------------------ PACKING: pick list + packing slips (website orders)
+
+async function printPickList(orders, site = "", { slips = false } = {}) {
+  if (!orders.length) return toast("No orders to pack.");
+  const [inv, s] = await Promise.all([getJSON("/api/inventory").catch(() => []), getJSON("/api/shop/settings")]);
+  const byId = new Map(inv.map((r) => [r.id, r]));
+  const advice = (o) => {
+    const v = o.total || 0;
+    return [v >= (s.signatureOver ?? 750) ? "Signature required" : "", v >= (s.insureOver ?? 100) ? `Insure for ${usd(v)}` : "", v < 20 ? "Top loader + team bag in an envelope" : v < 250 ? "Bubble mailer + tracking" : "Box or rigid mailer + tracking"].filter(Boolean).join(" · ");
+  };
+  const lines = orders.flatMap((o) => o.items.map((i) => ({ o, i, r: byId.get(i.id) })));
+  const qr = (o) => (site ? `<img src="${location.origin}/api/qr?text=${encodeURIComponent(`${site.replace(/\/+$/, "")}/track?order=${encodeURIComponent(o.id)}`)}" alt="" style="width:110px;height:110px">` : "");
+  const slip = (o) => `<div style="page-break-after:always;padding-bottom:18px"><h1>${esc(shopName())}</h1><div class="muted">Packing slip · order ${esc(o.id)} · ${esc(day(o.created))}</div>
+    <div style="display:flex;justify-content:space-between;gap:16px;margin-top:10px"><div><b>Ship to</b><br>${esc(o.name || "")}${o.shippingAddress ? `<br>${esc(o.shippingAddress.line1 || "")}${o.shippingAddress.line2 ? "<br>" + esc(o.shippingAddress.line2) : ""}<br>${esc(`${o.shippingAddress.city || ""}, ${o.shippingAddress.state || ""} ${o.shippingAddress.postal_code || ""}`)}` : o.fulfillment === "pickup" ? "<br>Local pickup" : ""}</div>${qr(o)}</div>
+    <table style="margin-top:10px"><tr><th>Card</th><th>Grade</th><th class="num">Price</th></tr>${o.items.map((i) => `<tr><td>${esc(i.title)}</td><td>${esc(i.grade || "")}</td><td class="num">${usd(i.price)}</td></tr>`).join("")}<tr class="tot"><td colspan="2">Total</td><td class="num">${usd(o.total)}</td></tr></table>
+    <p>Thank you for buying from us!${site ? " Scan the code to track your order — and tell us how we did." : ""}</p>${o.note ? `<p class="muted">Your note: ${esc(o.note)}</p>` : ""}</div>`;
+  printDoc(slips ? `Packing slip ${orders[0].id}` : "Pick list", `${slips ? "" : `<h1>Pick list — ${orders.length} order${orders.length === 1 ? "" : "s"} to ship</h1><div class="muted">${esc(new Date().toLocaleString())}</div>
+    <table><tr><th>☐</th><th>Box</th><th>SKU</th><th>Card</th><th>Order</th></tr>${lines.sort((a, b) => String(a.r?.location || "~").localeCompare(String(b.r?.location || "~"), undefined, { numeric: true })).map(({ o, i, r }) => `<tr><td>☐</td><td>${esc(r?.location || "?")}</td><td>${esc(r?.sku || "")}</td><td>${esc(i.title)} (${esc(i.grade || "")})</td><td>${esc(o.id)}</td></tr>`).join("")}</table>
+    <h2>Packing advice</h2><table>${orders.map((o) => `<tr><td>${esc(o.id)} · ${esc(o.name || "")}</td><td>${usd(o.total)}</td><td>${esc(advice(o))}</td></tr>`).join("")}</table>
+    <p class="muted">Advice from your settings (insure over ${usd(s.insureOver)}, signature over ${usd(s.signatureOver)}); the mailer suggestions are rules of thumb.</p><div style="page-break-after:always"></div>`}${orders.map(slip).join("")}`);
+}
+
+// ------------------------------------------------------------------ BOOKS & TAXES
+
+let booksYear = String(new Date().getFullYear());
+async function loadBooks() {
+  const b = await getJSON("/api/books?year=" + booksYear);
+  const years = [...new Set([String(new Date().getFullYear()), String(new Date().getFullYear() - 1), booksYear])].sort().reverse();
+  $("#shopActions").innerHTML = `<select data-year aria-label="Year">${years.map((y) => `<option${y === booksYear ? " selected" : ""}>${y}</option>`).join("")}</select>
+    <button data-import>📥 Sales from eBay / Whatnot…</button><button data-insure>🛡 Insurance schedule</button><button class="primary" data-pack>🖨 Year-end report</button>`;
+  $("#shopActions [data-year]").onchange = (e) => { booksYear = e.target.value; loadBooks(); };
+  $("#shopActions [data-import]").onclick = openSalesImport;
+  $("#shopActions [data-insure]").onclick = openInsurance;
+  $("#shopActions [data-pack]").onclick = () => printYearEnd(b);
+  const t = b.salesTax;
+  $("#shopBody").innerHTML = `
+    <div class="totals"><div><span>Sales ${esc(b.year)}</span><b>${usd(b.gross)}</b></div><div><span>Fees</span><b>${usd(b.fees)}</b></div><div><span>Cost of cards sold</span><b>${usd(b.cogs)}</b></div><div><span>Expenses</span><b>${usd(b.expenses)}</b></div><div><span>Net</span><b class="${b.net >= 0 ? "pos" : "neg"}">${usd(b.net)}</b></div></div>
+    <div class="grid2">
+      <div class="panel table-wrap" style="margin:0"><h3 style="margin-top:0">Sales by where they sold</h3><table><tr><th>Where</th><th class="num">Cards</th><th class="num">Sales</th><th class="num">Fees</th><th class="num">Cost</th><th class="num">Profit</th></tr>
+        ${b.byChannel.map((c) => `<tr><td>${esc(c.channel)}${c.consigned ? ` <span class="small muted">(${usd(c.consigned)} consigned)</span>` : ""}</td><td class="num">${c.units}</td><td class="num">${usd(c.gross)}</td><td class="num">${usd(c.fees)}</td><td class="num">${usd(c.cost)}</td><td class="num ${c.profit >= 0 ? "pos" : "neg"}">${usd(c.profit)}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No sales in ${esc(b.year)}.</td></tr>`}</table></div>
+      <div class="panel table-wrap" style="margin:0"><h3 style="margin-top:0">Expenses</h3><table>${Object.entries(b.expensesByKind).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${usd(v)}</td></tr>`).join("") || `<tr><td class="muted">None in ${esc(b.year)}.</td></tr>`}</table></div>
+    </div>
+    <div class="grid2" style="margin-top:.8rem">
+      <div class="panel" style="margin:0"><h3 style="margin-top:0">Inventory for taxes <span class="small muted">(at cost, through ${esc(day(b.through))})</span></h3>
+        <div class="kv"><span>Owned on Jan 1</span><b>${usd(b.inventory.start)}</b><span>+ Bought this year</span><b>${usd(b.inventory.purchases)}</b><span>− Owned now / Dec 31</span><b>${usd(b.inventory.end)}</b><span>= Cost of goods sold</span><b>${usd(b.inventory.cogs)}</b></div>
+        <p class="small muted">${esc(b.inventory.note)} Card by card the cost of what sold is ${usd(b.cogs)} — a big gap means costs are missing on some cards.</p>
+        <div class="row"><a class="button small" href="/api/export/inventory-at.csv?date=${esc(b.year)}-12-31">⬇ Inventory on Dec 31 (CSV)</a><a class="button small" href="/api/export/tax.csv?year=${esc(b.year)}">⬇ Every sale + expense (CSV)</a></div></div>
+      <div class="panel" style="margin:0"><h3 style="margin-top:0">Sales tax</h3>
+        <p class="small">Website: <b>${usd(t.websiteCollected)}</b> collected at checkout by Stripe Tax.</p>
+        <p class="small">In person (shows, local): <b>${usd(t.inPerson)}</b> in sales${t.rate ? ` → at ${esc(t.rate)}% ${t.included ? "included in the prices" : "on top of the prices"}: <b>${usd(t.due)}</b> due` : ` — set your in-person tax rate in Shop settings to see what's due`}.</p>
+        <p class="small muted">Rates, what's taxable and when to file depend on your state — confirm with your accountant.</p>
+        <h3>1099-K check</h3>
+        <p class="small muted">Each site sends a 1099-K with the gross it paid you. Type its amount to compare with what's recorded here.</p>
+        <table class="small">${b.k1099.map((k) => `<tr><td>${esc(k.platform)}</td><td class="num">recorded ${usd(k.recorded)}</td><td><input type="number" step="0.01" min="0" data-k1099="${esc(k.platform)}" value="${esc(k.reported ?? "")}" placeholder="1099-K $" style="width:110px" aria-label="${esc(k.platform)} 1099-K amount"></td><td class="num ${k.diff ? (Math.abs(k.diff) < 1 ? "pos" : "neg") : ""}">${k.diff == null ? "" : Math.abs(k.diff) < 1 ? "✓ matches" : `${k.diff > 0 ? "+" : ""}${usd(k.diff)} not recorded here`}</td></tr>`).join("") || `<tr><td class="muted">No platform sales in ${esc(b.year)}.</td></tr>`}</table></div>
+    </div>
+    ${b.consignment.sales ? `<div class="panel small" style="margin-top:.8rem">Consignment ${esc(b.year)}: ${usd(b.consignment.sales)} sold for consignors · ${usd(b.consignment.paidOut)} paid out · <b class="${b.consignment.owed ? "neg" : ""}">${usd(b.consignment.owed)} still owed</b>.</div>` : ""}`;
+  $$("#shopBody [data-k1099]").forEach((i) => (i.onchange = async () => { await fetch("/api/books/1099", json("PUT", { year: b.year, platform: i.dataset.k1099, amount: i.value })); loadBooks(); }));
+}
+
+function printYearEnd(b) {
+  const t = b.salesTax;
+  printDoc(`${shopName()} — ${b.year} year-end`, `<h1>${esc(shopName())} — ${esc(b.year)} year-end</h1><div class="muted">Through ${esc(day(b.through))} · from Card Research Bot</div>
+    <h2>Profit and loss</h2><table><tr><td>Sales</td><td class="num">${usd(b.gross)}</td></tr><tr><td>Platform / card fees</td><td class="num">−${usd(b.fees)}</td></tr><tr><td>Cost of cards sold (card by card)</td><td class="num">−${usd(b.cogs)}</td></tr><tr><td>Expenses</td><td class="num">−${usd(b.expenses)}</td></tr><tr class="tot"><td>Net</td><td class="num">${usd(b.net)}</td></tr></table>
+    <h2>Sales by where they sold</h2><table><tr><th>Where</th><th class="num">Cards</th><th class="num">Sales</th><th class="num">Fees</th><th class="num">Cost</th><th class="num">Profit</th></tr>${b.byChannel.map((c) => `<tr><td>${esc(c.channel)}</td><td class="num">${c.units}</td><td class="num">${usd(c.gross)}</td><td class="num">${usd(c.fees)}</td><td class="num">${usd(c.cost)}</td><td class="num">${usd(c.profit)}</td></tr>`).join("")}</table>
+    <h2>Expenses</h2><table>${Object.entries(b.expensesByKind).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${usd(v)}</td></tr>`).join("")}</table>
+    <h2>Inventory (at cost)</h2><table><tr><td>Owned on Jan 1</td><td class="num">${usd(b.inventory.start)}</td></tr><tr><td>Bought during the year</td><td class="num">${usd(b.inventory.purchases)}</td></tr><tr><td>Owned at year end</td><td class="num">${usd(b.inventory.end)}</td></tr><tr class="tot"><td>Cost of goods sold (inventory method)</td><td class="num">${usd(b.inventory.cogs)}</td></tr></table>
+    <h2>Sales tax</h2><table><tr><td>Collected on the website (Stripe Tax)</td><td class="num">${usd(t.websiteCollected)}</td></tr><tr><td>In-person sales</td><td class="num">${usd(t.inPerson)}</td></tr>${t.rate ? `<tr><td>Tax on in-person sales at ${esc(t.rate)}% (${t.included ? "included in prices" : "on top"})</td><td class="num">${usd(t.due)}</td></tr>` : ""}</table>
+    ${b.k1099.length ? `<h2>1099-K check</h2><table><tr><th>Platform</th><th class="num">Recorded</th><th class="num">1099-K</th><th class="num">Difference</th></tr>${b.k1099.map((k) => `<tr><td>${esc(k.platform)}</td><td class="num">${usd(k.recorded)}</td><td class="num">${usd(k.reported)}</td><td class="num">${usd(k.diff)}</td></tr>`).join("")}</table>` : ""}
+    ${b.consignment.sales ? `<h2>Consignment</h2><p>${usd(b.consignment.sales)} sold for consignors (their payouts are the cost of those sales) · ${usd(b.consignment.paidOut)} paid · ${usd(b.consignment.owed)} owed.</p>` : ""}
+    <p class="muted">Attach the CSVs from Shop → Books & taxes (inventory on Dec 31; every sale and expense). Figures come from what's recorded in the app.</p>`);
+}
+
+async function openInsurance() {
+  const min = store.get("insureMin", 100);
+  const d = await getJSON("/api/insurance?min=" + min);
+  const body = openModal("🛡 Insurance schedule", `
+    <form class="row" data-ins><label>Cards worth at least $<input name="min" type="number" min="0" value="${esc(min)}" style="width:100px"></label><button>Update</button><button type="button" class="primary" data-print>🖨 Print for the insurer</button></form>
+    <p class="small"><b>${d.rows.length}</b> cards worth <b>${usd(d.total)}</b> today. Insurers ask for this list with photos and current values; keep a copy off-site.</p>
+    <div class="table-wrap" style="max-height:55vh"><table class="small"><tr><th></th><th>Card</th><th>Cert</th><th>Where</th><th class="num">Cost</th><th class="num">Value</th></tr>${d.rows.map((r) => `<tr><td>${r.photo ? `<img src="${esc(r.photo)}" alt="" style="height:40px;border-radius:4px">` : ""}</td><td>${esc(r.name)} <span class="muted">${esc(r.grade)}</span>${r.qty > 1 ? ` ×${r.qty}` : ""}${r.consigned ? ` <span class="chip">consigned</span>` : ""}</td><td>${esc(r.cert)}</td><td>${esc(r.location || "")}</td><td class="num">${usd(r.cost)}</td><td class="num">${usd(r.value)}</td></tr>`).join("")}</table></div>`, { wide: true });
+  $("[data-ins]", body).onsubmit = (e) => { e.preventDefault(); store.set("insureMin", e.target.min.value); openInsurance(); };
+  $("[data-print]", body).onclick = () => printDoc("Insurance schedule", `<h1>${esc(shopName())} — insurance schedule</h1><div class="muted">${esc(new Date().toLocaleDateString())} · cards worth $${esc(d.min)} or more · values from recent sold prices</div>
+    <table><tr><th></th><th>Card</th><th>Grade</th><th>Cert</th><th>Location</th><th class="num">Qty</th><th class="num">Cost</th><th class="num">Value today</th></tr>${d.rows.map((r) => `<tr><td>${r.photo ? `<img src="${location.origin + r.photo}" alt="" style="height:54px">` : ""}</td><td>${esc(r.name)}${r.consigned ? " (consigned — held for its owner)" : ""}</td><td>${esc(r.grade)}</td><td>${esc(r.cert)}</td><td>${esc(r.location || "")}</td><td class="num">${r.qty}</td><td class="num">${usd(r.cost)}</td><td class="num">${usd(r.value)}</td></tr>`).join("")}
+    <tr class="tot"><td colspan="7">Total value</td><td class="num">${usd(d.total)}</td></tr></table>`);
+}
+
+/** eBay's orders report, Whatnot's sales export, TCGplayer… → match each line to a card → mark the ticked ones sold. */
+function openSalesImport() {
+  const body = openModal("📥 Sales from other sites", `
+    <p class="small">Download your sales from the site (eBay: <b>Seller Hub → Orders → Download report</b>; Whatnot: <b>Seller Hub → Orders/Sales → Export</b>), then choose the file here. Each line is matched to a card — by SKU when you listed it with the SKU as the <b>Custom label</b>, otherwise by the closest title. You tick what's right; those cards are marked sold (fees from each site's rate) and come off the MJC website. Files you import twice are skipped line by line.</p>
+    <div class="row"><label>Where<select data-plat>${["eBay", "Whatnot", "TCGplayer", "Facebook", "Other"].map((p) => `<option>${p}</option>`).join("")}</select></label><label class="button primary" for="salesFile">Choose the file</label><input type="file" id="salesFile" accept=".csv,text/csv" hidden></div>
+    <div data-prev></div>`, { wide: true });
+  $("#salesFile", body).onchange = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const platform = $("[data-plat]", body).value;
+    const r = await fetch("/api/import-sales/preview", json("POST", { text: await f.text(), platform }));
+    const j = await r.json();
+    if (!r.ok) return toast(j.error, { error: true });
+    const good = j.rows.filter((x) => x.match && !x.dup);
+    $("[data-prev]", body).innerHTML = `<p class="small">Read <b>${j.rows.length}</b> lines (columns: ${Object.entries(j.columns).filter(([, v]) => v).map(([k, v]) => `${esc(k)} = "${esc(v)}"`).join(", ")}). <b>${good.length}</b> matched${j.rows.some((x) => x.dup) ? ` · ${j.rows.filter((x) => x.dup).length} already imported` : ""}.</p>
+      <div class="table-wrap" style="max-height:50vh"><table class="small"><tr><th></th><th>Sold on ${esc(j.platform)}</th><th class="num">Qty</th><th class="num">Price</th><th>Date</th><th>Your card</th></tr>
+      ${j.rows.map((x, i) => `<tr class="${x.dup ? "sold" : ""}"><td><input type="checkbox" data-i="${i}"${x.match && !x.dup && x.match.how === "sku" ? " checked" : ""}${!x.match || x.dup ? " disabled" : ""} aria-label="Import line ${i + 1}"></td><td>${esc(x.title)}${x.sku ? ` <span class="muted">${esc(x.sku)}</span>` : ""}${x.buyer ? `<div class="muted">${esc(x.buyer)}${x.order ? " · " + esc(x.order) : ""}</div>` : ""}</td><td class="num">${x.qty}</td><td class="num">${usd(x.price)}</td><td>${esc(x.date || "")}</td>
+        <td>${x.dup ? "already imported" : x.match ? `${esc(x.match.name)} <span class="muted">${esc(x.match.grade)} · ${esc(x.match.sku || "")}</span> <span class="chip ${x.match.how === "sku" ? "good" : "warn"}">${x.match.how === "sku" ? "SKU" : `title ${Math.round(x.match.score * 100)}%`}</span>` : `<span class="muted">no card matches — sold elsewhere or never added</span>`}</td></tr>`).join("")}</table></div>
+      <div class="row"><button class="primary" data-apply>Mark the ticked cards sold</button><span class="small muted">Title matches start unticked — check them first.</span></div>`;
+    $("[data-apply]", body).onclick = async () => {
+      const rows = $$("[data-i]:checked", body).map((c) => j.rows[+c.dataset.i]).map((x) => ({ key: x.key, rowId: x.match.id, qty: x.qty, price: x.price, date: x.date, buyer: x.buyer, order: x.order }));
+      if (!rows.length) return toast("Tick the lines to import.", { error: true });
+      const a = await (await fetch("/api/import-sales/apply", json("POST", { platform: j.platform, rows }))).json();
+      modal.close();
+      toast(`Marked ${plural(a.sold, "card")} sold on ${j.platform} ✓`);
+      if (shopView === "books") loadBooks();
+    };
+  };
+}
+
+// ------------------------------------------------------------------ LIVE STREAM (Whatnot run of show)
+
+let liveTimer = null;
+async function loadLive() {
+  const [st, inv] = await Promise.all([getJSON("/api/live"), getJSON("/api/inventory")]);
+  const stock = inv.filter((r) => r.status !== "sold" && r.qty > 0);
+  const queued = new Set(st.queue.map((q) => q.id));
+  $("#shopActions").innerHTML = `<a class="button" href="/overlay.html" target="_blank" title="Add this page to OBS as a Browser source (it shows the card on screen)">🖥 Overlay page</a>${st.sales.length ? `<button data-recap>📋 Recap</button><button class="primary" data-end>End stream</button>` : ""}`;
+  const now = st.now;
+  $("#shopBody").innerHTML = `
+    <div class="grid2">
+      <div class="panel" style="margin:0">
+        <h3 style="margin-top:0">On screen</h3>
+        ${now ? `<div class="row" style="align-items:flex-start">${now.photo ? `<img src="${esc(now.photo)}" alt="" style="height:160px;border-radius:8px">` : ""}<div><div class="big"><b>${esc(now.name)}</b></div><div class="muted">${esc(now.grade)} · ${esc(now.sku || "")}${now.location ? " · 📍" + esc(now.location) : ""} · value ${usd(now.value)}${now.qty > 1 ? ` · ${now.qty} left` : ""}</div>
+          <form class="row" data-sold style="margin-top:.6rem"><input name="buyer" placeholder="@buyer" style="width:150px" aria-label="Buyer" autocomplete="off"><input name="price" type="number" min="0" step="0.01" placeholder="$" value="${esc(now.price ?? "")}" style="width:100px" aria-label="Sold for"><button class="primary">✓ Sold</button><button type="button" class="ghost" data-skip>Skip →</button></form></div></div>`
+          : `<p class="muted">Pick a card in the queue to put it on screen.</p>`}
+        <p class="small muted">Whatnot's fee (${esc(st.feePct?.[0])}% + ${usd(st.feePct?.[1])}) is taken off each sale; buyers go in the customer book by their handle.</p>
+      </div>
+      <div class="panel" style="margin:0"><h3 style="margin-top:0">This stream: ${usd(st.total)} · ${plural(st.sales.length, "sale")}</h3>
+        ${st.sales.length ? `<ul class="tight small">${st.sales.slice().reverse().slice(0, 12).map((x) => `<li>${esc(x.name)} → <b>@${esc(x.buyer || "?")}</b> ${usd(x.price)}</li>`).join("")}</ul>` : `<p class="small muted">Sales show here as they happen.</p>`}</div>
+    </div>
+    <div class="panel"><h3 style="margin-top:0">Queue (${st.queue.length})</h3>
+      <input type="search" data-lq placeholder="Add a card: type its name or scan its label…" style="width:100%" aria-label="Add a card to the queue" autocomplete="off"><div data-lmatch class="show-matches"></div>
+      ${st.queue.length ? `<table class="small"><tr><th>#</th><th>Card</th><th class="num">Value</th><th class="num">Start / price</th><th></th></tr>${st.queue.map((q, i) => `<tr data-q="${i}" class="${now && q.id === now.id ? "picked" : ""}"><td>${i + 1}</td><td>${esc(q.name)} <span class="muted">${esc(q.grade)}</span></td><td class="num">${usd(q.value)}</td><td class="num"><input data-qp type="number" min="0" step="0.01" value="${esc(q.price ?? "")}" style="width:80px" aria-label="Price"></td>
+        <td class="nowrap"><button class="small" data-show>On screen</button><button class="ghost small" data-up aria-label="Up">↑</button><button class="ghost small" data-down aria-label="Down">↓</button><button class="ghost small" data-rm aria-label="Remove">✕</button></td></tr>`).join("")}</table>` : `<p class="small muted">Line up the cards for the stream — the overlay shows the one on screen and what's next.</p>`}
+    </div>`;
+  const saveQueue = async (q) => { await fetch("/api/live/queue", json("PUT", { queue: q.map((x) => ({ id: x.id, price: x.price })) })); loadLive(); };
+  const lq = $("#shopBody [data-lq]");
+  const matches = () => { const w = lq.value.trim().toLowerCase().split(/\s+/).filter(Boolean); return w.length ? stock.filter((r) => !queued.has(r.id) && w.every((x) => `${r.name} ${r.grade} ${r.sku || ""}`.toLowerCase().includes(x))).slice(0, 8) : []; };
+  const addQ = (r) => saveQueue([...st.queue, { id: r.id, price: r.listPrice ?? r.value ?? null }]);
+  lq.oninput = () => { $("#shopBody [data-lmatch]").innerHTML = matches().map((r) => `<button class="mini-row" data-addq="${esc(r.id)}"><span>${esc(r.name)} <span class="muted small">${esc(r.grade)} · ${esc(r.sku || "")}</span></span><b>${usd(r.value)}</b></button>`).join(""); $$("#shopBody [data-addq]").forEach((b) => (b.onclick = () => addQ(stock.find((r) => r.id === b.dataset.addq)))); };
+  lq.onkeydown = (e) => { if (e.key !== "Enter") return; e.preventDefault(); const v = lq.value.trim().toLowerCase(); const hit = stock.find((r) => r.sku && r.sku.toLowerCase() === v && !queued.has(r.id)) || (matches().length === 1 ? matches()[0] : null); if (hit) addQ(hit); };
+  $$("#shopBody tr[data-q]").forEach((tr) => {
+    const i = +tr.dataset.q, q = [...st.queue];
+    $("[data-qp]", tr).onchange = (e) => { q[i] = { ...q[i], price: e.target.value }; saveQueue(q); };
+    $("[data-show]", tr).onclick = async () => { await fetch("/api/live/now", json("POST", { id: q[i].id })); loadLive(); };
+    $("[data-up]", tr).onclick = () => { if (i) { [q[i - 1], q[i]] = [q[i], q[i - 1]]; saveQueue(q); } };
+    $("[data-down]", tr).onclick = () => { if (i < q.length - 1) { [q[i + 1], q[i]] = [q[i], q[i + 1]]; saveQueue(q); } };
+    $("[data-rm]", tr).onclick = () => { q.splice(i, 1); saveQueue(q); };
+  });
+  const sold = $("#shopBody [data-sold]");
+  if (sold) {
+    sold.buyer.focus();
+    sold.onsubmit = async (e) => {
+      e.preventDefault();
+      const r = await fetch("/api/live/sold", json("POST", { buyer: sold.buyer.value, price: sold.price.value }));
+      const j = await r.json();
+      if (!r.ok) return toast(j.error, { error: true });
+      toast(`Sold to @${j.sale.buyer || "?"} for ${usd(j.sale.price)} ✓`, { ms: 1500 });
+      loadLive();
+    };
+    $("[data-skip]", sold).onclick = async () => { await fetch("/api/live/skip", { method: "POST" }); loadLive(); };
+  }
+  const recap = () => {
+    const byBuyer = new Map();
+    for (const x of st.sales) byBuyer.set(x.buyer || "?", [...(byBuyer.get(x.buyer || "?") || []), x]);
+    printDoc("Stream recap", `<h1>Stream recap — ${esc(day(st.startedAt || new Date().toISOString()))}</h1><div class="muted">${st.sales.length} sales · ${usd(st.total)} · pack by buyer (one package each)</div>
+      ${[...byBuyer].map(([b, list]) => `<h2>@${esc(b)} — ${list.length} card${list.length === 1 ? "" : "s"}, ${usd(list.reduce((n, x) => n + x.price, 0))}</h2><table><tr><th>☐</th><th>SKU</th><th>Card</th><th>Location</th><th class="num">Price</th></tr>${list.map((x) => `<tr><td>☐</td><td>${esc(x.sku || "")}</td><td>${esc(x.name)} (${esc(x.grade)})</td><td>${esc(x.location || "")}</td><td class="num">${usd(x.price)}</td></tr>`).join("")}</table>`).join("")}`);
+  };
+  const rc = $("#shopActions [data-recap]");
+  if (rc) rc.onclick = recap;
+  const end = $("#shopActions [data-end]");
+  if (end) end.onclick = async () => { recap(); await fetch("/api/live/end", { method: "POST" }); toast("Stream ended — the recap is open to print; the sales are in Sales & profit"); loadLive(); };
 }

@@ -18,6 +18,7 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Set browser | Every card in a set sorted by value, rookies filter | 3.0 |
 | Hottest cards | Today / week / month per category, double-checked against real sold prices, NEW/↑↓ vs the last scan, one-click watch | 1.0 / 3.0 |
 | Ask | Any market question with Google-searched sources; follow-ups about a specific card | 1.0 |
+| Ask about my business | Questions about your own sales, stock, expenses and customers — the AI picks what to count, the app counts your records | 3.12 |
 | Lot / binder-page evaluator | One photo of many cards → each priced, total value, offer verdict for an asking price; fix a misread card and re-price without AI | 3.0 / 3.2 |
 | Trade evaluator | My cards vs theirs, sold values per grade, who comes out ahead | 3.2 |
 | PSA slab check | Cert number read off the slab and verified with PSA, population by grade, PSA's own photos next to yours | 3.0 / 3.2 |
@@ -59,6 +60,7 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Show mode | A register for card shows: scan a label or type a card, set prices, tap the payment type, complete sale; totals by payment, Undo, copy the day's summary | 3.6 |
 | Barcode labels | Code 128 barcode of the SKU on every label; letter sheet (3 across) or 2.25" × 1.25" thermal roll; any USB/Bluetooth scanner works (Show mode, Stock search) | 3.0 / 3.6 |
 | Grading tracker | Submissions, cards at grading, PSA progress checked automatically, grades + cost basis when they return | 3.0 |
+| What to grade next | Raw cards ranked by what grading adds after fees (sold value per grade × odds from condition + centering) → a submission | 3.12 |
 | Sales & profit | Revenue, fees, profit, ROI, days to sell, best/worst flips, by month and category; year selector; tax CSV (every sale and expense with totals) | 3.0 / 3.2 |
 | Expenses | Supplies, shipping, grading, show tables, fees, travel, software; receipt photos (see AI) | 3.0 / 3.6 |
 | Portfolio value chart | Daily snapshots of what the stock is worth | 3.0 |
@@ -94,6 +96,13 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Card shows | Calendar (public ones on the website), table checklist, pull list by box, sales filed under the show, profit per show, cash drawer count | 3.11 |
 | Helper PIN | A second PIN for someone at your table: Show mode only, no costs, no settings | 3.11 |
 | Supplies | On hand, used per website order / per card sold, reorder alerts, restock files the expense | 3.11 |
+| Books & taxes | Sales by channel, fees, cost of cards, expenses, net; inventory at cost Jan 1 / Dec 31 (COGS); sales tax collected + due on in-person sales; 1099-K check per site; year-end report + CSVs | 3.12 |
+| Sales from other sites | eBay orders report / Whatnot / TCGplayer sales file → matched by SKU or title → marked sold with that site's fees, off the website; re-importing is harmless | 3.12 |
+| Listing file | Every field eBay / Whatnot ask for, one row per selected card, for their bulk-listing templates | 3.12 |
+| Insurance schedule | Cards over an amount with photo, cert, location, cost, value — printed for the insurer | 3.12 |
+| Live stream | Queue, card on screen, sold to @buyer (Whatnot fees, buyer in the customer book), OBS overlay page, recap by buyer | 3.12 |
+| Packing | Pick list by box for orders to ship, packing advice (insure / signature / mailer), packing slips with a tracking QR code | 3.12 |
+| Weekly report | Last week's numbers + what needs doing; Monday alert; copy or email | 3.12 |
 
 ## The MJC website connection
 

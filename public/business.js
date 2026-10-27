@@ -70,7 +70,7 @@ async function loadDashboard() {
     </div>
     <div class="dash-grid">
       <div class="panel week">
-        <h3 style="margin-top:0">This week</h3>
+        <div class="row space" style="margin:0"><h3 style="margin:0">This week</h3><button class="small" data-weekly title="Last week's numbers and what needs doing — print it or email it">📋 Weekly report</button></div>
         <div class="week-grid">
           <div><b>${w.sales || 0}</b><span>cards sold</span></div>
           <div><b>${usd(w.revenue || 0)}</b><span>sales</span></div>
@@ -125,6 +125,7 @@ async function loadDashboard() {
       </div>
     </div>`;
   $$("#dash [data-go]").forEach((b) => (b.onclick = () => goTab(b.dataset.go)));
+  if ($("#dash [data-weekly]")) $("#dash [data-weekly]").onclick = openWeeklyReport;
   if (adv && $("#dash [data-advice]")) renderAdvice(adv, $("#dash [data-advice]"), { compact: true });
   if ($("#welcomeDismiss")) $("#welcomeDismiss").onclick = () => { store.set("welcomeDone", true); loadDashboard(); };
   $$("#dash [data-step]").forEach((b) => (b.onclick = () => steps[+b.dataset.step][2]()));
@@ -332,6 +333,7 @@ function drawStock() {
         <button class="small" data-bulk="split" title="Paid one price for these? Spread it over them by value">÷ Split lot cost</button>
         <button class="small" data-bulk="grading">Send to grading</button>
         <button class="small" data-bulk="labels">Labels</button>
+        <button class="small" data-bulk="listfile" title="Every field eBay / Whatnot ask for, one row per card — copy the columns into their bulk-listing template">⬇ Listing file</button>
         <button class="small" data-bulk="web-on">🌐 Sell on MJC</button>
         <button class="small" data-bulk="web-off">Remove from MJC</button>
       </div></div>`
@@ -407,6 +409,14 @@ function drawStock() {
   on("[data-bulk=split]", () => openSplitCost(selected()));
   on("[data-bulk=grading]", () => openSubmissionEditor(selected()));
   on("[data-bulk=labels]", () => printLabels(selected()));
+  on("[data-bulk=listfile]", async () => {
+    const r = await fetch("/api/export/listings.csv", json("POST", { ids: selected() }));
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await r.blob());
+    a.download = `listings-${today()}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
   on("[data-bulk=web-on]", () => bulkPatch(selected(), { web: true }, "Going on the MJC website — the pricing engine is setting prices now"));
   on("[data-bulk=web-off]", () => bulkPatch(selected(), { web: false }, "Taken off the website"));
   $$("#invBody tr[data-id]").forEach((tr) => {
@@ -1635,9 +1645,36 @@ async function addScanned(btn) {
 
 // ------------------------------------------------------------------ GRADING
 
+/** Raw cards ranked by what grading should add after fees (sold values per grade × odds from the condition). */
+async function openGradePicker() {
+  const body = openModal("🧮 What to grade next", `
+    <form class="row" data-gp><label>Raw cards worth at least $<input name="minRaw" type="number" min="0" value="${esc(store.get("gradeMin", 10))}" style="width:90px"></label><button class="primary">Rank them</button></form>
+    <p class="small muted">For each raw card with a sales page: its sold value at PSA 10 / 9 / 8 / 7, the odds of each from the card's condition and centering (rules of thumb — set the condition on your cards for better odds), less eBay fees and your grading cost (Shop settings). Estimates, not promises.</p>
+    <div class="progress small hidden" data-gpprog></div><div data-gpout></div>`, { wide: true });
+  $("[data-gp]", body).onsubmit = async (e) => {
+    e.preventDefault();
+    store.set("gradeMin", e.target.minRaw.value);
+    let r;
+    try {
+      r = await streamPost("/api/grading/candidates", { minRaw: e.target.minRaw.value }, $("[data-gpprog]", body), new AbortController());
+    } catch (err) {
+      return toast(err.message, { error: true });
+    }
+    $("[data-gpprog]", body).classList.add("hidden");
+    const ODDS = { great: "NM, centered", good: "NM, 60/40", off: "NM, off-center", lp: "LP", unknown: "condition not set" };
+    $("[data-gpout]", body).innerHTML = r.cards.length ? `<div class="table-wrap" style="max-height:55vh"><table class="small"><tr><th></th><th>Card</th><th class="num">Raw</th><th class="num">PSA 10 / 9 / 8</th><th>Odds from</th><th class="num">Grading adds</th><th class="num">ROI</th></tr>
+      ${r.cards.map((c) => `<tr><td><input type="checkbox" data-gid="${esc(c.id)}"${c.gain > 0 ? " checked" : ""} aria-label="Grade ${esc(c.name)}"></td><td>${esc(c.name)}<div class="muted">${esc(c.sku || "")}${c.location ? " · 📍" + esc(c.location) : ""}</div></td><td class="num">${usd(c.raw)}</td><td class="num">${usd(c.values.psa10)} / ${usd(c.values.psa9)} / ${usd(c.values.psa8)}</td><td>${esc(ODDS[c.oddsFrom])} <span class="muted">(${Math.round(c.odds[0] * 100)}% 10s)</span></td><td class="num ${c.gain > 0 ? "pos" : "neg"}">${usd(c.gain)}</td><td class="num">${c.roi}%</td></tr>`).join("")}</table></div>
+      <div class="row"><button class="primary" data-mksub>＋ New submission with the ticked cards</button><span class="small muted">grading cost used: ${usd(r.fee)} a card</span></div>`
+      : `<p class="muted">No raw cards with a sales page worth that much (and not Moderately Played or worse).</p>`;
+    const mk = $("[data-mksub]", body);
+    if (mk) mk.onclick = () => { const ids = $$("[data-gid]:checked", body).map((c) => c.dataset.gid); if (!ids.length) return toast("Tick some cards.", { error: true }); openSubmissionEditor(ids); };
+  };
+}
+
 async function loadGrading() {
-  $("#invActions").innerHTML = `<button data-a="new" class="primary">＋ New submission</button><button data-a="refresh">↻ Check PSA progress</button>`;
+  $("#invActions").innerHTML = `<button data-a="new" class="primary">＋ New submission</button><button data-a="pick" title="Your raw cards ranked by what grading should add after fees">🧮 What to grade next</button><button data-a="refresh">↻ Check PSA progress</button>`;
   $("#invActions [data-a=new]").onclick = () => openSubmissionEditor([]);
+  $("#invActions [data-a=pick]").onclick = () => openGradePicker();
   $("#invActions [data-a=refresh]").onclick = async (e) => {
     if (!status.psa) return toast("Add a PSA API token in Settings to check progress automatically.", { error: true });
     e.target.disabled = true;
@@ -1920,7 +1957,7 @@ async function loadMjc() {
   let bodyHtml = "";
   if (mjcTab === "orders") {
     const orders = (mjcOrders = await getJSON("/api/mjc/orders"));
-    bodyHtml = orders.length ? orders.map((o) => `<div class="panel order" data-id="${esc(o.id)}">
+    bodyHtml = (orders.some((o) => o.status === "paid") ? `<div class="panel row"><button data-picklist>🗂 Pick list for ${plural(orders.filter((o) => o.status === "paid").length, "order")} to ship</button><span class="small muted">every card to pull, by box, with each order's packing advice</span></div>` : "") + (orders.length ? orders.map((o) => `<div class="panel order" data-id="${esc(o.id)}">
         <div class="row space" style="margin:0"><div><b>${esc(o.id)}</b> · ${esc(when(o.created))} · <b>${usd(o.total)}</b> <span class="chip ${o.status === "paid" ? "warn" : o.status === "shipped" || o.status === "delivered" ? "good" : ""}">${esc(o.status)}</span></div>
           <div class="small muted">${esc(o.name || "")} · ${o.email ? link("mailto:" + o.email, o.email) : ""}</div></div>
         <ul class="tight small">${o.items.map((i) => `<li>${esc(i.title)} <span class="muted">${esc(i.grade || "")}</span> — ${usd(i.price)}</li>`).join("")}</ul>
@@ -1929,9 +1966,9 @@ async function loadMjc() {
         ${o.discount ? `<div class="small muted">Promo code discount ${usd(o.discount)}${o.tax ? ` · tax ${usd(o.tax)}` : ""}</div>` : o.tax ? `<div class="small muted">Tax ${usd(o.tax)}</div>` : ""}
         <div class="inline-form"><select data-st aria-label="Order status">${ORDER_STATUS.map((s) => `<option${s === o.status ? " selected" : ""}>${s}</option>`).join("")}</select>
           <input data-carrier placeholder="Carrier" value="${esc(o.carrier || "")}" style="width:110px" aria-label="Carrier"><input data-track placeholder="Tracking #" value="${esc(o.tracking || "")}" style="width:200px" aria-label="Tracking number">
-          <button class="small primary" data-save>Save — customer sees it</button><a class="button small" data-mail-tracking href="#" title="Opens an email to the customer with the tracking number">✉ Email tracking</a></div>
+          <button class="small primary" data-save>Save — customer sees it</button><a class="button small" data-mail-tracking href="#" title="Opens an email to the customer with the tracking number">✉ Email tracking</a><button class="small" data-slip title="Packing slip with a QR code to track the order">📦 Packing slip</button></div>
       </div>`).join("")
-      : `<div class="empty"><h2>No website orders yet</h2><p>When a customer pays on the MJC site, the order shows up here within 5 minutes (and as an alert). The card is marked sold in your inventory automatically.</p><button id="mjcPull">↻ Check now</button></div>`;
+      : `<div class="empty"><h2>No website orders yet</h2><p>When a customer pays on the MJC site, the order shows up here within 5 minutes (and as an alert). The card is marked sold in your inventory automatically.</p><button id="mjcPull">↻ Check now</button></div>`);
   } else if (mjcTab === "messages") {
     const tickets = (mjcTickets = await getJSON("/api/mjc/tickets"));
     const site = m.remote?.siteUrl || "";
@@ -2017,7 +2054,11 @@ async function loadMjc() {
   if (sync) sync.onclick = async () => { sync.disabled = true; const r = await fetch("/api/mjc/sync", { method: "POST" }); const j = await r.json(); toast(r.ok ? `Synced — ${j.live} card${j.live === 1 ? "" : "s"} on the website` : j.error, { error: !r.ok }); loadMjc(); };
   const pull = $("#mjcPull");
   if (pull) pull.onclick = async () => { pull.disabled = true; const r = await fetch("/api/mjc/orders/pull", { method: "POST" }); const j = await r.json(); toast(r.ok ? `${j.fresh.length} new order${j.fresh.length === 1 ? "" : "s"}` : j.error, { error: !r.ok }); loadMjc(); };
+  const pick = $("#invBody [data-picklist]");
+  if (pick) pick.onclick = () => printPickList((mjcOrders || []).filter((o) => o.status === "paid"), m.remote?.siteUrl || "");
   $$("#invBody .order").forEach((el) => {
+    const slip = $("[data-slip]", el);
+    if (slip) slip.onclick = () => printPickList((mjcOrders || []).filter((o) => o.id === el.dataset.id), m.remote?.siteUrl || "", { slips: true });
     $("[data-save]", el).onclick = async () => {
       const r = await fetch("/api/mjc/orders/" + el.dataset.id, json("PATCH", { status: $("[data-st]", el).value, carrier: $("[data-carrier]", el).value, tracking: $("[data-track]", el).value }));
       toast(r.ok ? "Saved — the customer can see it when they check their order" : (await r.json()).error, { error: !r.ok });

@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.12.0 — books & taxes, sales from other sites, live streams, packing, "ask my business"
+
+- **Books & taxes** (Shop → Books & taxes): the year's sales by where they sold, fees, cost of cards, expenses and
+  net; inventory at cost on Jan 1 and Dec 31 (the cost-of-goods number for taxes); sales tax (collected on the
+  website, and what's due on show and local sales at your rate); a **1099-K check** — type each site's 1099-K amount
+  and see what isn't recorded here; consignment totals. 🖨 **Year-end report** for the accountant, plus the CSVs.
+- **Sales from eBay / Whatnot / TCGplayer**: load the site's sales file (eBay: Seller Hub → Orders → Download
+  report). Each line is matched to your card by SKU (the Custom label) or the closest title; you tick what's right
+  and those cards are marked sold with that site's fees — and come off the MJC website. Importing the same file
+  twice is harmless. Buyers join the customer book.
+- **Listing file** (Stock → select → ⬇ Listing file): every field eBay and Whatnot ask for, one row per card
+  (title, price, grader, grade, cert, condition, year, set, player, team, number, parallel, serial, RC/auto/relic,
+  description, photo links) to copy into their bulk-listing templates.
+- **Insurance schedule**: every card over an amount with its photo, cert, location, cost and value today — printed
+  the way insurers ask for it.
+- **What to grade next** (Inventory → Grading): raw cards ranked by what grading should add after eBay fees and your
+  grading cost, from each grade's sold values and the odds from the card's condition and centering. Tick the best
+  ones → a new submission.
+- **Ask about my business** (Ask → 📊 My business): "What did Tigers cards make us this year?", "What's been in
+  stock 90+ days?". The AI only works out what to count — the app counts your real records, and the answer quotes
+  those numbers with a table of how it got them.
+- **Weekly report** (Home → 📋, and a Monday-morning alert): last week's sales, profit, best flip, cards added,
+  stock value, biggest moves, and what needs doing (orders to ship, messages, consignors owed, grading back,
+  supplies low, shows coming up) — copy it or email it.
+- **Packing**: a pick list for every website order waiting to ship, sorted by box, with packing advice (insure over
+  $100, signature over $750, envelope / bubble mailer / box by value — set in Shop settings) and branded packing
+  slips with a QR code to track the order.
+- **Live streams** (Shop → 📺 Live stream): line up the cards, put one on screen, type @buyer and the price → it's
+  sold on Whatnot (fees taken off), the buyer joins the customer book and the next card comes up. The **overlay
+  page** (http://localhost:3737/overlay.html as an OBS browser source) shows the card, its price, what's next and a
+  SOLD banner. End the stream → a recap by buyer to pack from.
+- Supplies nobody has counted yet show "—" instead of telling a new shop to reorder everything.
+
 ## 3.11.0 — the Shop: customers, store credit, consignment, grading service, shows, supplies
 
 - **Customer book** (new **Shop** tab): everyone who buys, sells, consigns or grades with you — website buyers are

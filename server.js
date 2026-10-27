@@ -99,12 +99,18 @@ const PIN_COOKIE = "cardbot_pin";
 const pinToken = () => crypto.createHash("sha256").update("cardbot:" + (process.env.ACCESS_PIN || "")).digest("hex").slice(0, 32);
 const hasPinCookie = (req) => (req.headers.cookie || "").split(/;\s*/).includes(`${PIN_COOKIE}=${pinToken()}`);
 
+// A second, limited PIN for someone helping at the table: Show mode only — no costs, no settings, no edits.
+const helperToken = () => (/^\d{4,8}$/.test(process.env.HELPER_PIN || "") ? crypto.createHash("sha256").update("cardbot-helper:" + process.env.HELPER_PIN).digest("hex").slice(0, 32) : null);
+const isHelper = (req) => Boolean(helperToken()) && (req.headers.cookie || "").split(/;\s*/).includes(`${PIN_COOKIE}=${helperToken()}`);
+const HELPER_API = [/^GET \/api\/(status|version|show|inventory|customers|search)$/, /^POST \/api\/show\/sale$/, /^POST \/api\/show\/sale\/[\w-]+\/undo$/, /^GET \/api\/photos\//];
+
 const pinFails = new Map(); // ip -> { n, until }
 app.post("/api/login", (req, res) => {
   const ip = req.socket.remoteAddress;
   const f = pinFails.get(ip) || { n: 0, until: 0 };
   if (f.until > Date.now()) return res.status(429).json({ error: "Too many wrong PINs — wait 10 minutes." });
-  const ok = SHARE && String(req.body?.pin || "") === process.env.ACCESS_PIN;
+  const helper = SHARE && helperToken() && String(req.body?.pin || "") === process.env.HELPER_PIN;
+  const ok = (SHARE && String(req.body?.pin || "") === process.env.ACCESS_PIN) || helper;
   if (!ok) {
     f.n++;
     if (f.n >= 10) Object.assign(f, { n: 0, until: Date.now() + 600000 });
@@ -112,8 +118,8 @@ app.post("/api/login", (req, res) => {
     return res.status(401).json({ error: "Wrong PIN" });
   }
   pinFails.delete(ip);
-  res.setHeader("Set-Cookie", `${PIN_COOKIE}=${pinToken()}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`);
-  res.json({ ok: true });
+  res.setHeader("Set-Cookie", `${PIN_COOKIE}=${helper ? helperToken() : pinToken()}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`);
+  res.json({ ok: true, helper: Boolean(helper) });
 });
 
 // Phone as a scanner: Bulk scan shows a QR code holding a short-lived key; opening it on a phone signs that
@@ -131,6 +137,11 @@ app.get("/phone", (req, res) => {
 const PUBLIC_WITHOUT_PIN = new Set(["/pin.js", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/apple-touch-icon.png"]);
 app.use((req, res, next) => {
   if (isLoopback(req.socket.remoteAddress) || hasPinCookie(req) || PUBLIC_WITHOUT_PIN.has(req.path)) return next();
+  if (isHelper(req)) {
+    req.helper = true;
+    if (!req.path.startsWith("/api/") || HELPER_API.some((re) => re.test(`${req.method} ${req.path}`))) return next();
+    return res.status(403).json({ error: "The helper PIN can use Show mode only." });
+  }
   if (req.path.startsWith("/api/")) return res.status(401).json({ error: "PIN required" });
   res.sendFile(path.join(here, "public", "pin.html"));
 });
@@ -261,6 +272,9 @@ app.get("/api/status", (req, res) => {
     desktop: DESKTOP,
     fees: FEE_PCT,
     payments: store.PAYMENTS,
+    role: req.helper ? "helper" : "owner",
+    storeName: mjc.storeSettings()?.name || null,
+    currentShow: store.currentShow(),
     conditions: store.CONDITION_LABEL,
     conditionHelp: store.CONDITION_HELP,
     conditionParts: store.CONDITION_PARTS,
@@ -283,6 +297,7 @@ app.get("/api/settings", (req, res) => {
     share: process.env.SHARE_ON_NETWORK === "1",
     shareActive: SHARE,
     pinSet: Boolean(process.env.ACCESS_PIN),
+    helperPinSet: Boolean(helperToken()),
     lanUrls: SHARE ? lanUrls() : [],
     psa: psa.hasToken(),
     ebay: ebay.hasKeys(),
@@ -328,6 +343,12 @@ app.post("/api/settings", (req, res) => {
       vars.SHARE_ON_NETWORK = b.share ? "1" : null;
       if (b.pin) vars.ACCESS_PIN = String(b.pin);
       restart = Boolean(b.share) !== SHARE || Boolean(b.pin);
+    }
+    if (b.helperPin !== undefined) {
+      const hp = String(b.helperPin || "").trim();
+      if (hp && !/^\d{4,8}$/.test(hp)) throw new Error("The helper PIN is 4–8 digits.");
+      if (hp && hp === (b.pin || process.env.ACCESS_PIN)) throw new Error("Pick a helper PIN different from your own PIN.");
+      vars.HELPER_PIN = hp || null;
     }
   } catch (err) {
     return res.status(400).json({ error: err.message });
@@ -755,7 +776,8 @@ app.post("/api/alerts/seen", (_req, res) => {
 
 // The Stock list: every card, slimmed for the table (no long text, no per-photo URL maps), with a short value
 // trend instead of the full history. The editor fetches the full card (GET /api/inventory/:id).
-app.get("/api/inventory", (_req, res) => {
+app.get("/api/inventory", (req, res) => {
+  if (req.helper) return res.json(store.inventoryView().filter((r) => r.status !== "sold").map(({ id, name, grade, qty, sku, location, value, listPrice, web, webMode, webPrice, webFixedPrice, category, status, kind }) => ({ id, name, grade, qty, sku, location, value, listPrice, web, webMode, webPrice, webFixedPrice, category, status, kind })));
   const h = store.historyView();
   const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   res.json(store.inventoryView().map(({ photoUrls, thumbUrls, webDescription, ...r }) => {
@@ -889,6 +911,7 @@ app.post("/api/inventory", (req, res) => {
     value: b.value ?? lookup?.pricing?.estimated_value_usd ?? null,
   });
   log(req, `added ${row.qty}× ${row.name} to inventory (paid $${row.cost} each)`);
+  tellCustomers([row]);
   if (row.web) pricingJob.run({ ids: [row.id] }).then(() => mjc.scheduleSync()).catch(() => {});
   res.json(row);
 });
@@ -910,8 +933,17 @@ app.patch("/api/inventory/:id", (req, res) => {
 // Sell some or all of a row (the Sold dialog). Selling part of a stack keeps the rest in stock.
 app.post("/api/inventory/:id/sell", (req, res) => {
   const b = req.body || {};
-  const r = store.sellUnits(req.params.id, { qty: b.qty, soldPrice: b.soldPrice, soldOn: b.soldOn, soldDate: b.soldDate, fees: b.fees, payment: b.payment });
+  const customerId = b.customerId ? String(b.customerId) : null;
+  const before = store.inventoryView().find((x) => x.id === req.params.id);
+  const owe = Math.round((store.clean.money(b.soldPrice) || 0) * Math.min(before?.qty || 1, store.clean.int(b.qty ?? before?.qty ?? 1)) * 100) / 100;
+  if (b.payment === "Store credit") {
+    const c = store.customers().find((x) => x.id === customerId);
+    if (!c) return res.status(400).json({ error: "Pick the customer whose store credit pays for it." });
+    if ((c.credit || 0) < owe - 0.004) return res.status(400).json({ error: `${c.name} has only $${(c.credit || 0).toFixed(2)} in store credit.` });
+  }
+  const r = store.sellUnits(req.params.id, { qty: b.qty, soldPrice: b.soldPrice, soldOn: b.soldOn, soldDate: b.soldDate, fees: b.fees, payment: b.payment, customerId });
   if (!r) return res.status(404).json({ error: "That card isn't in stock anymore." });
+  if (b.payment === "Store credit") store.addCredit(customerId, -(r.soldRow.soldPrice * r.soldRow.qty), `Bought ${r.soldRow.name}`, who(req));
   log(req, `sold ${r.soldRow.qty}× ${r.soldRow.name} for $${r.soldRow.soldPrice ?? "?"} each${r.soldRow.soldOn ? " on " + r.soldRow.soldOn : ""}${r.split ? ` (${r.row.qty} left)` : ""}`);
   if (r.row.web) mjc.scheduleSync();
   res.json(r);
@@ -931,19 +963,27 @@ app.post("/api/show/sale", (req, res) => {
   const payment = store.clean.oneOf(b.payment, store.PAYMENTS, "Cash");
   const lines = (Array.isArray(b.items) ? b.items : []).slice(0, 100);
   if (!lines.length) return res.status(400).json({ error: "Add a card to the sale first." });
+  const customer = b.customerId ? store.customers().find((c) => c.id === String(b.customerId)) : null;
+  if (payment === "Store credit") {
+    const want = lines.reduce((n, l) => n + (store.clean.money(l.price) || 0) * (store.clean.int(l.qty) || 1), 0);
+    if (!customer) return res.status(400).json({ error: "Pick the customer whose store credit pays for this." });
+    if ((customer.credit || 0) < want - 0.004) return res.status(400).json({ error: `${customer.name} has only $${(customer.credit || 0).toFixed(2)} in store credit (this sale is $${want.toFixed(2)}).` });
+  }
   const items = [];
   let web = false;
   for (const l of lines) {
     const price = store.clean.money(l.price);
     if (price == null) return res.status(400).json({ error: "Every card needs a price." });
-    const r = store.sellUnits(l.id, { qty: l.qty, soldPrice: price, soldOn: "Card show", soldDate: store.clean.date(b.date), payment, fees: 0 });
+    const r = store.sellUnits(l.id, { qty: l.qty, soldPrice: price, soldOn: "Card show", soldDate: store.clean.date(b.date), payment, fees: 0, customerId: customer?.id || null });
     if (!r) continue; // sold elsewhere a moment ago
     web ||= Boolean(r.row.web);
     items.push({ name: r.soldRow.name, grade: r.soldRow.grade, sku: r.soldRow.sku, qty: r.soldRow.qty, price, rowId: r.row.id, soldRowId: r.soldRow.id, split: r.split, prev: r.prev });
   }
   if (!items.length) return res.status(409).json({ error: "Those cards were already sold." });
   const total = Math.round(items.reduce((n, i) => n + i.price * i.qty, 0) * 100) / 100;
-  const sale = store.addShowSale({ by: who(req), payment, total, items });
+  const sale = store.addShowSale({ by: who(req), payment, total, items, ...(customer ? { customerId: customer.id, customer: customer.name } : {}) });
+  if (payment === "Store credit") store.addCredit(customer.id, -total, "Show sale", who(req));
+  for (const x of store.useSupplies({ cards: items.reduce((n, i) => n + i.qty, 0) })) store.addAlert({ kind: "supplies", name: x.name, text: `Down to ${x.onHand}${x.unit ? " " + x.unit : ""} — time to reorder.` });
   log(req, `sold ${items.reduce((n, i) => n + i.qty, 0)} card${items.length === 1 && items[0].qty === 1 ? "" : "s"} at a show for $${total} (${payment})`);
   if (web) mjc.scheduleSync();
   res.json({ sale, skipped: lines.length - items.length });
@@ -954,6 +994,7 @@ app.post("/api/show/sale/:id/undo", (req, res) => {
   let back = 0;
   for (const i of sale.items) if (store.unsellUnits(i)) back++;
   store.removeShowSale(sale.id);
+  if (sale.payment === "Store credit" && sale.customerId) store.addCredit(sale.customerId, sale.total, "Show sale undone", who(req));
   log(req, `undid a $${sale.total} show sale (${back} card${back === 1 ? "" : "s"} back in stock)`);
   mjc.scheduleSync();
   res.json({ ok: true, back });
@@ -973,6 +1014,156 @@ app.delete("/api/inventory/:id", (req, res) => {
   const trashId = store.deleteInventory(req.params.id);
   if (wasWeb) mjc.scheduleSync();
   okDelete(res, trashId);
+});
+
+// ---------------- the shop: customers (+ store credit), consignment, grading service, shows, supplies ----------------
+
+/** Everything a customer has done with the shop, newest first. */
+function customerHistory(c) {
+  const inv = store.inventoryView();
+  const email = (c.email || "").toLowerCase();
+  const bought = inv.filter((r) => r.customerId === c.id && r.status === "sold").map((r) => ({ at: r.soldDate, what: "Bought", name: r.name, grade: r.grade, qty: r.qty, amount: Math.round((r.soldPrice || 0) * r.qty * 100) / 100, where: r.soldOn || "" }));
+  const orders = email ? mjc.localOrders().filter((o) => (o.email || "").toLowerCase() === email).map((o) => ({ at: o.created.slice(0, 10), what: "Website order", name: o.items.map((i) => i.title).join(", "), amount: o.total, where: o.id })) : [];
+  const tickets = email ? mjc.localTickets().filter((t) => (t.email || "").toLowerCase() === email).map((t) => ({ at: String(t.created || t.at || "").slice(0, 10), what: { offer: "Offer", sell: "Wants to sell / trade", want: "Card request" }[t.kind] || "Message", name: t.cardTitle || String(t.message || "").slice(0, 80), amount: t.amount ?? null, where: "website" })) : [];
+  const credit = (c.creditLog || []).map((x) => ({ at: x.at.slice(0, 10), what: x.amount > 0 ? "Store credit added" : "Store credit used", name: x.reason, amount: x.amount, where: "" }));
+  const grading = store.gradingOrders().filter((o) => o.customerId === c.id).map((o) => ({ at: o.at.slice(0, 10), what: "Grading order", name: `${o.cards.length} card${o.cards.length === 1 ? "" : "s"} · ${o.service}`, amount: o.total, where: store.gradingOrderStage(o).text }));
+  // the website order's cards are also "Bought" rows: keep the order line, drop the duplicate rows
+  const orderIds = new Set(orders.map((o) => o.where));
+  return [...bought.filter((b) => !(b.where === "MJC site" && orderIds.size)), ...orders, ...tickets, ...credit, ...grading].sort((a, b) => (a.at < b.at ? 1 : -1));
+}
+function customerSummary(c, inv = store.inventoryView()) {
+  const sold = inv.filter((r) => r.customerId === c.id && r.status === "sold");
+  const consigned = store.consignments(c.id);
+  return {
+    ...c,
+    creditLog: undefined,
+    token: undefined,
+    bought: sold.reduce((n, r) => n + r.qty, 0),
+    spent: Math.round(sold.reduce((n, r) => n + (r.soldPrice || 0) * r.qty, 0) * 100) / 100,
+    lastAt: sold.map((r) => r.soldDate).sort().pop() || c.added.slice(0, 10),
+    consigned: { inStock: consigned.filter((x) => x.status !== "sold").length, sold: consigned.filter((x) => x.status === "sold").length, owed: Math.round(consigned.filter((x) => x.owed && !x.paidAt).reduce((n, x) => n + x.owed, 0) * 100) / 100 },
+    grading: store.gradingOrders().filter((o) => o.customerId === c.id && o.status !== "returned").length,
+  };
+}
+app.get("/api/customers", (req, res) => {
+  if (req.helper) return res.json(store.customers().map((c) => ({ id: c.id, name: c.name, credit: c.credit || 0 })));
+  const inv = store.inventoryView();
+  res.json(store.customers().map((c) => customerSummary(c, inv)).sort((a, b) => a.name.localeCompare(b.name)));
+});
+app.get("/api/customers/:id", (req, res) => {
+  const c = store.customers().find((x) => x.id === req.params.id);
+  if (!c) return res.status(404).json({ error: "not found" });
+  res.json({ ...customerSummary(c), creditLog: c.creditLog || [], history: customerHistory(c), consignments: store.consignments(c.id), gradingOrders: store.gradingOrders().filter((o) => o.customerId === c.id).map((o) => ({ ...o, stage: store.gradingOrderStage(o) })) });
+});
+app.post("/api/customers", (req, res) => {
+  const b = req.body || {};
+  if (!store.clean.str(b.name)) return res.status(400).json({ error: "Give the customer a name." });
+  if (b.email && store.findCustomerByEmail(b.email)) return res.status(409).json({ error: "A customer with that email is already in the book." });
+  const c = store.addCustomer(b);
+  log(req, `added customer ${c.name}`);
+  res.json(c);
+});
+app.patch("/api/customers/:id", (req, res) => {
+  const c = store.updateCustomer(req.params.id, req.body || {});
+  if (!c) return res.status(404).json({ error: "not found" });
+  res.json(c);
+});
+app.delete("/api/customers/:id", (req, res) => {
+  try {
+    okDelete(res, store.deleteCustomer(req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post("/api/customers/:id/credit", (req, res) => {
+  try {
+    const c = store.addCredit(req.params.id, req.body?.amount, req.body?.reason, who(req));
+    log(req, `${parseFloat(req.body?.amount) > 0 ? "gave" : "used"} $${Math.abs(parseFloat(req.body?.amount)).toFixed(2)} store credit — ${c.name} (now $${c.credit.toFixed(2)})`);
+    res.json(c);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post("/api/customers/:id/payout", (req, res) => {
+  const c = store.customers().find((x) => x.id === req.params.id);
+  if (!c) return res.status(404).json({ error: "not found" });
+  const r = store.payConsignor(c.id, Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [], req.body?.method, who(req));
+  if (r.paid) log(req, `paid ${c.name} $${r.total} for ${r.paid} consigned card${r.paid === 1 ? "" : "s"}`);
+  res.json(r);
+});
+// cards just added that customers collect → one alert naming who to tell
+function tellCustomers(rows) {
+  const hits = store.customerMatches(rows.filter((r) => r.status !== "sold"));
+  if (!hits.length) return;
+  store.addAlert({ kind: "customer", name: "New cards your customers collect", text: hits.slice(0, 6).map((h) => `${h.customer.name}: ${h.rows.slice(0, 3).map((r) => r.name).join(", ")}${h.rows.length > 3 ? ` +${h.rows.length - 3}` : ""}`).join(" · ") + ". Shop → Customers to email them." });
+}
+
+app.get("/api/shop/settings", (_req, res) => res.json(store.shopSettings()));
+app.put("/api/shop/settings", (req, res) => res.json(store.saveShopSettings(req.body || {})));
+
+app.get("/api/consignments", (_req, res) => {
+  const people = new Map(store.customers().map((c) => [c.id, c]));
+  res.json(store.consignments().map((x) => ({ ...x, consignor: people.get(x.consignorId)?.name || "?" })));
+});
+
+app.get("/api/grading-orders", (_req, res) => {
+  const people = new Map(store.customers().map((c) => [c.id, c]));
+  const subs = store.submissions();
+  res.json(store.gradingOrders().map((o) => ({ ...o, customer: people.get(o.customerId)?.name || "?", stage: store.gradingOrderStage(o, subs), submission: subs.find((s) => s.id === o.submissionId) ? { id: o.submissionId, company: subs.find((s) => s.id === o.submissionId).company, number: subs.find((s) => s.id === o.submissionId).number } : null })));
+});
+app.post("/api/grading-orders", (req, res) => {
+  const b = req.body || {};
+  if (!store.customers().some((c) => c.id === b.customerId)) return res.status(400).json({ error: "Pick the customer." });
+  const o = store.addGradingOrder({ ...b, by: who(req) });
+  if (!o.cards.length) return res.status(400).json({ error: "Add at least one card." });
+  log(req, `took in ${o.cards.length} card${o.cards.length === 1 ? "" : "s"} to grade for a customer ($${o.total})`);
+  res.json(o);
+});
+app.patch("/api/grading-orders/:id", (req, res) => {
+  const o = store.updateGradingOrder(req.params.id, req.body || {});
+  if (!o) return res.status(404).json({ error: "not found" });
+  res.json({ ...o, stage: store.gradingOrderStage(o) });
+});
+app.delete("/api/grading-orders/:id", (req, res) => okDelete(res, store.deleteGradingOrder(req.params.id)));
+
+app.get("/api/shows", (_req, res) => res.json(store.shows().map((sh) => ({ ...sh, report: store.showReport(sh.id) }))));
+app.post("/api/shows", (req, res) => {
+  const sh = store.addShow(req.body || {});
+  log(req, `added a card show: ${sh.name} on ${sh.date}`);
+  mjc.syncShows().catch(() => {});
+  res.json(sh);
+});
+app.patch("/api/shows/:id", (req, res) => {
+  const sh = store.updateShow(req.params.id, req.body || {});
+  if (!sh) return res.status(404).json({ error: "not found" });
+  if (["name", "date", "endDate", "venue", "city", "hours", "table", "public"].some((k) => k in (req.body || {}))) mjc.syncShows().catch(() => {});
+  res.json({ ...sh, report: store.showReport(sh.id) });
+});
+app.delete("/api/shows/:id", (req, res) => {
+  okDelete(res, store.deleteShow(req.params.id));
+  mjc.syncShows().catch(() => {});
+});
+// What to bring: cards in stock worth at least minValue (optional category / tag), by location so they're quick to pull.
+app.get("/api/shows/:id/bring", (req, res) => {
+  const min = parseFloat(req.query.minValue) || 0;
+  const cat = String(req.query.category || ""), tag = String(req.query.tag || "").toLowerCase();
+  const rows = store.inventoryView().filter((r) => ["in_stock", "listed"].includes(r.status) && (req.query.sealed === "1" || r.kind !== "sealed") && (r.value ?? r.listPrice ?? 0) >= min && (!cat || r.category === cat) && (!tag || (r.tags || []).some((t) => t.toLowerCase() === tag)));
+  res.json(rows.map(({ id, name, grade, qty, sku, location, value, listPrice, web, category }) => ({ id, name, grade, qty, sku, location, value, listPrice, web, category })).sort((a, b) => String(a.location || "~").localeCompare(String(b.location || "~"), undefined, { numeric: true }) || (b.value || 0) - (a.value || 0)));
+});
+
+app.get("/api/supplies", (_req, res) => res.json(store.supplies()));
+app.put("/api/supplies", (req, res) => res.json(store.saveSupply(req.body || {})));
+app.delete("/api/supplies/:id", (req, res) => res.json(store.deleteSupply(req.params.id)));
+app.post("/api/supplies/:id/restock", (req, res) => {
+  const x = store.supplies().find((s) => s.id === req.params.id);
+  if (!x) return res.status(404).json({ error: "not found" });
+  const qty = parseFloat(req.body?.qty) || 0;
+  if (qty <= 0) return res.status(400).json({ error: "How many came in?" });
+  const paid = store.clean.money(req.body?.paid);
+  const list = store.saveSupply({ ...x, onHand: x.onHand + qty, cost: paid ? Math.round((paid / qty) * 100) / 100 : x.cost });
+  if (paid) store.addExpense({ kind: "Supplies", amount: paid, note: `${qty} ${x.name}`, addedBy: who(req) });
+  log(req, `restocked ${qty} ${x.name}${paid ? ` ($${paid})` : ""}`);
+  res.json(list);
 });
 
 // ---------------- MJC website: listing photos + description ----------------
@@ -1016,6 +1207,7 @@ app.post("/api/inventory/many", (req, res) => {
   });
   store.setEngineFieldsMany(patches);
   log(req, `added ${rows.length} scanned card${rows.length === 1 ? "" : "s"} to inventory`);
+  tellCustomers(rows);
   res.json({ added: rows.length, rows: rows.map((r) => ({ id: r.id, sku: r.sku, name: r.name })) });
 });
 
@@ -1265,6 +1457,7 @@ async function pullMjc() {
       onOrder: (o) => {
         store.addAlert({ kind: "order", name: `MJC order ${o.id}`, text: `${o.name || o.email} bought ${o.items.map((i) => i.title).join(", ")} — $${o.total}. Ship it from Inventory → MJC store.` });
         store.logActivity("MJC website", `new order ${o.id}: ${o.items.map((i) => i.title).join(", ")} ($${o.total})`);
+        for (const x of store.useSupplies({ orders: 1 })) store.addAlert({ kind: "supplies", name: x.name, text: `Down to ${x.onHand}${x.unit ? " " + x.unit : ""} — time to reorder.` });
       },
     });
     if (orders.length) mjc.scheduleSync();

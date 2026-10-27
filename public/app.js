@@ -198,6 +198,7 @@ async function openSettings() {
   $$("#settings input, #settings button:not(#closeSettings):not(#diagBtn)").forEach((el) => (el.disabled = !s.canEditSettings));
   $("#budgetInput").value = s.budget ?? "";
   $("#shareToggle").checked = s.share;
+  $("#helperPinState").textContent = s.helperPinSet ? "set — leave blank and Save to remove it" : "not set";
   $("#briefToggle").checked = s.dailyBrief;
   $("#psaState").innerHTML = s.psa ? `<span class="ok">✓ connected</span>` : "";
   $("#ebayState").innerHTML = s.ebay ? `<span class="ok">✓ connected</span>` : "";
@@ -288,6 +289,7 @@ $("#saveEbay").onclick = async () => { if (await saveSettings({ ebayId: $("#ebay
 $("#saveBudget").onclick = () => saveSettings({ budget: $("#budgetInput").value }, $("#keyMsg"));
 $("#briefToggle").onchange = () => saveSettings({ dailyBrief: $("#briefToggle").checked }, $("#keyMsg"));
 $("#saveShare").onclick = () => saveSettings({ share: $("#shareToggle").checked, pin: $("#pinInput").value || undefined }, $("#shareMsg"));
+$("#saveHelperPin").onclick = () => saveSettings({ helperPin: $("#helperPinInput").value.trim() }, $("#shareMsg")).then(openSettings);
 $("#restoreFile").onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -1266,6 +1268,15 @@ $("#histSearch").oninput = drawHistory;
 applyTheme();
 renderWho();
 refreshStatus().then(() => {
+  // Signed in with the helper PIN: Show mode only (the server refuses everything else anyway).
+  if (status.role === "helper") {
+    document.body.classList.add("helper");
+    $$("#tabs button").forEach((b) => (b.hidden = b.dataset.tab !== "inventory"));
+    $$("#invView button").forEach((b) => (b.hidden = b.dataset.v !== "show"));
+    ["#settingsBtn", "#keyBanner"].forEach((s) => $(s)?.classList.add("hidden"));
+    invView = "show";
+    return goTab("inventory");
+  }
   const t = store.get("tab", "home");
   goTab($(`#tabs button[data-tab="${t}"]`) ? t : "home");
   if (!store.get("who")) setTimeout(() => $("#whoBtn").click(), 400);

@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.11.0 — the Shop: customers, store credit, consignment, grading service, shows, supplies
+
+- **Customer book** (new **Shop** tab): everyone who buys, sells, consigns or grades with you — website buyers are
+  added by themselves. Write what each one collects ("Tigers, Skubal, Pokemon 151"): when matching cards come in
+  you get one alert naming who to tell, and the customer's page has "✉ Email them these" ready to send. Their page
+  shows everything they've done with the shop.
+- **Store credit**: give credit for a trade-in, a refund or a gift card; spend it with the new **Store credit**
+  payment in Show mode or the Sold dialog (it can never go below zero; undoing a show sale gives it back).
+- **Consignment**: sell other people's cards for a commission (15% by default, per customer if you like). Pick
+  "Consigned by" in Bulk scan or the card editor, with their minimum price — the pricing engine never goes under it.
+  When one sells, what they're owed is worked out automatically and the profit shown is your commission. Pay them
+  in one click (cash, Venmo, store credit…) and print their statement.
+- **Grading service**: take in customers' cards to grade, print their receipt, send them with your own submissions
+  — link the order to the submission and its progress at PSA follows it. Prices per service in Shop settings.
+- **Card shows**: the calendar (public ones go on the website's "Find us at shows"), a checklist for the table, a
+  pull list of what to bring sorted by box, Show mode files each sale under the day's show, and each show's profit
+  after the table and expenses. **Cash drawer count** at close: start cash + cash sales − cash paid out vs counted.
+- **Helper PIN** (Settings → Share on home network): someone helping at the table signs in with it and gets Show
+  mode only — no costs, no settings, no edits.
+- **Supplies**: sleeves, top loaders, team bags, mailers… each website order uses up its share; an alert when one
+  reaches its reorder point; ＋ Restock files the expense.
+- Show mode: pick the customer (credit shown), every payment type, and the show the sale is filed under.
+
 ## 3.10.0 — a scan you can trust, condition reports, sealed boxes
 
 - **Checked against the set's checklist**: every scanned card (and every Card Lookup) is checked against the price

@@ -83,6 +83,18 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Views | Quick views (no sales page, stale, on website, listed 30+ days, no location, never counted, no photo), saved views shared by both computers, group by with subtotals, compact rows, 30-day trend sort, CSV of the current view | 3.8 |
 | Change history | Who changed what on each card, when; value-over-time line in the editor | 3.8 |
 
+## The Shop tab — customers and services
+
+| Feature | What it does | Since |
+|---|---|---|
+| Customer book | Everyone who buys, sells, consigns or grades with you; website buyers added automatically; full history per customer; "collects" words → an alert when matching cards come in + a ready email | 3.11 |
+| Store credit | Give it (trade-ins, refunds, gift cards), spend it as a payment in Show mode or the Sold dialog; never below zero; a log per customer | 3.11 |
+| Consignment | Other people's cards sold for a commission (shop default or per customer), never under their minimum; payout worked out on every sale; pay in one click; printable statement | 3.11 |
+| Grading service | Customers' cards taken in, a printed receipt, sent with your submissions — progress at PSA follows; your price list per service | 3.11 |
+| Card shows | Calendar (public ones on the website), table checklist, pull list by box, sales filed under the show, profit per show, cash drawer count | 3.11 |
+| Helper PIN | A second PIN for someone at your table: Show mode only, no costs, no settings | 3.11 |
+| Supplies | On hand, used per website order / per card sold, reorder alerts, restock files the expense | 3.11 |
+
 ## The MJC website connection
 
 | Feature | What it does | Since |

@@ -692,6 +692,7 @@ function openCount(location) {
 }
 
 async function openItemEditor(row = null) {
+  window.__customers = await getJSON("/api/customers").catch(() => []);
   // The Stock list is slimmed (no descriptions, no history): edit the full card, or saving would blank them.
   if (row?.id) {
     try {
@@ -743,6 +744,15 @@ async function openItemEditor(row = null) {
           <label>Corners${partSel("corners")}</label><label>Edges${partSel("edges")}</label><label>Surface${partSel("surface")}</label>
           <label>Condition notes <span class="muted small">(the website shows them)</span><input name="cond.notes" value="${esc(K.notes || "")}" placeholder="tiny white spot, top-left corner of the back"></label>
           <p class="span2 small muted" data-condhelp style="margin:0"></p>
+        </div>
+      </fieldset>
+      <fieldset class="span2 web-box">
+        <legend>🤝 Consignment <span class="muted small">(someone else's card you sell for a commission)</span></legend>
+        <div class="form-grid">
+          <label>Consigned by<select name="consignorId" data-consignor><option value="">— our own card —</option>${(window.__customers || []).map((c) => `<option value="${esc(c.id)}"${c.id === r.consignorId ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+          <label>Their minimum price $<input name="consignFloor" type="number" min="0" step="0.01" value="${esc(r.consignFloor ?? "")}" placeholder="never sold under this"></label>
+          <label>Commission % <span class="muted small">(blank = the shop's)</span><input name="consignPct" type="number" min="0" max="60" step="0.5" value="${esc(r.consignPct ?? "")}"></label>
+          ${r.payout ? `<p class="small" style="margin:0">Sold — owed to them: <b>${usd(r.payout.owed)}</b> ${r.payout.paidAt ? `· paid ${esc(day(r.payout.paidAt))}` : "· <b class=neg>not paid yet</b>"}</p>` : ""}
         </div>
       </fieldset>
       <fieldset class="span2 web-box" data-kind="sealed">
@@ -797,6 +807,7 @@ async function openItemEditor(row = null) {
       delete f[k];
     }
     if (f.kind === "sealed") { delete f.facts; delete f.condition; }
+    if (!f.consignorId) { f.consignorId = null; delete f.consignFloor; delete f.consignPct; }
     if (f.value === "") f.value = null;
     if (!f.sku) delete f.sku;
     f.web = e.target.elements.web.checked;
@@ -835,13 +846,15 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "Escape" && invSel.size) { invSel.clear(); drawStock(); }
 });
 
-function openSellDialog(row) {
+async function openSellDialog(row) {
+  window.__customers = await getJSON("/api/customers").catch(() => []);
   const body = openModal(`Sold: ${row.name}`, `
     <form class="form-grid" data-form>
       ${row.qty > 1 ? `<label>How many<select name="qty">${Array.from({ length: Math.min(row.qty, 100) }, (_, i) => `<option${i + 1 === row.qty ? " selected" : ""}>${i + 1}</option>`).join("")}</select></label>` : ""}
       <label>Sold for (each) $<input name="soldPrice" type="number" min="0" step="0.01" required value="${esc(row.listPrice ?? row.value ?? "")}"></label>
       <label>Where<select name="soldOn">${opts(SELL_PLATFORMS, row.listedOn || "eBay")}</select></label>
       <label>Paid with<select name="payment"><option value="">—</option>${opts(status.payments || [], "")}</select></label>
+      <label>Customer <span class="muted small">(optional — needed for store credit)</span><select name="customerId"><option value="">—</option>${(window.__customers || []).map((c) => `<option value="${esc(c.id)}">${esc(c.name)}${c.credit ? ` (credit ${usd(c.credit)})` : ""}</option>`).join("")}</select></label>
       <label>Date<input name="soldDate" type="date" value="${today()}"></label>
       <label>Fees $ <span class="muted small">(blank = estimate)</span><input name="fees" type="number" min="0" step="0.01"></label>
       <div class="span2 small" data-preview></div>
@@ -998,7 +1011,7 @@ function scanFixes(c) {
 
 async function loadScan() {
   $("#invActions").innerHTML = "";
-  scan.inv = await getJSON("/api/inventory").catch(() => []);
+  [scan.inv, scan.people] = await Promise.all([getJSON("/api/inventory").catch(() => []), getJSON("/api/customers").catch(() => [])]);
   drawScan();
 }
 
@@ -1472,6 +1485,7 @@ function scanReviewHtml() {
       ${boxes.length ? `<label>Came out of a box <span class="muted small">(its cost is spread over these cards)</span><select name="box" data-boxsel><option value="">— not from a box —</option>${boxes.map((r) => `<option value="${esc(r.id)}"${r.id === scan.box ? " selected" : ""}>${esc(r.name)} — ${usd(r.cost)} each, ${r.qty} left</option>`).join("")}</select></label>` : ""}
       <label>Paid for all of them $ <span class="muted small">(split by value — unpriced cards get $0; price them later and use ÷ Split lot cost to re-split)</span><input name="total" type="number" min="0" step="0.01" placeholder="0" value="${box ? esc(box.cost) : ""}"${box ? " readonly" : ""}></label>
       <label>Status<select name="status">${["in_stock", "listed", "grading"].map((v) => `<option value="${v}">${STATUS_LABEL[v]}</option>`).join("")}</select></label>
+      ${(scan.people || []).length ? `<label>Consigned by <span class="muted small">(someone else's cards: no cost; they're paid when each sells)</span><select name="consignorId"><option value="">— our own cards —</option>${scan.people.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")}</select></label>` : ""}
       <label class="check"><input type="checkbox" name="combine" checked> Copies of the same card go on one row (qty)</label>
       <div class="span2 row"><button class="primary" data-addscan>＋ Add to inventory</button><span class="small muted" data-addprog></span></div>
     </form></div>`;
@@ -1576,7 +1590,8 @@ async function addScanned(btn) {
         }
         items.push({
           name: c.name, grade: c.grade || "Raw", category: c.category || "other", qty: g.length,
-          cost: Math.round((g.reduce((n, x) => n + costEach(x), 0) / g.length) * 100) / 100,
+          cost: f.consignorId ? 0 : Math.round((g.reduce((n, x) => n + costEach(x), 0) / g.length) * 100) / 100,
+          ...(f.consignorId ? { consignorId: f.consignorId } : {}),
           value: c.value ?? null, priceUrl: c.url || null, location: f.location || "", status: f.status, purchased: today(),
           tags: c.tags || [],
           facts: factsOf(c),
@@ -2084,10 +2099,12 @@ async function loadMjc() {
 
 let showCart = []; // [{ id, qty, price }]
 let showPay = "Cash";
+let showCustomer = null; // the buyer, when you pick one (store credit needs it)
 async function loadShow() {
   $("#invActions").innerHTML = `<span class="small muted">Scan a label or type a card / SKU, set the price, pick how they paid, Complete sale. Each card is marked sold on "Card show".</span>`;
-  const [rows, show] = await Promise.all([getJSON("/api/inventory"), getJSON("/api/show")]);
+  const [rows, show, people] = await Promise.all([getJSON("/api/inventory"), getJSON("/api/show"), getJSON("/api/customers").catch(() => [])]);
   invRows = rows;
+  const buyer = people.find((c) => c.id === showCustomer) || null;
   const inStock = rows.filter((r) => r.status !== "sold" && r.qty > 0);
   const byId = Object.fromEntries(inStock.map((r) => [r.id, r]));
   showCart = showCart.filter((l) => byId[l.id]);
@@ -2099,15 +2116,17 @@ async function loadShow() {
         <input type="search" data-scan placeholder="Scan a label or type a card name / SKU…" aria-label="Find a card to sell" autocomplete="off" style="width:100%;font-size:1.1rem">
         <div data-matches class="show-matches"></div>
         ${showCart.length ? `<table class="show-cart"><tr><th>Card</th><th class="num">Qty</th><th class="num">Price each</th><th></th></tr>
-          ${showCart.map((l, i) => { const r = byId[l.id]; return `<tr data-i="${i}"><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.grade)} · ${esc(r.sku || "")} · paid ${usd(r.cost)}${r.value ? ` · value ${usd(r.value)}` : ""}</div></td>
+          ${showCart.map((l, i) => { const r = byId[l.id]; return `<tr data-i="${i}"><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.grade)} · ${esc(r.sku || "")}${status.role === "helper" ? "" : ` · paid ${usd(r.cost)}`}${r.value ? ` · value ${usd(r.value)}` : ""}</div></td>
             <td class="num">${r.qty > 1 ? `<select data-qty aria-label="Quantity">${Array.from({ length: Math.min(r.qty, 50) }, (_, k) => `<option${k + 1 === l.qty ? " selected" : ""}>${k + 1}</option>`).join("")}</select>` : "1"}</td>
             <td class="num"><input data-price type="number" min="0" step="0.01" value="${esc(l.price)}" aria-label="Price each" style="width:90px"></td>
             <td><button class="ghost small" data-rm aria-label="Remove">✕</button></td></tr>`; }).join("")}</table>
-          <div class="row show-pay" role="group" aria-label="Paid with">${(status.payments || ["Cash", "Card", "Venmo"]).slice(0, 7).map((p) => `<button class="${p === showPay ? "primary" : ""}" data-pay="${esc(p)}" aria-pressed="${p === showPay}">${esc(p)}</button>`).join("")}</div>
+          <div class="row" style="margin:.5rem 0 0"><label class="small">Customer <span class="muted">(optional)</span> <select data-buyer aria-label="Customer"><option value="">—</option>${people.map((c) => `<option value="${esc(c.id)}"${c.id === showCustomer ? " selected" : ""}>${esc(c.name)}${c.credit ? ` · credit ${usd(c.credit)}` : ""}</option>`).join("")}</select></label>${buyer?.credit ? `<span class="small">has <b>${usd(buyer.credit)}</b> store credit</span>` : ""}</div>
+          <div class="row show-pay" role="group" aria-label="Paid with">${(status.payments || ["Cash", "Card", "Venmo"]).map((p) => `<button class="${p === showPay ? "primary" : ""}" data-pay="${esc(p)}" aria-pressed="${p === showPay}">${esc(p)}</button>`).join("")}</div>
           <div class="row space"><span class="show-total">Total <b>${usd(total)}</b></span><button class="primary big" data-complete>✓ Complete sale</button></div>`
           : `<p class="muted small" style="margin-top:.8rem">Nothing in this sale yet.</p>`}
       </div>
       <div class="panel">
+        ${status.currentShow ? `<p class="small" style="margin-top:0">🎪 Filed under <b>${esc(status.currentShow.name)}</b>${status.currentShow.table ? ` · table ${esc(status.currentShow.table)}` : ""} — the cash count is in Shop → Shows.</p>` : ""}
         <h3 style="margin-top:0">Today</h3>
         <div class="week-grid"><div><b>${usd(t.total)}</b><span>${t.sales} sale${t.sales === 1 ? "" : "s"} · ${t.cards} card${t.cards === 1 ? "" : "s"}</span></div>
           ${Object.entries(t.byPayment).map(([p, v]) => `<div><b>${usd(v)}</b><span>${esc(p)}</span></div>`).join("")}</div>
@@ -2150,14 +2169,17 @@ async function loadShow() {
     $("[data-rm]", tr).onclick = () => { showCart.splice(+tr.dataset.i, 1); loadShow(); };
   });
   $$("#invBody [data-pay]").forEach((b) => (b.onclick = () => { showPay = b.dataset.pay; loadShow(); }));
+  const buyerSel = $("#invBody [data-buyer]");
+  if (buyerSel) buyerSel.onchange = () => { showCustomer = buyerSel.value || null; loadShow(); };
   const done = $("#invBody [data-complete]");
   if (done) done.onclick = async () => {
     if (showCart.some((l) => !(parseFloat(l.price) >= 0) || l.price === "")) return toast("Every card needs a price.", { error: true });
     done.disabled = true;
-    const r = await fetch("/api/show/sale", json("POST", { items: showCart, payment: showPay }));
+    const r = await fetch("/api/show/sale", json("POST", { items: showCart, payment: showPay, customerId: showCustomer }));
     const j = await r.json();
     if (!r.ok) { done.disabled = false; return toast(j.error, { error: true }); }
     showCart = [];
+    showCustomer = null;
     toast(`Sold ✓ ${usd(j.sale.total)} (${j.sale.payment})${j.skipped ? ` — ${j.skipped} card${j.skipped === 1 ? " was" : "s were"} already sold` : ""}`);
     loadShow();
   };
@@ -2277,7 +2299,7 @@ async function findPricesBulk(reload) {
 
 async function loadExpenses() {
   $("#invActions").innerHTML = "";
-  const list = await getJSON("/api/expenses");
+  const [list, shows] = await Promise.all([getJSON("/api/expenses"), getJSON("/api/shows").catch(() => [])]);
   const month = today().slice(0, 7);
   const thisMonth = list.filter((e) => e.date.startsWith(month)).reduce((n, e) => n + e.amount, 0);
   $("#invBody").innerHTML = `
@@ -2288,6 +2310,7 @@ async function loadExpenses() {
         <select name="kind" aria-label="Type">${opts(EXPENSE_KINDS)}</select>
         <input name="amount" type="number" min="0" step="0.01" placeholder="Amount $" required aria-label="Amount">
         <input name="note" type="text" placeholder="Note (e.g. toploaders, show table)" aria-label="Note" style="width:260px">
+        ${shows.length ? `<select name="showId" aria-label="For a card show"><option value="">— not for a show —</option>${shows.slice().reverse().slice(0, 12).map((x) => `<option value="${esc(x.id)}"${x.id === status.currentShow?.id ? " selected" : ""}>${esc(x.name)} · ${esc(day(x.date))}</option>`).join("")}</select>` : ""}
         <input name="receiptHash" type="hidden">
         <button class="primary">Add</button>
         <label class="button ghost" title="Take or choose a photo of a receipt — the AI fills in the expense for you to check">📷 Read a receipt<input type="file" accept="image/*" data-receipt hidden></label>

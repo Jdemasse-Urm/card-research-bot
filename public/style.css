@@ -405,3 +405,7 @@ button.big { font-size: 1.05rem; padding: .7rem 1.2rem; }
 .qr { width: 240px; max-width: 100%; background: #fff; padding: 8px; border-radius: 10px; }
 .qr svg { width: 100%; height: auto; display: block; }
 [data-kind][hidden] { display: none !important; }
+/* 3.11: the Shop tab */
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td { background: color-mix(in srgb, var(--gold) 8%, transparent); }
+tr.low td { background: color-mix(in srgb, #c2341b 8%, transparent); }

@@ -22,6 +22,7 @@
       <button data-tab="hot">Hottest</button>
       <button data-tab="sets">Sets</button>
       <button data-tab="inventory">Inventory</button>
+      <button data-tab="shop">Shop</button>
       <button data-tab="watch">Watchlist <span id="alertBadge" class="badge hidden" aria-label="new alerts"></span></button>
       <button data-tab="ask">Ask</button>
       <button data-tab="history">History</button>
@@ -166,6 +167,17 @@
       <div id="invBody"></div>
     </section>
 
+    <!-- ================= SHOP: customers, consignment, grading service, shows, supplies ================= -->
+    <section id="tab-shop" class="tab" aria-label="The shop">
+      <div class="panel">
+        <div class="row space">
+          <div class="pills" id="shopPills" role="group" aria-label="Shop view"></div>
+          <div class="row" style="margin:0" id="shopActions"></div>
+        </div>
+      </div>
+      <div id="shopBody"></div>
+    </section>
+
     <!-- ================= WATCHLIST ================= -->
     <section id="tab-watch" class="tab" aria-label="Watchlist">
       <div class="panel">
@@ -292,6 +304,11 @@
           <input id="pinInput" type="password" inputmode="numeric" maxlength="8" placeholder="4–8 digit PIN" style="width:150px" aria-label="PIN" />
           <button id="saveShare">Save</button>
         </div>
+        <div class="row" style="margin-top:.3rem">
+          <label class="small" for="helperPinInput" title="Someone helping at your table signs in with this: Show mode only — no costs, no settings, no edits">Helper PIN <span class="muted">(Show mode only)</span></label>
+          <input id="helperPinInput" type="password" inputmode="numeric" maxlength="8" placeholder="4–8 digits" style="width:150px" aria-label="Helper PIN">
+          <button id="saveHelperPin">Save</button><span id="helperPinState" class="small muted"></span>
+        </div>
         <div id="shareMsg" class="small" role="status"></div>
       </section>
 
@@ -332,5 +349,6 @@
   <script src="app.js"></script>
   <script src="business.js"></script>
   <script src="tools.js"></script>
+  <script src="shop.js"></script>
 </body>
 </html>

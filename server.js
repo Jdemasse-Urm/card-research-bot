@@ -1809,6 +1809,37 @@ app.post("/api/pricing/run", async (req, res) => {
 
 // New orders and customer messages, every few minutes (alerts + desktop notifications via the badge).
 let mjcPulling = false;
+/**
+ * A scheduled drop just went live on the website: the email list hears about it once (within 6 hours of the drop —
+ * an old one is never announced late). The store emails each subscriber on their own.
+ */
+async function announceDrops() {
+  const st = mjc.storeSettings();
+  if (!st || st.emailList === false) return;
+  const done = new Set(store.load("drop-announced", []));
+  const now = Date.now();
+  const due = new Map();
+  for (const r of store.inventoryView()) {
+    const at = r.webGoLiveAt ? Date.parse(r.webGoLiveAt) : NaN;
+    if (mjc.onSite(r) && at <= now && now - at < 6 * 3600000 && !done.has(r.webGoLiveAt)) due.set(r.webGoLiveAt, [...(due.get(r.webGoLiveAt) || []), r]);
+  }
+  const site = mjc.state().lastStatus?.siteUrl || "";
+  for (const [at, rows] of due) {
+    const lines = rows.slice(0, 12).map((r) => `• ${r.name}${/^raw$/i.test(r.grade) ? "" : ` (${r.grade})`} — $${mjc.sitePrice(r)}${site ? `\n  ${site}/card/${encodeURIComponent(r.id)}/x` : ""}`);
+    const text = `${rows.length} new card${rows.length === 1 ? " is" : "s are"} live in the shop now — first come, first served:\n\n${lines.join("\n")}${rows.length > 12 ? `\n…and ${rows.length - 12} more` : ""}${site ? `\n\nSee them all: ${site}/shop?sort=new` : ""}`;
+    let offset = 0, sent = 0, reason = null;
+    do {
+      const r = await mjc.announce(`Just dropped: ${rows.length} new card${rows.length === 1 ? "" : "s"}`, text, offset);
+      sent += r.sent || 0;
+      reason = r.reason || null;
+      offset = reason ? null : r.next;
+    } while (offset != null);
+    done.add(at);
+    store.save("drop-announced", [...done].slice(-200));
+    store.logActivity("MJC website", reason ? `drop of ${rows.length} card${rows.length === 1 ? "" : "s"} went live (email list not told: ${reason})` : `drop of ${rows.length} card${rows.length === 1 ? "" : "s"} went live — emailed ${sent} people on the list`);
+  }
+}
+
 async function pullMjc() {
   if (!mjc.configured() || mjcPulling) return { orders: [], tickets: 0 };
   mjcPulling = true;
@@ -1822,6 +1853,7 @@ async function pullMjc() {
     });
     if (orders.length) mjc.scheduleSync();
     mjc.refreshStatus().catch(() => {}); // Home's website numbers; a miss just keeps the last copy
+    await announceDrops().catch((err) => console.warn("drop announcement failed:", err.message));
     let tickets = 0;
     await mjc.pullTickets({
       onActivity: (t, what) => store.addAlert({ kind: "ticket", name: `${what === "answer" ? "Answer to your offer" : "Reply"} from ${t.name || t.email}`, text: what === "answer" ? `They chose: ${{ cash: "cash", credit: "store credit", decline: "no thanks" }[t.offer.answer.choice] || t.offer.answer.choice}.` : String((t.replies || []).filter((r) => r.from === "customer").at(-1)?.text || "").slice(0, 140) }),

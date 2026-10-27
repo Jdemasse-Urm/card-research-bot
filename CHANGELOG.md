@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.13.1 — drops tell your email list
+
+- When a scheduled drop goes live on the website, the email list hears about it once — the cards, prices and links,
+  one email per person (sent by the store from the shop's address, once that's set up). A drop more than 6 hours old
+  is never announced late. The activity feed says who was told, or why not.
+
 ## 3.13.0 — running the website's new services from here
 
 - **Conversations**: every website message now has a reply box — the shopper sees your reply on their page (and in

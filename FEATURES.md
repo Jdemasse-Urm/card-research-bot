@@ -119,7 +119,7 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Trade-in offers | Cash and/or credit offer on a sell request → they accept on their page → one click gives the credit | 3.13 |
 | Reviews + Pip's questions | Reply to reviews (hide only spam/abuse/personal details); the questions Pip couldn't answer, to add to Setup | 3.13 |
 | Order checks | Orders over your amount wait for "Checked — OK to ship"; shipped / delivered email the buyer | 3.13 |
-| Drops | "Goes live at" per card or in bulk — hidden on the site until then | 3.13 |
+| Drops | "Goes live at" per card or in bulk — hidden on the site until then; the email list is told when it drops | 3.13 / 3.13.1 |
 | Status pages + credit codes | Consignor statements and grading orders kept up to date on the website; each customer's online credit code | 3.13 |
 | Store setup | Name, support email, shipping charge + free-shipping threshold, shipping/returns/policies text, "About the shop"; checkout on/off | 3.3 / 3.5 |
 | Owner's switches | Local pickup (+ note), promo codes, Stripe Tax, show/hide the demo parts of the site, email list on/off, social links | 3.7 |

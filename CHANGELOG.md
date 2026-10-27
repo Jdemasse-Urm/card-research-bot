@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.13.0 — running the website's new services from here
+
+- **Conversations**: every website message now has a reply box — the shopper sees your reply on their page (and in
+  Pip's chat, within about 30 seconds while they're there) and by email once the shop's email is set up. Their
+  answers come back as alerts. While a conversation is going, the app checks for replies every 30 seconds.
+- **Offers on cards people want to sell**: type a cash and/or store-credit offer; they accept or decline on their
+  own page. Chose credit? One click gives it to them in the customer book.
+- **Reviews** (MJC store → ⭐ Reviews): reply publicly; hide one only as spam, abuse or personal details.
+- **What Pip couldn't answer** (❓): the questions it handed over or missed (no contact details) — add the answer to
+  Setup and Pip uses it next time.
+- **Orders**: a big order waits with a warning until you click "Checked — OK to ship" (set the amount in Setup);
+  pickup at a show and gift cards show on the order; store credit spent online comes off the customer's balance.
+  Marking an order shipped or delivered emails the buyer (tracking; then the review link).
+- **Setup**: pickup at a card show, pay over time (after turning on Affirm/Klarna in Stripe), store credit online
+  by code, gift cards (and their amounts), "check orders over $". Saving Setup no longer drops the show calendar.
+- **Drops**: "Goes live at" on a card (or many at once in Bulk edit) — hidden on the website until then, and the
+  home page shows the next drop.
+- **Status pages**: consignors' statements and customers' grading orders go to the website on every sync; their
+  links are on the customer's page and the printed grading receipt (with a QR code). Each customer has an online
+  store-credit code.
+- **Tilt videos** go to the website through a signed upload link (straight to the photo bucket).
+- **Weekly report**: "Send it now" from the shop's own address once the website's email is set up.
+
 ## 3.12.0 — books & taxes, sales from other sites, live streams, packing, "ask my business"
 
 - **Books & taxes** (Shop → Books & taxes): the year's sales by where they sold, fees, cost of cards, expenses and

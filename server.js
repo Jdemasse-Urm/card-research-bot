@@ -1061,7 +1061,7 @@ app.get("/api/customers", (req, res) => {
 app.get("/api/customers/:id", (req, res) => {
   const c = store.customers().find((x) => x.id === req.params.id);
   if (!c) return res.status(404).json({ error: "not found" });
-  res.json({ ...customerSummary(c), creditLog: c.creditLog || [], history: customerHistory(c), consignments: store.consignments(c.id), gradingOrders: store.gradingOrders().filter((o) => o.customerId === c.id).map((o) => ({ ...o, stage: store.gradingOrderStage(o) })) });
+  res.json({ ...customerSummary(c), creditCode: c.creditCode || null, statusUrl: store.consignments(c.id).length ? mjc.statusUrl(c.token) : "", creditLog: c.creditLog || [], history: customerHistory(c), consignments: store.consignments(c.id), gradingOrders: store.gradingOrders().filter((o) => o.customerId === c.id).map((o) => ({ ...o, stage: store.gradingOrderStage(o) })) });
 });
 app.post("/api/customers", (req, res) => {
   const b = req.body || {};
@@ -1086,6 +1086,7 @@ app.delete("/api/customers/:id", (req, res) => {
 app.post("/api/customers/:id/credit", (req, res) => {
   try {
     const c = store.addCredit(req.params.id, req.body?.amount, req.body?.reason, who(req));
+    mjc.scheduleSync();
     log(req, `${parseFloat(req.body?.amount) > 0 ? "gave" : "used"} $${Math.abs(parseFloat(req.body?.amount)).toFixed(2)} store credit — ${c.name} (now $${c.credit.toFixed(2)})`);
     res.json(c);
   } catch (err) {
@@ -1097,6 +1098,7 @@ app.post("/api/customers/:id/payout", (req, res) => {
   if (!c) return res.status(404).json({ error: "not found" });
   const r = store.payConsignor(c.id, Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [], req.body?.method, who(req));
   if (r.paid) log(req, `paid ${c.name} $${r.total} for ${r.paid} consigned card${r.paid === 1 ? "" : "s"}`);
+  mjc.scheduleSync();
   res.json(r);
 });
 // cards just added that customers collect → one alert naming who to tell
@@ -1117,7 +1119,7 @@ app.get("/api/consignments", (_req, res) => {
 app.get("/api/grading-orders", (_req, res) => {
   const people = new Map(store.customers().map((c) => [c.id, c]));
   const subs = store.submissions();
-  res.json(store.gradingOrders().map((o) => ({ ...o, customer: people.get(o.customerId)?.name || "?", stage: store.gradingOrderStage(o, subs), submission: subs.find((s) => s.id === o.submissionId) ? { id: o.submissionId, company: subs.find((s) => s.id === o.submissionId).company, number: subs.find((s) => s.id === o.submissionId).number } : null })));
+  res.json(store.gradingOrders().map((o) => ({ ...o, statusUrl: mjc.statusUrl(o.token), customer: people.get(o.customerId)?.name || "?", stage: store.gradingOrderStage(o, subs), submission: subs.find((s) => s.id === o.submissionId) ? { id: o.submissionId, company: subs.find((s) => s.id === o.submissionId).company, number: subs.find((s) => s.id === o.submissionId).number } : null })));
 });
 app.post("/api/grading-orders", (req, res) => {
   const b = req.body || {};
@@ -1125,11 +1127,13 @@ app.post("/api/grading-orders", (req, res) => {
   const o = store.addGradingOrder({ ...b, by: who(req) });
   if (!o.cards.length) return res.status(400).json({ error: "Add at least one card." });
   log(req, `took in ${o.cards.length} card${o.cards.length === 1 ? "" : "s"} to grade for a customer ($${o.total})`);
-  res.json(o);
+  mjc.scheduleSync(); // their status page goes up
+  res.json({ ...o, statusUrl: mjc.statusUrl(o.token) });
 });
 app.patch("/api/grading-orders/:id", (req, res) => {
   const o = store.updateGradingOrder(req.params.id, req.body || {});
   if (!o) return res.status(404).json({ error: "not found" });
+  mjc.scheduleSync();
   res.json({ ...o, stage: store.gradingOrderStage(o) });
 });
 app.delete("/api/grading-orders/:id", (req, res) => okDelete(res, store.deleteGradingOrder(req.params.id)));
@@ -1662,6 +1666,15 @@ app.put("/api/mjc/store", async (req, res) => {
     stripeTax: Boolean(b.stripeTax),
     emailList: b.emailList === undefined ? true : Boolean(b.emailList),
     social: Object.fromEntries(["instagram", "facebook", "tiktok", "youtube", "ebay", "whatnot", "x"].map((k) => [k, store.clean.str(b[`social_${k}`], 300)]).filter(([, v]) => v)),
+    // 3.13: pickup at a card show, pay over time, gift cards, store credit by code, the "check it first" amount
+    showPickup: Boolean(b.showPickup),
+    payLater: Boolean(b.payLater),
+    giftCards: Boolean(b.giftCards),
+    giftAmounts: String(b.giftAmounts || "25, 50, 100").split(/[,\s]+/).map((v) => store.clean.money(v)).filter((v) => v >= 5 && v <= 1000).slice(0, 6),
+    creditOnline: Boolean(b.creditOnline),
+    reviewOver: store.clean.money(b.reviewOver),
+    // the show calendar comes from Shop → Shows (kept as it is when this form is saved)
+    shows: mjc.storeSettings()?.shows || [],
   };
   try {
     await mjc.saveStoreSettings(s);
@@ -1693,13 +1706,49 @@ app.post("/api/mjc/orders/pull", async (_req, res) => {
 app.patch("/api/mjc/orders/:id", async (req, res) => {
   try {
     const b = req.body || {};
-    const o = await mjc.updateOrder(req.params.id, { status: b.status, carrier: store.clean.str(b.carrier, 30), tracking: store.clean.str(b.tracking, 60) });
+    const o = await mjc.updateOrder(req.params.id, { status: b.status, carrier: store.clean.str(b.carrier, 30), tracking: store.clean.str(b.tracking, 60), ...(b.hold === false ? { hold: false } : {}) });
+    if (b.hold === false) log(req, `checked MJC order ${o.id} — OK to ship`);
     if (b.status === "shipped") log(req, `shipped MJC order ${o.id}${o.tracking ? ` (${o.carrier || ""} ${o.tracking})` : ""}`);
     res.json(o);
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
 });
+
+// ---- the website's conversations, reviews and Pip's unanswered questions (3.13)
+const mjcCall = (fn) => async (req, res) => {
+  try {
+    res.json(await fn(req));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+};
+app.post("/api/mjc/tickets/:id/reply", mjcCall(async (req) => {
+  const text = store.clean.text(req.body?.text, 4000);
+  if (!text) throw new Error("Write the reply.");
+  const r = await mjc.replyTicket(req.params.id, text, who(req));
+  await mjc.pullTickets().catch(() => {});
+  log(req, `replied to website message ${req.params.id}`);
+  return { ok: true, emailed: r.emailed };
+}));
+app.post("/api/mjc/tickets/:id/offer", mjcCall(async (req) => {
+  const b = req.body || {};
+  const offer = { cash: store.clean.money(b.cash), credit: store.clean.money(b.credit), note: store.clean.text(b.note, 1000) };
+  if (offer.cash == null && offer.credit == null) throw new Error("Offer cash, store credit or both.");
+  const r = await mjc.offerTicket(req.params.id, offer);
+  await mjc.pullTickets().catch(() => {});
+  log(req, `offered${offer.cash != null ? ` $${offer.cash} cash` : ""}${offer.credit != null ? ` / $${offer.credit} credit` : ""} on website request ${req.params.id}`);
+  return { ok: true, emailed: r.emailed };
+}));
+app.get("/api/mjc/reviews", mjcCall(async () => ({ reviews: await mjc.reviews() })));
+app.patch("/api/mjc/reviews/:id", mjcCall(async (req) => {
+  const b = req.body || {};
+  const r = await mjc.updateReview(req.params.id, { ...("reply" in b ? { reply: store.clean.text(b.reply, 1000) } : {}), ...("hidden" in b ? { hidden: Boolean(b.hidden), hideReason: b.hideReason } : {}) });
+  return r;
+}));
+app.get("/api/mjc/pip-questions", mjcCall(async () => ({ questions: await mjc.pipQuestions() })));
+app.post("/api/mjc/email", mjcCall(async (req) => mjc.sendEmail(store.clean.str(req.body?.to, 600).split(/[,;\s]+/).filter(Boolean), store.clean.str(req.body?.subject, 200), store.clean.text(req.body?.text, 20000))));
+app.get("/api/mjc/credits", (_req, res) => res.json(store.load("mjc-credits", [])));
 
 app.get("/api/mjc/subscribers.csv", async (_req, res) => {
   try {
@@ -1766,7 +1815,7 @@ async function pullMjc() {
   try {
     const orders = await mjc.pullOrders({
       onOrder: (o) => {
-        store.addAlert({ kind: "order", name: `MJC order ${o.id}`, text: `${o.name || o.email} bought ${o.items.map((i) => i.title).join(", ")} — $${o.total}. Ship it from Inventory → MJC store.` });
+        store.addAlert({ kind: "order", name: `MJC order ${o.id}`, text: o.hold ? `⚠ ${o.name || o.email} bought ${o.items.map((i) => i.title).join(", ")} — $${o.total}. ${o.hold.reason} (Inventory → MJC store → Orders → Checked, OK to ship).` : o.gift ? `${o.name || o.email} bought a $${o.gift.amount} gift card (code ${o.gift.code}).` : `${o.name || o.email} bought ${o.items.map((i) => i.title).join(", ")} — $${o.total}. Ship it from Inventory → MJC store.` });
         store.logActivity("MJC website", `new order ${o.id}: ${o.items.map((i) => i.title).join(", ")} ($${o.total})`);
         for (const x of store.useSupplies({ orders: 1 })) store.addAlert({ kind: "supplies", name: x.name, text: `Down to ${x.onHand}${x.unit ? " " + x.unit : ""} — time to reorder.` });
       },
@@ -1775,6 +1824,7 @@ async function pullMjc() {
     mjc.refreshStatus().catch(() => {}); // Home's website numbers; a miss just keeps the last copy
     let tickets = 0;
     await mjc.pullTickets({
+      onActivity: (t, what) => store.addAlert({ kind: "ticket", name: `${what === "answer" ? "Answer to your offer" : "Reply"} from ${t.name || t.email}`, text: what === "answer" ? `They chose: ${{ cash: "cash", credit: "store credit", decline: "no thanks" }[t.offer.answer.choice] || t.offer.answer.choice}.` : String((t.replies || []).filter((r) => r.from === "customer").at(-1)?.text || "").slice(0, 140) }),
       onTicket: (t) => {
         tickets++;
         const what = { offer: `Offer of $${t.amount} on ${t.cardTitle}`, sell: "Cards to sell or trade to you", want: "Card request" }[t.kind] || "Message";
@@ -1787,6 +1837,9 @@ async function pullMjc() {
   }
 }
 setInterval(() => pullMjc().catch((err) => console.warn("MJC pull failed:", err.message)), 5 * 60 * 1000);
+// While a website conversation is going (a message in the last half hour), its replies are checked every 30 s —
+// the same pull, more often — so a shopper waiting in Pip's chat hears back in a minute, not five.
+setInterval(() => { if (mjc.configured() && mjc.liveConversation() && !mjcPulling) pullMjc().catch(() => {}); }, 30 * 1000);
 
 async function revalueInventory() {
   const updates = [];

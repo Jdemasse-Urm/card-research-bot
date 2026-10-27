@@ -89,7 +89,7 @@ async function openCustomer(id) {
     </form>
     ${c ? `
     <div class="grid2" style="margin-top:.8rem">
-      <div class="panel" style="margin:0"><h3 style="margin-top:0">Store credit: ${usd(c.credit || 0)}</h3>
+      <div class="panel" style="margin:0"><h3 style="margin-top:0">Store credit: ${usd(c.credit || 0)}</h3>${c.creditCode ? `<p class="small">Online code: <b class="mono">${esc(c.creditCode)}</b> <span class="muted">(works at checkout on the website when "store credit online" is on)</span></p>` : ""}
         <form class="row" data-credit style="margin:0"><input name="amount" type="number" step="0.01" min="0" placeholder="$" style="width:90px" aria-label="Amount"><input name="reason" placeholder="why (trade-in, refund, gift card…)" style="flex:1" aria-label="Reason">
           <button data-sign="1">＋ Add</button><button data-sign="-1" class="ghost">− Use</button></form>
         ${(c.creditLog || []).length ? `<ul class="tight small">${c.creditLog.slice(0, 8).map((x) => `<li>${esc(day(x.at))}: <b class="${x.amount > 0 ? "pos" : "neg"}">${x.amount > 0 ? "+" : ""}${usd(x.amount)}</b> ${esc(x.reason || "")}${x.by ? ` · ${esc(x.by)}` : ""}</li>`).join("")}</ul>` : `<p class="small muted">Store credit is spent with the "Store credit" payment in Show mode or the Sold dialog.</p>`}
@@ -98,7 +98,7 @@ async function openCustomer(id) {
         ${theirs.length ? `<ul class="tight small">${theirs.slice(0, 10).map((r) => `<li>${esc(r.name)} <span class="muted">${esc(r.grade)}</span> ${usd(r.listPrice ?? r.value)}</li>`).join("")}</ul>${c.email ? `<a class="button small" href="${esc(`mailto:${c.email}?subject=${encodeURIComponent(`New cards you collect — ${shopName()}`)}&body=${encodeURIComponent(`Hi ${c.name.split(" ")[0]},\n\nWe have some cards you might like:\n\n${theirs.slice(0, 15).map((r) => `• ${r.name} (${r.grade})${(r.listPrice ?? r.value) ? ` — $${r.listPrice ?? r.value}` : ""}`).join("\n")}\n\nReply if you'd like any of them.\n\n${shopName()}`)}`)}">✉ Email them these</a>` : ""}` : `<p class="small muted">${c.collects ? "Nothing in stock matches right now." : "Fill in what they collect."}</p>`}
       </div>
     </div>
-    ${c.consignments.length ? `<div class="panel" style="margin:.8rem 0 0"><div class="row space"><h3 style="margin:0">Consigned cards</h3><span class="row" style="margin:0">${owed.length ? `<select data-paymethod aria-label="Paid with">${["Cash", "Check", "Venmo", "PayPal", "Zelle", "Store credit", "Other"].map((m) => `<option>${m}</option>`).join("")}</select><button class="primary small" data-payall>Pay ${usd(owed.reduce((n, x) => n + x.owed, 0))} owed</button>` : ""}<button class="small" data-statement>🖨 Statement</button></span></div>
+    ${c.consignments.length ? `<div class="panel" style="margin:.8rem 0 0"><div class="row space"><h3 style="margin:0">Consigned cards${c.statusUrl ? ` <a class="small" href="${esc(c.statusUrl)}" target="_blank" rel="noopener" title="Their private page on the website: cards, sales, payouts">🔗 their status page</a>` : ""}</h3><span class="row" style="margin:0">${owed.length ? `<select data-paymethod aria-label="Paid with">${["Cash", "Check", "Venmo", "PayPal", "Zelle", "Store credit", "Other"].map((m) => `<option>${m}</option>`).join("")}</select><button class="primary small" data-payall>Pay ${usd(owed.reduce((n, x) => n + x.owed, 0))} owed</button>` : ""}<button class="small" data-statement>🖨 Statement</button></span></div>
       ${consignTable(c.consignments)}</div>` : ""}
     ${c.gradingOrders.length ? `<div class="panel" style="margin:.8rem 0 0"><h3 style="margin-top:0">Grading orders</h3><ul class="tight small">${c.gradingOrders.map((o) => `<li>${esc(day(o.at))}: ${o.cards.length} card${o.cards.length === 1 ? "" : "s"} · ${esc(o.service)} · ${usd(o.total)}${o.paid ? " paid" : " <b class=neg>unpaid</b>"} — <b>${esc(o.stage.text)}</b></li>`).join("")}</ul></div>` : ""}
     ${c.history.length ? `<details class="panel" style="margin:.8rem 0 0"><summary><b>History (${c.history.length})</b></summary><ul class="tight small">${c.history.slice(0, 60).map((h) => `<li>${esc(day(h.at))} · ${esc(h.what)}: ${esc(h.name || "")}${h.amount != null ? ` · ${usd(h.amount)}` : ""}${h.where ? ` <span class="muted">${esc(h.where)}</span>` : ""}</li>`).join("")}</ul></details>` : ""}` : ""}`, { wide: true });
@@ -255,7 +255,8 @@ function printGradingReceipt(o) {
     <h2>${esc(o.customer)} — ${esc(o.service)}</h2>
     <table><tr><th>#</th><th>Card</th><th class="num">Declared value</th><th class="num">Fee</th></tr>${o.cards.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c.desc)}</td><td class="num">${usd(c.declared)}</td><td class="num">${usd(c.fee)}</td></tr>`).join("")}
     <tr class="tot"><td colspan="3">${o.cards.length} card${o.cards.length === 1 ? "" : "s"} · ${o.paid ? "paid" : "due at pickup"}</td><td class="num">${usd(o.total)}</td></tr></table>
-    <p class="muted">We send your cards to the grader with our own submissions and tell you when they're back. Keep this receipt — the order number finds your cards.</p>`);
+    <p class="muted">We send your cards to the grader with our own submissions and tell you when they're back. Keep this receipt — the order number finds your cards.</p>
+    ${o.statusUrl ? `<p>Follow your cards online: <b>${esc(o.statusUrl)}</b></p><img src="${location.origin}/api/qr?text=${encodeURIComponent(o.statusUrl)}" alt="" style="width:110px;height:110px">` : ""}`);
 }
 
 // ------------------------------------------------------------------ SHOWS
@@ -445,8 +446,16 @@ async function openWeeklyReport() {
   ].filter((x, i, a) => x !== "" || a[i - 1] !== "");
   const text = lines.join("\n").replace(/This week:\n$/, "This week: nothing waiting.");
   const body = openModal("📋 Weekly report", `<pre class="small" style="white-space:pre-wrap;font:inherit">${esc(text)}</pre>
-    <div class="row"><button data-copy>📋 Copy</button><a class="button primary" href="mailto:${esc(w.emailTo || "")}?subject=${encodeURIComponent(`${shopName()} — weekly report`)}&body=${encodeURIComponent(text)}">✉ Email it</a><span class="small muted">${w.emailTo ? "to " + esc(w.emailTo) : "set who it goes to in Shop → Shop settings"}</span></div>`);
+    <div class="row"><button data-copy>📋 Copy</button>${w.emailTo ? `<button class="primary" data-send>✉ Send it now</button>` : ""}<a class="button${w.emailTo ? "" : " primary"}" href="mailto:${esc(w.emailTo || "")}?subject=${encodeURIComponent(`${shopName()} — weekly report`)}&body=${encodeURIComponent(text)}">✉ Email it</a><span class="small muted">${w.emailTo ? "to " + esc(w.emailTo) : "set who it goes to in Shop → Shop settings"}</span></div>`);
   $("[data-copy]", body).onclick = async () => { await navigator.clipboard.writeText(text); toast("Copied"); };
+  const send = $("[data-send]", body);
+  if (send) send.onclick = async () => {
+    send.disabled = true;
+    const r = await fetch("/api/mjc/email", json("POST", { to: w.emailTo, subject: `${shopName()} — weekly report`, text }));
+    const j = await r.json().catch(() => ({}));
+    send.disabled = false;
+    toast(r.ok && j.sent ? `Sent to ${w.emailTo}` : `Not sent: ${j.reason || j.error || "the website's email isn't set up"} — use "Email it" instead`, { error: !(r.ok && j.sent) });
+  };
 }
 
 // ------------------------------------------------------------------ PACKING: pick list + packing slips (website orders)

@@ -187,13 +187,18 @@ function renderLot(lot) {
 const FRONT_LIMITS = [[60, "10"], [65, "9"], [70, "8"], [75, "7"], [80, "6"], [85, "5"], [90, "4"], [101, "3 or lower"]];
 const BACK_LIMITS = [[75, "10"], [90, "9 / 8 / 7"], [101, "6 or lower"]];
 
-function openCentering(photo) {
+/** onUse(text): from the card editor — the measurement goes into the card's condition ("55/45 L/R · 60/40 T/B"). */
+function openCentering(photo, { onUse = null } = {}) {
   if (!photo) return;
-  const body = openModal("Measure centering", `
+  const html = `
     <p class="small">Drag the <b>outer</b> lines (green) to the card's edges and the <b>inner</b> lines (gold) to the edges of the printed border/frame. Tip: click a line, then use the arrow keys for fine moves.</p>
     <div class="center-wrap" data-wrap><img src="${photo.url}" alt="card photo for centering" data-img draggable="false"></div>
     <label class="check"><input type="checkbox" data-back> This photo is the <b>back</b> of the card</label>
-    <div data-out class="center-out" aria-live="polite"></div>`, { wide: true });
+    <div data-out class="center-out" aria-live="polite"></div>
+    ${onUse ? `<div class="row"><button class="primary" data-use disabled>✓ Use for this card</button></div>` : ""}`;
+  const layer = onUse ? openLayer("Measure centering", html, { wide: true }) : null;
+  const body = layer ? layer.body : openModal("Measure centering", html, { wide: true });
+  let measured = "";
   const wrap = $("[data-wrap]", body);
   // positions in % of the image box
   const lines = { oL: 2, iL: 8, iR: 92, oR: 98, oT: 2, iT: 6, iB: 94, oB: 98 };
@@ -216,6 +221,9 @@ function openCentering(photo) {
     const limits = $("[data-back]", body).checked ? BACK_LIMITS : FRONT_LIMITS;
     const grade = limits.find(([lim]) => worst <= lim)?.[1];
     const ok = l > 0 && r > 0 && t > 0 && bt > 0;
+    measured = ok ? `${l >= r ? lr + "/" + (100 - lr) : 100 - lr + "/" + lr} L/R · ${t >= bt ? tb + "/" + (100 - tb) : 100 - tb + "/" + tb} T/B${$("[data-back]", body).checked ? " (back)" : ""}` : "";
+    const use = $("[data-use]", body);
+    if (use) use.disabled = !ok;
     $("[data-out]", body).innerHTML = ok
       ? `Left/right <b>${l >= r ? lr + "/" + (100 - lr) : 100 - lr + "/" + lr}</b> · Top/bottom <b>${t >= bt ? tb + "/" + (100 - tb) : 100 - tb + "/" + tb}</b> →
          centering alone allows up to about a <b>PSA ${esc(grade)}</b>. <span class="muted small">Approximate PSA guide; corners, edges and surface also count. Straight-on photos measure best.</span>`
@@ -254,6 +262,8 @@ function openCentering(photo) {
     place();
   }));
   $("[data-back]", body).onchange = place;
+  const use = $("[data-use]", body);
+  if (use) use.onclick = () => { onUse(measured); layer.close(); };
   const img = $("[data-img]", wrap);
   img.complete ? place() : (img.onload = place);
 }

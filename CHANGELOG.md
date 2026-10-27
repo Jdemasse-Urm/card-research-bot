@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.10.0 — a scan you can trust, condition reports, sealed boxes
+
+- **Checked against the set's checklist**: every scanned card (and every Card Lookup) is checked against the price
+  site's checklist for that set and number. A misread number is caught ("#138 in 2023 Panini Prizm is Seth Lundy,
+  not Victor Wembanyama"), and so is a parallel the set never had ("no Gold Vinyl version of #136 — listed: Silver,
+  Gold Sparkle, Red Ice…"). Cards that match get ✓ checklist. When the set or number can't be found there's no
+  verdict — never a false alarm.
+- **Fix a card field by field**: ✎ fix (or click the picture) opens the card big with its year, set, player,
+  number, parallel, serial and grade as boxes, and the checklist's versions of that card as buttons to pick from.
+  Saving rebuilds the name and re-prices it.
+- **The reader learns from your fixes**: every correction is remembered. Bulk scan shows the reader's accuracy
+  per field (number, parallel, player, grade), and before each scan the reader is told the mistakes you've fixed
+  most ("2023 Panini Prizm: parallel was read as base but it was Silver — 4 times") so it looks twice.
+- **Your phone as the scanner**: 📱 Phone in Bulk scan shows a QR code; scan it with the phone (same Wi-Fi, with
+  Share on home network on) and every picture you take lands in the scan on the computer. Front + back mode reads
+  both sides of each card. Free, and the phone's camera is the best one you own.
+- **Card facts on every card**: year, set, player, team, number, parallel, serial, rookie / auto / relic and cert
+  are kept on each card (bulk scan fills them in; the editor shows them) — the website shows them too, for scanned
+  cards as well as researched ones.
+- **Condition report for raw cards**: one scale buyers know — Near Mint, Lightly Played, Moderately Played,
+  Heavily Played, Damaged — with centering (📐 measures it on the front photo), corners, edges, surface and notes.
+  Bulk edit sets the condition for many cards at once; a quick view lists raw cards with no condition yet.
+- **Sealed product**: hobby boxes, blasters, packs, cases with their UPC (a barcode scanner finds them in Stock).
+  📦 Opened: one box leaves stock and its cost is spread over the cards that came out — scan them (Bulk scan picks
+  the box) or tick cards already added. Sales & profit shows every box opened: cost vs what came out, sold or still
+  in stock — whether opening boxes pays.
+- **Tilt video**: record 3 seconds with the camera (or choose a video) on any card — shows refractor shine and the
+  surface. It goes to the website with the photos.
+- **PSA population watch**: your PSA slabs are re-checked a batch a day; when the count at your grade grows 10%
+  (at least 3 more), you get an alert — more copies usually pull the price down. The editor shows the latest count.
+
 ## 3.9.0 — bulk scan reads every card up close
 
 - **Find, then read up close**: a scan is now two steps. A quick pass finds every card in each picture; then each

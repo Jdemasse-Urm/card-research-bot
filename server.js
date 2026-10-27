@@ -20,6 +20,7 @@ import * as ebay from "./lib/sources/ebay.js";
 import * as mjc from "./lib/mjc.js";
 import * as pricingJob from "./lib/pricing-job.js";
 import { DEFAULTS as PRICING_DEFAULTS } from "./lib/pricing.js";
+import QRCode from "qrcode";
 
 const here = APP_DIR;
 const DESKTOP = process.env.CARD_BOT_DESKTOP === "1";
@@ -113,6 +114,18 @@ app.post("/api/login", (req, res) => {
   pinFails.delete(ip);
   res.setHeader("Set-Cookie", `${PIN_COOKIE}=${pinToken()}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`);
   res.json({ ok: true });
+});
+
+// Phone as a scanner: Bulk scan shows a QR code holding a short-lived key; opening it on a phone signs that
+// phone in (the same cookie the PIN gives) and opens the phone camera page. Keys last 15 minutes.
+const phoneKeys = new Map(); // key -> expiry (ms)
+app.get("/phone", (req, res) => {
+  const k = String(req.query.k || "");
+  const until = phoneKeys.get(k);
+  for (const [key, t] of phoneKeys) if (t < Date.now()) phoneKeys.delete(key);
+  if (!SHARE || !until || until < Date.now()) return res.status(403).send("<!doctype html><meta name=viewport content='width=device-width'><p style='font:18px system-ui;padding:24px'>This code has expired — on the computer, open Inventory → Bulk scan → 📱 Phone and scan the new code.</p>");
+  res.setHeader("Set-Cookie", `${PIN_COOKIE}=${pinToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`);
+  res.redirect("/phone.html");
 });
 
 const PUBLIC_WITHOUT_PIN = new Set(["/pin.js", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/apple-touch-icon.png"]);
@@ -248,6 +261,10 @@ app.get("/api/status", (req, res) => {
     desktop: DESKTOP,
     fees: FEE_PCT,
     payments: store.PAYMENTS,
+    conditions: store.CONDITION_LABEL,
+    conditionHelp: store.CONDITION_HELP,
+    conditionParts: store.CONDITION_PARTS,
+    sealedTypes: store.SEALED_TYPES,
   });
 });
 
@@ -428,7 +445,7 @@ app.post("/api/scan/read", (req, res) => {
   const box = (b) => (Array.isArray(b) && b.length === 4 && b.every((v) => Number.isFinite(+v)) ? b.map((v) => Math.min(1000, Math.max(0, Math.round(+v)))) : null);
   const slots = (Array.isArray(req.body?.slots) ? req.body.slots : []).slice(0, cards.length).map((x) => ({ key: String(x?.key || "").slice(0, 300), box: box(x?.box), backBox: box(x?.backBox) }));
   streamJob(req, res, async (send, signal) => {
-    const read = await readCards({ cards }, { onEvent: send, signal });
+    const read = await readCards({ cards, hints: store.scanHints() }, { onEvent: send, signal });
     read.cards.forEach((c, i) => Object.assign(c, { wanted: wantMatches(c.url, c.grade, c.name), box: slots[i]?.box ?? null, backBox: slots[i]?.backBox ?? null }));
     if (slots.length === cards.length && slots.every((x) => x.key)) {
       const q = store.load("scan-queue", {});
@@ -441,6 +458,55 @@ app.post("/api/scan/read", (req, res) => {
   });
 });
 app.get("/api/scan", (_req, res) => res.json(store.load("scan-queue", {})));
+
+// The reader's mistakes: the cards added from a scan, with the fields a person corrected. Shown as accuracy and
+// told to the reader on the next scan ("parallel was read as base but it was Silver").
+app.post("/api/scan/feedback", (req, res) => res.json({ cards: store.addScanFeedback(req.body?.cards) }));
+app.get("/api/scan/accuracy", (_req, res) => res.json({ ...store.scanAccuracy(), hints: store.scanHints() }));
+
+// Phone → computer: photos taken on the phone land in an inbox the computer's Bulk scan picks up.
+const INBOX = path.join(store.DATA_DIR, "scan-inbox");
+const inboxName = (n) => String(n || "").replace(/[^\w.-]/g, "").slice(0, 80);
+app.get("/api/scan/phone-link", async (req, res) => {
+  if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
+  if (!SHARE) return res.json({ share: false });
+  const k = crypto.randomBytes(16).toString("hex");
+  phoneKeys.set(k, Date.now() + 15 * 60000);
+  const url = `${lanUrls()[0]}/phone?k=${k}`;
+  res.json({ share: true, url, svg: await QRCode.toString(url, { type: "svg", margin: 1, errorCorrectionLevel: "M" }), expires: Date.now() + 15 * 60000 });
+});
+app.post("/api/scan/inbox", (req, res) => {
+  const m = String(req.body?.image || "").match(/^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/);
+  const buf = m ? Buffer.from(m[1], "base64") : null;
+  if (!buf || buf.length < 1000 || buf.length > 15e6 || buf[0] !== 0xff || buf[1] !== 0xd8) return res.status(400).json({ error: "Send a JPEG photo." });
+  fs.mkdirSync(INBOX, { recursive: true });
+  if (fs.readdirSync(INBOX).length >= 500) return res.status(429).json({ error: "500 photos are waiting — open Bulk scan on the computer to read them first." });
+  const name = `${inboxName(req.body?.name) || "phone-" + Date.now()}.jpg`;
+  fs.writeFileSync(path.join(INBOX, name), buf);
+  res.json({ ok: true, name });
+});
+app.get("/api/scan/inbox", (_req, res) => {
+  let files = [];
+  try {
+    files = fs.readdirSync(INBOX).filter((f) => f.endsWith(".jpg")).map((f) => ({ name: f, at: fs.statSync(path.join(INBOX, f)).mtimeMs }));
+    const done = path.join(INBOX, "done");
+    if (fs.existsSync(done)) for (const f of fs.readdirSync(done)) if (Date.now() - fs.statSync(path.join(done, f)).mtimeMs > 7 * 86400000) fs.unlinkSync(path.join(done, f));
+  } catch {}
+  res.json(files.sort((a, b) => a.at - b.at));
+});
+app.get("/api/scan/inbox/:name", (req, res) => {
+  const f = path.join(INBOX, inboxName(req.params.name));
+  if (!fs.existsSync(f)) return res.status(404).end();
+  res.sendFile(f);
+});
+// picked up by the computer: kept a week in done/ in case the scan never finished
+app.delete("/api/scan/inbox/:name", (req, res) => {
+  try {
+    fs.mkdirSync(path.join(INBOX, "done"), { recursive: true });
+    fs.renameSync(path.join(INBOX, inboxName(req.params.name)), path.join(INBOX, "done", inboxName(req.params.name)));
+  } catch {}
+  res.json({ ok: true });
+});
 app.delete("/api/scan", (req, res) => {
   const keys = Array.isArray(req.body?.keys) ? new Set(req.body.keys.map(String)) : null;
   const q = store.load("scan-queue", {});
@@ -806,7 +872,8 @@ app.get("/api/inventory/duplicate", (req, res) => {
 app.get("/api/inventory/:id", (req, res) => {
   const row = store.inventoryView().find((r) => r.id === req.params.id);
   if (!row) return res.status(404).json({ error: "not found" });
-  res.json({ ...row, history: store.cardHistory(row.id) });
+  const pop = Object.values(store.popWatch()).find((e) => e?.rowId === row.id) || null;
+  res.json({ ...row, history: store.cardHistory(row.id), pop });
 });
 
 app.post("/api/inventory", (req, res) => {
@@ -890,6 +957,15 @@ app.post("/api/show/sale/:id/undo", (req, res) => {
   log(req, `undid a $${sale.total} show sale (${back} card${back === 1 ? "" : "s"} back in stock)`);
   mjc.scheduleSync();
   res.json({ ok: true, back });
+});
+
+// Opened one box/pack of a sealed row: its cost goes to the cards that came out (Bulk scan sends the new rows).
+app.post("/api/inventory/:id/open", (req, res) => {
+  const pullIds = (Array.isArray(req.body?.pullIds) ? req.body.pullIds : []).map(String).slice(0, 2000);
+  const r = store.openSealed(req.params.id, pullIds, who(req));
+  if (!r) return res.status(404).json({ error: "That isn't a sealed box in stock." });
+  log(req, `opened ${r.box.name}: ${r.pulls} card${r.pulls === 1 ? "" : "s"} worth $${r.value} out of a $${r.cost} box`);
+  res.json(r);
 });
 
 app.delete("/api/inventory/:id", (req, res) => {
@@ -976,6 +1052,37 @@ app.post("/api/inventory/:id/photos/order", (req, res) => {
   store.setEngineFields(row.id, { photos });
   if (row.web) mjc.scheduleSync();
   res.json({ ok: true, photos });
+});
+
+// A short tilt video (refractor shine, surface) — MP4 or WebM, recorded in the app or picked from a file.
+app.post("/api/inventory/:id/video", (req, res) => {
+  const row = store.inventoryView().find((r) => r.id === req.params.id);
+  if (!row) return res.status(404).json({ error: "not found" });
+  const m = String(req.body?.data || "").match(/^data:(video\/(mp4|webm|quicktime))(;[^,]*)?;base64,([A-Za-z0-9+/=]+)$/);
+  const buf = m ? Buffer.from(m[4], "base64") : null;
+  if (!buf || buf.length < 1000 || buf.length > 25e6) return res.status(400).json({ error: "Send an MP4 or WebM video under 25 MB (a few seconds is plenty)." });
+  const file = `${store.newId()}.${m[2] === "quicktime" ? "mov" : m[2]}`;
+  const f = mjc.photoPath(row.id, file);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, buf);
+  if (row.video) {
+    try {
+      fs.unlinkSync(mjc.photoPath(row.id, row.video));
+    } catch {}
+  }
+  store.setEngineFields(row.id, { video: file, videoUrl: null });
+  if (row.web) mjc.scheduleSync();
+  res.json({ ok: true, video: file });
+});
+app.delete("/api/inventory/:id/video", (req, res) => {
+  const row = store.inventoryView().find((r) => r.id === req.params.id);
+  if (!row?.video) return res.status(404).json({ error: "No video on this card." });
+  try {
+    fs.unlinkSync(mjc.photoPath(row.id, row.video));
+  } catch {}
+  store.setEngineFields(row.id, { video: null, videoUrl: null });
+  if (row.web) mjc.scheduleSync();
+  res.json({ ok: true });
 });
 
 // AI-written website description from the card's research report.
@@ -1347,6 +1454,15 @@ app.get("/api/analytics", (req, res) => {
   });
   const sum = (arr, f) => arr.reduce((n, x) => n + (f(x) || 0), 0);
   const withDays = flips.filter((f) => f.days != null);
+  // Opening boxes: what each cost vs what came out (sold for, or still worth if not sold yet)
+  const boxes = store.boxBreaks().filter((b) => !year || b.at.startsWith(year)).map((b) => {
+    let soldFor = 0, stillWorth = 0;
+    for (const p of b.pulls) for (const r of inv.filter((x) => x.id === p.id || x.splitFrom === p.id)) {
+      if (r.status === "sold") soldFor += (r.soldPrice || 0) * r.qty - feeFor(r);
+      else stillWorth += (r.value ?? 0) * r.qty;
+    }
+    return { at: b.at.slice(0, 10), name: b.name, cost: b.cost, cards: b.pulls.reduce((n, p) => n + p.qty, 0), worthAtOpen: b.value, soldFor: Math.round(soldFor * 100) / 100, stillWorth: Math.round(stillWorth * 100) / 100, result: Math.round((soldFor + stillWorth - b.cost) * 100) / 100 };
+  });
   res.json({
     totals: {
       revenue: sum(sold, (r) => r.soldPrice * r.qty),
@@ -1362,6 +1478,7 @@ app.get("/api/analytics", (req, res) => {
     byCategory: Object.values(byCat).sort((a, b) => b.profit - a.profit),
     best: [...flips].sort((a, b) => b.profit - a.profit).slice(0, 5),
     worst: [...flips].sort((a, b) => a.profit - b.profit).slice(0, 5),
+    boxes: { count: boxes.length, cost: sum(boxes, (b) => b.cost), soldFor: sum(boxes, (b) => b.soldFor), stillWorth: sum(boxes, (b) => b.stillWorth), result: sum(boxes, (b) => b.result), recent: boxes.slice(0, 25) },
   });
 });
 
@@ -1776,6 +1893,37 @@ app.get("/api/update-check", async (req, res) => {
 // ---------------- background: daily re-price, backups, PSA progress, optional morning brief ----------------
 
 let briefRunning = false;
+// PSA population watch: each day a batch of your PSA slabs (oldest-checked first — PSA's free API allows about
+// 100 calls a day) is re-checked; when the count at your grade grows by 10% (at least 3), one alert.
+const certOf = (r) => r.facts?.cert || (r.lookupId ? String(store.getLookup(r.lookupId)?.card?.cert_number || "").replace(/\D/g, "") : "") || String(r.notes || "").match(/\bcert (\d{6,12})/)?.[1] || "";
+async function watchPops() {
+  if (!psa.hasToken()) return;
+  const w = store.popWatch();
+  const day = new Date().toLocaleDateString("en-CA");
+  if (w._day === day) return;
+  const slabs = store.inventoryView().filter((r) => r.status !== "sold" && /^PSA\b/i.test(r.grade) && certOf(r).length >= 6);
+  slabs.sort((a, b) => ((w[certOf(a)]?.at || "") < (w[certOf(b)]?.at || "") ? -1 : 1));
+  for (const r of slabs.slice(0, 40)) {
+    const cert = certOf(r);
+    try {
+      const c = await psa.cert(cert, { fresh: true });
+      if (!c.found || c.population == null) continue;
+      const e = w[cert] || { base: c.population, baseAt: day };
+      Object.assign(e, { rowId: r.id, name: r.name, grade: r.grade, pop: c.population, higher: c.populationHigher, at: new Date().toISOString() });
+      const grew = e.pop - e.base;
+      if (grew >= Math.max(3, Math.ceil(e.base * 0.1))) {
+        store.addAlert({ kind: "pop", name: r.name, text: `PSA population at ${r.grade} went ${e.base} → ${e.pop} (+${grew}) since ${e.baseAt}. More copies at your grade usually pull the price down — think about selling, or watch its price.` });
+        Object.assign(e, { base: e.pop, baseAt: day });
+      }
+      w[cert] = e;
+    } catch (err) {
+      if (/limit|token/i.test(err.message)) break; // out of PSA calls for today
+    }
+  }
+  w._day = day;
+  store.savePopWatch(w);
+}
+
 async function hourly() {
   try {
     store.dailyBackup();
@@ -1794,6 +1942,7 @@ async function hourly() {
   const lastPoint = store.portfolio().slice(-1)[0];
   if (!lastPoint || lastPoint.date !== new Date().toISOString().slice(0, 10)) await revalueInventory();
   await refreshSubmissions();
+  await watchPops().catch((err) => console.warn("PSA population watch failed:", err.message));
 
   // Daily data check: one alert a day when records need attention (duplicate SKUs, sold cards still on the website…).
   const dayNow = new Date().toISOString().slice(0, 10);

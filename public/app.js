@@ -77,6 +77,25 @@ function openModal(title, html, { wide = false } = {}) {
 }
 $("#modalClose").onclick = () => modal.close();
 
+/**
+ * A window on top of the open one (measure centering or record a video from inside the card editor without
+ * losing what's typed there). Closing it removes it. → { body, close, dialog }
+ */
+function openLayer(title, html, { wide = false } = {}) {
+  const d = document.createElement("dialog");
+  d.className = wide ? "wide" : "";
+  d.setAttribute("aria-label", title);
+  d.innerHTML = `<div class="modal-head"><h2></h2><button class="ghost" data-x aria-label="Close">✕</button></div><div data-body></div>`;
+  $("h2", d).textContent = title;
+  $("[data-body]", d).innerHTML = html;
+  document.body.appendChild(d);
+  const close = () => d.close();
+  $("[data-x]", d).onclick = close;
+  d.addEventListener("close", () => d.remove());
+  d.showModal();
+  return { body: $("[data-body]", d), close, dialog: d };
+}
+
 // ------------------------------------------------------------------ who / theme / shortcuts
 
 function renderWho() {
@@ -769,6 +788,7 @@ function renderReport(r, el) {
       </div>
     </div>
     <p class="summary">${esc(r.summary)}</p>
+    ${r.checklist?.note ? `<div class="callout bad-box" style="margin-top:1rem"><b>⚠ Check the card</b><p class="small" style="margin:.3rem 0 0">${esc(r.checklist.note)}</p></div>` : r.checklist ? `<p class="small muted">✓ Matches the checklist: #${esc(r.checklist.number)} in ${esc(r.checklist.set)}</p>` : ""}
     ${slabPanel(r.slab)}
 
     <div class="grid2" style="margin-top:1rem">

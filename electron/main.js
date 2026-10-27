@@ -232,8 +232,8 @@ function goto(where) {
 // up each new one with its own words. Clicking it opens the screen that deals with it.
 const notified = new Set();
 let alertsPrimed = false;
-const KIND_PREF = { order: "orders", ticket: "messages", above: "prices", below: "prices", pricing: "pricing" };
-const KIND_SCREEN = { order: "mjc", ticket: "mjc-messages", pricing: "mjc-pricing", above: "watch", below: "watch", brief: "hot" };
+const KIND_PREF = { order: "orders", ticket: "messages", above: "prices", below: "prices", pop: "prices", pricing: "pricing" };
+const KIND_SCREEN = { order: "mjc", ticket: "mjc-messages", pricing: "mjc-pricing", above: "watch", below: "watch", brief: "hot", pop: "home" };
 async function notifyNewAlerts(unseen) {
   if (isMac || process.platform === "linux") app.setBadgeCount(unseen); // Dock badge = alerts waiting
   if (tray) tray.setToolTip(unseen ? `Card Research Bot — ${unseen} new alert${unseen === 1 ? "" : "s"}` : "Card Research Bot");

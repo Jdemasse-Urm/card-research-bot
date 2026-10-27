@@ -21,7 +21,8 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Lot / binder-page evaluator | One photo of many cards → each priced, total value, offer verdict for an asking price; fix a misread card and re-price without AI | 3.0 / 3.2 |
 | Trade evaluator | My cards vs theirs, sold values per grade, who comes out ahead | 3.2 |
 | PSA slab check | Cert number read off the slab and verified with PSA, population by grade, PSA's own photos next to yours | 3.0 / 3.2 |
-| Centering tool | Measure left/right and top/bottom centering on a photo | 3.0 |
+| Centering tool | Measure left/right and top/bottom centering on a photo; from the card editor it fills in the card's condition | 3.0 / 3.10 |
+| Checklist check | Every lookup and scanned card checked against the set's checklist: a misread number or a parallel the set never had is flagged; ✓ when it matches | 3.10 |
 | Listing writer | eBay / TCGplayer / Whatnot title, description, item specifics and pricing | 3.0 |
 | Which grader pays best | Which grading company's 10 is worth the most for this card | 3.0 |
 | eBay deal finder | Live listings well under the card's recent sold value (free eBay keys) | 3.0 |
@@ -66,7 +67,14 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Watchlist | Price alerts, biggest movers (24h / 7d / 30d), buy-the-dip / at-peak badges, sparklines | 2.0 / 3.2 |
 | Search everything | Ctrl/⌘ + K across inventory, reports, watchlist, want list | 3.2 |
 | Big inventories | Stock draws 150 rows at a time; at 10,000 cards a list opens in milliseconds and an edit takes ~30 ms (histories kept in their own files) | 3.6 / 3.8 |
-| Bulk scan | A folder of scans, files, or a webcam/document camera → every card found, then each cut out at full resolution and read up close (year, set, player, number, parallel/refractor, serial, RC, auto, relic, grade, cert), priced; backs paired by position and read too; review with "check by eye" flags and a big front/back view; set box + lot cost, add all with front + back photos; resumes without paying twice | 3.8 / 3.9 |
+| Bulk scan | A folder of scans, files, a webcam/document camera, or your phone (QR code) → every card found, then each cut out at full resolution and read up close (year, set, player, number, parallel/refractor, serial, RC, auto, relic, grade, cert), checked against the set's checklist, priced; backs paired by position and read too; review with "check by eye" flags, a big front/back view and field-by-field fixes; set box + lot cost (or the box it came out of), add all with front + back photos and card facts; resumes without paying twice | 3.8 / 3.9 / 3.10 |
+| Reader accuracy + learning | Every fix you make is remembered: accuracy per field (number, parallel, player, grade) and the most repeated mistakes told to the reader before each scan | 3.10 |
+| Phone as scanner | 📱 Phone shows a QR code; the phone's pictures (front + back mode too) land in Bulk scan on the computer — needs Share on home network | 3.10 |
+| Card facts | Year, set, player, team, number, parallel, serial, rookie/auto/relic, cert on every card — filled by bulk scan, editable, shown on the website | 3.10 |
+| Condition report | Raw cards: Near Mint / Lightly Played / Moderately Played / Heavily Played / Damaged + centering (measured on the photo), corners, edges, surface, notes; bulk set; shown on the website | 3.10 |
+| Sealed product | Boxes, blasters, packs, cases with UPC; 📦 Opened spreads a box's cost over what came out; Sales shows whether opening boxes pays | 3.10 |
+| Tilt video | 3 seconds recorded with the camera (or a file) per card — refractor shine and surface — sent to the website | 3.10 |
+| PSA population watch | Your PSA slabs re-checked a batch a day; an alert when the count at your grade grows 10%+ | 3.10 |
 | PSA slabs by barcode | Scan a slab's cert barcode → PSA's exact card + grade, priced, ready to add; a cert read off a scanned slab is cross-checked with PSA (grade mismatch flagged, PSA's used) | 3.8 / 3.9 |
 | Bulk edit + Undo | Location, status, category, grade, tags, cost, listing for any number of cards; select all matching, shift-click, whole groups; Undo for a week | 3.8 |
 | Merge / split lot cost | The same card on several rows → one row (qty, averaged cost); spread what a lot cost over its cards by value | 3.8 |

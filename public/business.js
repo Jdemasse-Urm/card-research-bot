@@ -180,7 +180,7 @@ let invLimit = PAGE;
 const NO_LOC = " none"; // the "No location" filter value (a real location can't start with a space)
 const SERIOUS = ["dupSku", "dupCard", "webSold", "soldNoPrice"];
 const ageDays = (iso) => (iso ? (Date.now() - Date.parse(iso)) / 86400000 : Infinity);
-const searchText = (r) => (r._s ??= [r.name, r.sku, r.location, r.grade, (r.tags || []).join(" "), r.notes].join(" ").toLowerCase());
+const searchText = (r) => (r._s ??= [r.name, r.sku, r.location, r.grade, (r.tags || []).join(" "), r.notes, r.upc, r.facts?.team, r.condition?.scale && `cond:${r.condition.scale}`].join(" ").toLowerCase());
 const byNumber = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 // One-click views for the jobs that come up every week.
@@ -192,6 +192,8 @@ const QUICK = {
   noloc: ["📍 No location", (r) => r.status !== "sold" && !r.location],
   uncounted: ["🔢 Never counted", (r) => r.status !== "sold" && !r.countedAt],
   nophoto: ["📷 No photo", (r) => r.status !== "sold" && !(r.photos || []).length],
+  sealed: ["📦 Sealed", (r) => r.status !== "sold" && r.kind === "sealed"],
+  nocond: ["🔍 Raw, no condition", (r) => r.status !== "sold" && r.kind !== "sealed" && /^raw$/i.test(r.grade) && !r.condition?.scale],
 };
 const GROUPS = { "": "No grouping", location: "Group by location", category: "Group by category", status: "Group by status", grade: "Group by grade" };
 const groupLabel = (g, r) => (g === "location" ? (r.location ? "📍 " + r.location : "📍 No location") : g === "category" ? CAT_LABEL[r.category] || r.category : g === "status" ? STATUS_LABEL[r.status] : r.grade);
@@ -279,13 +281,13 @@ function drawStock() {
     const trend = r.trend30 != null && Math.abs(r.trend30) >= 0.05 ? ` <span class="small ${r.trend30 > 0 ? "pos" : "neg"}" title="Value change, last 30 days">${r.trend30 > 0 ? "▲" : "▼"}${Math.round(Math.abs(r.trend30) * 100)}%</span>` : "";
     return `<tr data-id="${esc(r.id)}" class="${r.status === "sold" ? "sold" : ""}${invSel.has(r.id) ? " picked" : ""}">
       <td><input type="checkbox" data-sel aria-label="Select ${esc(r.name)}"${invSel.has(r.id) ? " checked" : ""}></td>
-      <td><b>${esc(r.name)}</b><div class="small muted">${esc(r.sku || "")}${r.location ? " · 📍" + esc(r.location) : ""}${(r.tags || []).length ? " · " + r.tags.map((t) => "#" + esc(t)).join(" ") : ""}${r.priceUrl ? " · " + link(r.priceUrl, "sales") : ""}${r.addedBy ? " · " + esc(r.addedBy) : ""}</div></td>
+      <td><b>${esc(r.name)}</b>${r.kind === "sealed" ? ` <span class="chip">📦 ${esc(r.sealedType || "sealed")}</span>` : r.condition?.scale && /^raw$/i.test(r.grade) ? ` <span class="chip" title="${esc(status.conditions?.[r.condition.scale] || "")}">${esc(r.condition.scale)}</span>` : ""}<div class="small muted">${esc(r.sku || "")}${r.location ? " · 📍" + esc(r.location) : ""}${(r.tags || []).length ? " · " + r.tags.map((t) => "#" + esc(t)).join(" ") : ""}${r.priceUrl ? " · " + link(r.priceUrl, "sales") : ""}${r.addedBy ? " · " + esc(r.addedBy) : ""}</div></td>
       <td class="small">${esc(r.grade)}</td><td class="num">${esc(r.qty)}</td>
       <td class="num">${usd(r.cost)}</td>
       <td class="num">${r.status === "sold" ? `sold ${usd(r.soldPrice)}` : r.priceUrl ? usd(r.value) + (r.spark ? sparkline(r.spark) : "") + trend : `<button class="small" data-findprice title="Link to a sales page so this card gets valued">💲 Find price</button>`}<div class="small muted">${r.status === "sold" ? esc(r.soldOn || "") : r.priceUrl ? `${esc(when(r.valuedAt))}${!r.valuedAt || Date.now() - Date.parse(r.valuedAt) > 7 * 86400000 ? ` <span class="chip warn" title="Older than a week">stale</span> <button class="ghost small" data-revalue aria-label="Re-value now">↻</button>` : ""}` : ""}</div></td>
       <td class="num ${pl == null ? "" : pl >= 0 ? "pos" : "neg"}">${usd(pl)}</td>
       <td><span class="chip st-${r.status}">${esc(STATUS_LABEL[r.status])}</span>${r.status === "listed" && r.listedOn ? `<div class="small muted">${esc(r.listedOn)} ${usd(r.listPrice)}</div>` : ""}${r.web && r.status !== "sold" ? `<div><span class="chip st-web" title="${esc(r.webPricingNote || r.lastPriceReason || "On the MJC website")}">🌐 ${webPrice(r) ? usd(webPrice(r)) : "needs price"}</span></div>` : ""}</td>
-      <td class="actions nowrap">${r.status !== "sold" ? `<button class="small" data-sell>Sold</button>` : ""}<button class="small ghost" data-edit aria-label="Edit">✎</button><button class="small ghost" data-del aria-label="Remove">🗑</button></td></tr>`;
+      <td class="actions nowrap">${r.kind === "sealed" && r.status !== "sold" ? `<button class="small" data-open title="Opened one: its cost goes to the cards that came out">📦 Opened</button>` : ""}${r.status !== "sold" ? `<button class="small" data-sell>Sold</button>` : ""}<button class="small ghost" data-edit aria-label="Edit">✎</button><button class="small ghost" data-del aria-label="Remove">🗑</button></td></tr>`;
   };
   const body = shown.map((r) => {
     let head = "";
@@ -353,7 +355,8 @@ function drawStock() {
   const qIn = $('#invBody [data-f="q"]');
   if (qIn) qIn.onkeydown = (e) => {
     if (e.key !== "Enter") return;
-    const hit = invRows.find((r) => r.sku && r.sku.toLowerCase() === qIn.value.trim().toLowerCase());
+    const v = qIn.value.trim().toLowerCase();
+    const hit = invRows.find((r) => r.status !== "sold" && ((r.sku && r.sku.toLowerCase() === v) || (r.upc && r.upc === v))) || invRows.find((r) => r.sku && r.sku.toLowerCase() === v);
     if (hit) { e.preventDefault(); openItemEditor(hit); }
   };
   $$("#invBody [data-f]").forEach((el) => (el.oninput = () => {
@@ -416,7 +419,34 @@ function drawStock() {
     $("[data-del]", tr).onclick = () => removeWithUndo("/api/inventory/" + row.id, row.name, loadStock);
     const sell = $("[data-sell]", tr);
     if (sell) sell.onclick = () => openSellDialog(row);
+    const opened = $("[data-open]", tr);
+    if (opened) opened.onclick = () => openOpenedBox(row);
   });
+}
+
+/** Opened a box: scan what came out (its cost becomes the lot cost), pick cards already added, or nothing kept. */
+function openOpenedBox(box) {
+  const since = Date.now() - 3 * 86400000;
+  const recent = invRows.filter((r) => r.status !== "sold" && r.kind !== "sealed" && Date.parse(r.added) > since && !r.openedFrom).sort((a, b) => (a.added < b.added ? 1 : -1)).slice(0, 200);
+  const body = openModal(`📦 Opened: ${box.name}`, `
+    <p class="small">One ${esc(box.sealedType || "box")} leaves stock (you have ${box.qty}). Its cost, <b>${usd(box.cost)}</b>, is spread over what came out by value — so each card's profit is real, and <b>Sales &amp; profit</b> shows whether opening boxes pays.</p>
+    <div class="row"><button class="primary" data-scanpulls>📥 Scan what came out</button><span class="small muted">opens Bulk scan with this box picked</span></div>
+    ${recent.length ? `<details${recent.length ? " open" : ""}><summary class="small">Or pick cards already added (last 3 days)</summary>
+      <div class="table-wrap" style="max-height:40vh"><table class="small">${recent.map((r) => `<tr><td><input type="checkbox" data-pull="${esc(r.id)}" aria-label="${esc(r.name)}"></td><td>${esc(r.name)} <span class="muted">${esc(r.grade)}</span></td><td class="num">${usd(r.value)}</td><td class="muted">${esc(when(r.added))}</td></tr>`).join("")}</table></div>
+      <div class="row"><button data-pickpulls>Use the ticked cards</button></div></details>` : ""}
+    <div class="row"><button class="ghost" data-nothing>Nothing worth keeping came out</button></div>`);
+  $("[data-scanpulls]", body).onclick = () => { scan.box = box.id; modal.close(); invView = "scan"; syncInvPills(); loadInventory(); };
+  const send = async (pullIds) => {
+    const r = await fetch(`/api/inventory/${box.id}/open`, json("POST", { pullIds }));
+    const j = await r.json();
+    if (!r.ok) return toast(j.error, { error: true });
+    modal.close();
+    toast(pullIds.length ? `Opened — ${plural(j.pulls, "card")} worth ${usd(j.value)} out of a ${usd(j.cost)} box` : `Opened — counted as ${usd(j.cost)} spent with nothing kept`);
+    loadStock();
+  };
+  const pick = $("[data-pickpulls]", body);
+  if (pick) pick.onclick = () => { const ids = $$("[data-pull]:checked", body).map((c) => c.dataset.pull); if (!ids.length) return toast("Tick the cards that came out.", { error: true }); send(ids); };
+  $("[data-nothing]", body).onclick = () => send([]);
 }
 
 /** Change many cards at once; the toast's Undo puts every one back (kept a week on the bot). */
@@ -447,6 +477,7 @@ function openBulkEdit(ids) {
       <label>Paid each $<input name="cost" type="number" min="0" step="0.01" placeholder="unchanged"></label>
       <label>Listed on<select name="listedOn"><option value="">unchanged</option>${opts(SELL_PLATFORMS, "")}</select></label>
       <label>List price $<input name="listPrice" type="number" min="0" step="0.01" placeholder="unchanged"></label>
+      <label>Condition <span class="muted small">(raw cards)</span><select name="conditionScale"><option value="">unchanged</option>${Object.entries(status.conditions || {}).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></label>
       <p class="span2 small muted">Selling goes through <b>Sold</b> on each card (or Show mode), so fees and profit stay right.</p>
       <div class="span2 row"><button class="primary">Apply to ${plural(ids.length, "card")}</button></div>
     </form>`);
@@ -456,7 +487,7 @@ function openBulkEdit(ids) {
     if (f.addTags) f.addTags = f.addTags.split(",").map((t) => t.trim()).filter(Boolean);
     if (!Object.keys(f).length) return toast("Fill in at least one box.", { error: true });
     modal.close();
-    const said = Object.keys(f).map((k) => ({ location: `moved to ${f.location}`, status: STATUS_LABEL[f.status], category: CAT_LABEL[f.category], grade: `grade ${f.grade}`, addTags: "tagged", cost: `paid ${usd(+f.cost)} each`, listedOn: `listed on ${f.listedOn}`, listPrice: `list price ${usd(+f.listPrice)}` })[k]).join(", ");
+    const said = Object.keys(f).map((k) => ({ location: `moved to ${f.location}`, status: STATUS_LABEL[f.status], category: CAT_LABEL[f.category], grade: `grade ${f.grade}`, addTags: "tagged", cost: `paid ${usd(+f.cost)} each`, listedOn: `listed on ${f.listedOn}`, listPrice: `list price ${usd(+f.listPrice)}`, conditionScale: `condition ${f.conditionScale}` })[k]).join(", ");
     bulkPatch(ids, f, said.charAt(0).toUpperCase() + said.slice(1));
   };
 }
@@ -670,14 +701,19 @@ async function openItemEditor(row = null) {
     }
   }
   const hist = row?.history || { v: [], p: [], c: [] };
-  const FIELD_NAME = { name: "name", category: "category", grade: "grade", qty: "qty", cost: "paid", value: "value", purchased: "purchased", notes: "notes", tags: "tags", location: "location", sku: "SKU", priceUrl: "sales page", status: "status", listedOn: "listed on", listPrice: "list price", soldPrice: "sold price", soldDate: "sold date", soldOn: "sold on", fees: "fees", payment: "payment", web: "website", webMode: "website pricing", webFixedPrice: "fixed website price" };
-  const show = (k, v) => (v == null || v === "" ? "—" : Array.isArray(v) ? v.join(", ") || "—" : typeof v === "boolean" ? (v ? "on" : "off") : k === "status" ? STATUS_LABEL[v] || v : ["cost", "value", "listPrice", "soldPrice", "fees", "webFixedPrice"].includes(k) ? usd(v) : k === "priceUrl" ? "linked" : String(v).slice(0, 60));
+  const FIELD_NAME = { facts: "card facts", condition: "condition", kind: "type", upc: "UPC", sealedType: "box type", name: "name", category: "category", grade: "grade", qty: "qty", cost: "paid", value: "value", purchased: "purchased", notes: "notes", tags: "tags", location: "location", sku: "SKU", priceUrl: "sales page", status: "status", listedOn: "listed on", listPrice: "list price", soldPrice: "sold price", soldDate: "sold date", soldOn: "sold on", fees: "fees", payment: "payment", web: "website", webMode: "website pricing", webFixedPrice: "fixed website price" };
+  const show = (k, v) => (v == null || v === "" ? "—" : k === "condition" ? [v.scale, v.centering].filter(Boolean).join(" · ") || "set" : k === "facts" ? [v.year, v.set, v.player, v.number && "#" + v.number, v.parallel].filter(Boolean).join(" ") || "set" : Array.isArray(v) ? v.join(", ") || "—" : typeof v === "boolean" ? (v ? "on" : "off") : k === "status" ? STATUS_LABEL[v] || v : ["cost", "value", "listPrice", "soldPrice", "fees", "webFixedPrice"].includes(k) ? usd(v) : k === "priceUrl" ? "linked" : String(v).slice(0, 60));
   const r = row || { name: "", grade: "Raw", qty: 1, cost: "", value: "", category: "other", status: "in_stock", purchased: today(), tags: [] };
+  const F = r.facts || {}, K = r.condition || {}, parts = status.conditionParts || {};
+  const partSel = (k) => `<select name="cond.${k}"><option value="">—</option>${opts(parts[k] || [], K[k])}</select>`;
+  const fact = (k, label, ph = "") => `<label>${label}<input name="facts.${k}" value="${esc(F[k] || "")}" placeholder="${esc(ph)}"></label>`;
+  const tick = (k, label) => `<label class="check"><input type="checkbox" name="facts.${k}"${F[k] ? " checked" : ""}> ${label}</label>`;
   const body = openModal(row ? "Edit card" : "Add a card", `
     <form class="form-grid" data-form>
       <label class="span2">Card name<input name="name" required value="${esc(r.name)}" placeholder="2023 Prizm Victor Wembanyama #136 Silver"></label>
       <label>Grade<input name="grade" value="${esc(r.grade)}" placeholder="Raw, PSA 10, BGS 9.5"></label>
       <label>Category<select name="category">${Object.keys(CAT_LABEL).map((c) => `<option value="${c}"${c === r.category ? " selected" : ""}>${esc(CAT_LABEL[c])}</option>`).join("")}</select></label>
+      <label>What is it<select name="kind" data-kindsel><option value="card"${r.kind !== "sealed" ? " selected" : ""}>A card</option><option value="sealed"${r.kind === "sealed" ? " selected" : ""}>Sealed product (box, pack, case)</option></select></label>
       <label>Qty<input name="qty" type="number" min="1" value="${esc(r.qty)}"></label>
       <label>Paid each $<input name="cost" type="number" min="0" step="0.01" value="${esc(r.cost)}"></label>
       <label>Value each $<input name="value" type="number" min="0" step="0.01" value="${esc(r.value ?? "")}" placeholder="auto from sales page"></label>
@@ -690,6 +726,33 @@ async function openItemEditor(row = null) {
       <label class="span2">Tags (comma separated)<input name="tags" value="${esc((r.tags || []).join(", "))}" placeholder="rookie, flip, PC"></label>
       <label class="span2">Sales page URL (for automatic values)<input name="priceUrl" value="${esc(r.priceUrl || "")}" placeholder="https://www.sportscardspro.com/game/..."></label>
       <label class="span2">Notes <span class="muted">(private — never shown on the website)</span><textarea name="notes" rows="2">${esc(r.notes || "")}</textarea></label>
+      <fieldset class="span2 web-box" data-kind="card">
+        <legend>🃏 Card facts <span class="muted small">(the website shows these)</span></legend>
+        <div class="form-grid">
+          ${fact("year", "Year", "2023")}${fact("set", "Set", "Panini Prizm")}${fact("player", "Player / character")}${fact("team", "Team")}
+          ${fact("number", "Card #", "136")}${fact("parallel", "Parallel / variant", "blank = base")}${fact("serial", "Serial", "23/99")}${fact("cert", "Cert #")}
+          <div class="span2 row" style="margin:0">${tick("rookie", "Rookie")}${tick("auto", "Autograph")}${tick("relic", "Relic / patch")}</div>
+          ${row?.pop ? `<p class="span2 small" style="margin:0">PSA population at ${esc(row.pop.grade)}: <b>${esc(row.pop.pop)}</b>${row.pop.higher != null ? ` · ${esc(row.pop.higher)} graded higher` : ""} · checked ${esc(when(row.pop.at))}${row.pop.base !== row.pop.pop ? "" : ""}</p>` : ""}
+        </div>
+      </fieldset>
+      <fieldset class="span2 web-box" data-kind="card">
+        <legend>🔍 Condition <span class="muted small">(raw cards — a slab's grade is its condition)</span></legend>
+        <div class="form-grid">
+          <label>Condition<select name="cond.scale" data-condsel><option value="">—</option>${Object.entries(status.conditions || {}).map(([v, l]) => `<option value="${v}"${K.scale === v ? " selected" : ""}>${esc(l)} (${v})</option>`).join("")}</select></label>
+          <label>Centering<span class="row" style="margin:0;flex-wrap:nowrap"><input name="cond.centering" value="${esc(K.centering || "")}" placeholder="55/45 L/R · 60/40 T/B" style="flex:1">${(row?.photos || []).length ? `<button type="button" class="small" data-measure title="Measure it on the front photo">📐</button>` : ""}</span></label>
+          <label>Corners${partSel("corners")}</label><label>Edges${partSel("edges")}</label><label>Surface${partSel("surface")}</label>
+          <label>Condition notes <span class="muted small">(the website shows them)</span><input name="cond.notes" value="${esc(K.notes || "")}" placeholder="tiny white spot, top-left corner of the back"></label>
+          <p class="span2 small muted" data-condhelp style="margin:0"></p>
+        </div>
+      </fieldset>
+      <fieldset class="span2 web-box" data-kind="sealed">
+        <legend>📦 Sealed product</legend>
+        <div class="form-grid">
+          <label>Type<select name="sealedType"><option value="">—</option>${opts(status.sealedTypes || [], r.sealedType)}</select></label>
+          <label>UPC barcode<input name="upc" inputmode="numeric" value="${esc(r.upc || "")}" placeholder="scan the barcode on the box"></label>
+          <p class="span2 small muted" style="margin:0">Opened one? Click <b>📦 Opened</b> on it in Stock — its cost goes to the cards that came out.</p>
+        </div>
+      </fieldset>
       <fieldset class="span2 web-box">
         <legend>🌐 MJC website</legend>
         <label class="check"><input type="checkbox" name="web"${r.web ? " checked" : ""}> Sell this card on the MJC website</label>
@@ -702,16 +765,38 @@ async function openItemEditor(row = null) {
         <label style="margin-top:.5rem">Website description <span class="muted">(blank = the research summary)</span><textarea name="webDescription" rows="3">${esc(r.webDescription || "")}</textarea></label>
         ${row ? `<div class="row" style="margin:.3rem 0 0"><button type="button" class="small" data-describe>✍ Write it with AI</button><span class="small muted">uses the card's research report</span></div>
         <div class="photo-strip" data-photos></div>
-        <div class="row" style="margin:.3rem 0 0"><label class="button small" for="photoIn">📷 Add photos</label><input type="file" id="photoIn" accept="image/*" multiple hidden><span class="small muted">Front first. Your own photos — up to 8.</span></div>` : `<p class="small muted">Save the card first, then reopen it to add photos.</p>`}
+        <div class="row" style="margin:.3rem 0 0"><label class="button small" for="photoIn">📷 Add photos</label><input type="file" id="photoIn" accept="image/*" multiple hidden><span class="small muted">Front first. Your own photos — up to 8.</span></div>
+        <div class="row" style="margin:.5rem 0 0;align-items:center" data-videobox></div>` : `<p class="small muted">Save the card first, then reopen it to add photos and a video.</p>`}
       </fieldset>
       ${hist.v.length > 1 ? `<div class="span2 small">Value over time ${sparkline(hist.v.slice(-60).map(([, v]) => v))} <span class="muted">${esc(day(hist.v[0][0]))} → ${esc(day(hist.v.at(-1)[0]))}</span></div>` : ""}
       ${hist.c.length ? `<details class="span2 small"><summary>Change history (${hist.c.length})</summary><ul class="tight">${hist.c.slice().reverse().map((e) => `<li>${esc(when(e.at))}${e.by ? " · " + esc(e.by) : ""}: ${Object.entries(e.f).map(([k, [a, b]]) => `${esc(FIELD_NAME[k] || k)} ${esc(show(k, a))} → <b>${esc(show(k, b))}</b>`).join("; ")}</li>`).join("")}</ul></details>` : ""}
       <div class="span2 row"><button class="primary">${row ? "Save" : "Add card"}</button></div>
     </form>`, { wide: true });
-  if (row) wireWebExtras(row, body);
+  if (row) { wireWebExtras(row, body); wireVideo(row, body); }
+  // card vs sealed product: only the boxes that apply
+  const kindSel = $("[data-kindsel]", body);
+  const showKind = () => $$("[data-kind]", body).forEach((el) => (el.hidden = el.dataset.kind !== kindSel.value));
+  kindSel.onchange = showKind;
+  showKind();
+  const condSel = $("[data-condsel]", body), condHelp = $("[data-condhelp]", body);
+  const showHelp = () => (condHelp.textContent = condSel.value ? `${status.conditions[condSel.value]}: ${status.conditionHelp?.[condSel.value] || ""}${K.at && K.scale === condSel.value ? ` Checked ${K.at}.` : ""}` : "One scale for every raw card: Near Mint, Lightly Played, Moderately Played, Heavily Played, Damaged.");
+  condSel.onchange = showHelp;
+  showHelp();
+  const measure = $("[data-measure]", body);
+  if (measure) measure.onclick = () => openCentering({ url: `/api/photos/${encodeURIComponent(row.id)}/${encodeURIComponent(row.photos[0])}` }, { onUse: (text) => { $('[name="cond.centering"]', body).value = text; } });
   $("[data-form]", body).onsubmit = async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
+    // "facts.year" → f.facts.year, "cond.scale" → f.condition.scale (ticked boxes only arrive when ticked)
+    f.facts = { rookie: false, auto: false, relic: false, ...(row?.facts?.certVerified ? { certVerified: true } : {}) };
+    f.condition = {};
+    for (const [k, v] of Object.entries(f)) {
+      const m = k.match(/^(facts|cond)\.(\w+)$/);
+      if (!m) continue;
+      (m[1] === "facts" ? f.facts : f.condition)[m[2]] = ["rookie", "auto", "relic"].includes(m[2]) ? true : v;
+      delete f[k];
+    }
+    if (f.kind === "sealed") { delete f.facts; delete f.condition; }
     if (f.value === "") f.value = null;
     if (!f.sku) delete f.sku;
     f.web = e.target.elements.web.checked;
@@ -871,6 +956,45 @@ const scan = { pages: [], running: false, paused: false, ctrl: null, secsPerFile
 const fileKey = (f) => `${f.webkitRelativePath || f.name}|${f.size}|${f.lastModified}`;
 const scanCards = () => scan.pages.flatMap((p) => p.cards);
 const normName = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/** A card a person should look at before it's added. */
+const needsCheck = (c) => c.confidence === "low" || Boolean(c.parallel_check) || Boolean(c.checklist?.note) || /says|no record/.test(c.certNote || "");
+/** The display name from the card's fields — the same order the reader uses (lib/jobs.js normalizeRead). */
+const nameFromDetails = (d) => [String(d.set || "").startsWith(d.year || "") ? "" : d.year, d.set, d.player, d.number ? "#" + d.number : "", d.parallel, d.serial, d.rookie ? "RC" : "", d.autograph ? "Auto" : "", d.relic ? "Relic" : ""].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+const tagsFromDetails = (d) => [d.rookie && "rookie", d.autograph && "auto", d.relic && "relic", d.serial && "numbered", d.parallel && String(d.parallel).toLowerCase().slice(0, 30)].filter(Boolean);
+/** What the card is, as the row keeps it (the website shows these). */
+const factsOf = (c) => {
+  const d = c.details || {};
+  return { year: d.year, set: d.set, player: d.player, number: d.number, parallel: d.parallel, serial: d.serial, team: d.team, rookie: d.rookie, auto: d.autograph, relic: d.relic, cert: c.cert, certVerified: Boolean(c.certVerified) };
+};
+
+/**
+ * What a person corrected on a scanned card (for the reader's accuracy and its "look twice" notes). Fields fixed
+ * in the big view compare one by one; a name typed over in the list is compared by its words, and the card's
+ * fields are brought in line with the new name so the website shows what was typed.
+ */
+function scanFixes(c) {
+  const r = c.read;
+  if (!r || String(c.uid).startsWith("cert:")) return null;
+  const a = r.details || {}, b = (c.details ||= {});
+  const n = (x) => String(x ?? "").trim().toLowerCase();
+  if (c.name !== r.name && !c.structured) {
+    const num = (s) => String(s).match(/#\s*([\w.-]+)/)?.[1] || "";
+    const yr = (s) => String(s).match(/\b(19|20)\d{2}(-\d{2})?\b/)?.[0] || "";
+    if (n(num(r.name)) !== n(num(c.name))) b.number = num(c.name);
+    if (yr(r.name) !== yr(c.name)) b.year = yr(c.name);
+    const words = (s) => new Set(normName(s).split(" ").filter(Boolean));
+    const before = words(r.name), after = words(c.name);
+    const added = [...after].filter((w) => !before.has(w) && !/^\d/.test(w)), removed = [...before].filter((w) => !after.has(w) && !/^\d/.test(w));
+    if (added.length || removed.length) {
+      if (removed.some((w) => words(a.player).has(w))) b.player = added.join(" ");
+      else if (!["rc", "auto", "relic"].some((w) => added.includes(w) || removed.includes(w))) b.parallel = [...[...words(a.parallel)].filter((w) => !removed.includes(w)), ...added].join(" ");
+    }
+  }
+  const fixed = {};
+  for (const k of ["player", "number", "parallel", "year", "set"]) if (n(a[k]) !== n(b[k])) fixed[k] = { from: a[k] || "", to: b[k] || "" };
+  if (n(r.grade) !== n(c.grade)) fixed.grade = { from: r.grade, to: c.grade };
+  return { set: [a.year, a.set].filter(Boolean).join(" "), fixed };
+}
 
 async function loadScan() {
   $("#invActions").innerHTML = "";
@@ -899,10 +1023,13 @@ function drawScan() {
         <label class="button primary" for="scanDir">📁 Choose a folder of scans</label><input type="file" id="scanDir" webkitdirectory multiple hidden>
         <label class="button" for="scanFiles">🖼 Choose files</label><input type="file" id="scanFiles" accept="image/*" multiple hidden>
         <button data-camscan title="A webcam or document camera looking down at the cards: one key press per page">📷 Camera</button>
+        <button data-phone title="Take the pictures with your phone — they show up here">📱 Phone</button>
         <label class="check small" title="Scan the fronts, flip every card over where it lies, scan again. Each back is matched to its front by position."><input type="checkbox" id="scanDuplex"${store.get("scanDuplex", false) ? " checked" : ""}> <b>Backs too</b>: each picture's backs are the next file (flip the cards in place) — the back gives the number, year and set</label>
       </div>
       <form class="row" data-cert style="margin-top:.4rem"><label>PSA cert numbers <span class="small muted">— scan the slab barcode or type it, Enter</span><input name="cert" inputmode="numeric" autocomplete="off" placeholder="e.g. 81234567"></label></form>
+      ${scan.box ? `<p class="small" style="margin:.5rem 0 0">📦 Scanning what came out of <b>${esc(scan.inv.find((r) => r.id === scan.box)?.name || "a box")}</b> — its cost is spread over these cards when you add them. <button class="ghost small" data-unbox>Not from a box</button></p>` : ""}
     </div>
+    <div id="scanAcc"></div>
     <div id="scanProg"></div>
     <div id="scanReview">${cards.length ? scanReviewHtml() : ""}</div>`;
   const pickFiles = (e) => {
@@ -915,14 +1042,98 @@ function drawScan() {
   $("#scanFiles").onchange = pickFiles;
   $("#scanDuplex").onchange = (e) => store.set("scanDuplex", e.target.checked);
   $("#invBody [data-camscan]").onclick = openScanCamera;
+  $("#invBody [data-phone]").onclick = openPhoneLink;
+  const unbox = $("#invBody [data-unbox]");
+  if (unbox) unbox.onclick = () => { scan.box = null; drawScan(); };
+  pollInbox();
+  loadScanAccuracy();
   $("[data-cert]").onsubmit = (e) => { e.preventDefault(); const n = e.target.cert.value.replace(/\D/g, ""); e.target.cert.value = ""; if (n) addCert(n); };
   drawScanProgress();
   wireScanReview();
 }
 
-function addScanFiles(files, { quiet = false } = {}) {
+/** How often the reader gets each field right, and what it's been told to look twice at. */
+async function loadScanAccuracy() {
+  const el = $("#scanAcc");
+  const a = await getJSON("/api/scan/accuracy").catch(() => null);
+  if (!el || !a?.cards) return;
+  const f = a.fields, p = (v) => (v == null ? "—" : `${v}%`);
+  el.innerHTML = `<details class="panel small"><summary>Reader accuracy: <b>${p(a.allRight)}</b> of the last ${a.cards} scanned cards needed no fix · number ${p(f.number)} · parallel ${p(f.parallel)} · player ${p(f.player)} · grade ${p(f.grade)}</summary>
+    ${a.hints.length ? `<p style="margin:.5rem 0 .2rem">Before every scan the reader is told about the mistakes you've fixed most:</p><ul class="tight">${a.hints.map((h) => `<li>${esc(h)}</li>`).join("")}</ul>` : `<p class="muted">No repeated mistakes yet — every fix you make in the list is remembered and told to the reader next time.</p>`}</details>`;
+}
+
+/** Phone → this computer: a QR code signs the phone in; its pictures land in the scan. */
+async function openPhoneLink() {
+  let j;
+  try {
+    j = await getJSON("/api/scan/phone-link");
+  } catch (err) {
+    return toast(err.message, { error: true });
+  }
+  if (!j.share) {
+    const body = openModal("📱 Scan with your phone", `<p>The phone sends its pictures to this computer over your home Wi-Fi. Switch that on once:</p>
+      <ol class="small"><li><b>⚙ Settings → Share on home network</b>: tick <b>Share</b>, pick a PIN, <b>Save</b>.</li><li>Close the app and open it again.</li><li>Come back here and press <b>📱 Phone</b>.</li></ol>
+      <div class="row"><button class="primary" data-set>Open Settings</button></div>`);
+    $("[data-set]", body).onclick = () => { modal.close(); openSettings(); };
+    return;
+  }
+  openModal("📱 Scan with your phone", `
+    <div class="row" style="align-items:flex-start;flex-wrap:wrap">
+      <div class="qr">${j.svg}</div>
+      <ol class="small" style="flex:1 1 240px;margin-top:0">
+        <li>Phone on the <b>same Wi-Fi</b> as this computer.</li>
+        <li>Point the phone's camera at the code and open the link.</li>
+        <li>Take a picture of each card (or a binder page). Tick <b>Front + back</b> on the phone to read both sides.</li>
+        <li>The pictures show up here in a few seconds and are read like scanned files.</li>
+      </ol></div>
+    <p class="small muted">The code works for 15 minutes; the phone stays signed in after that.</p>`);
+}
+
+/** Pictures from the phone (named …-a front, …-b back, …-s single) join the scan; a front waits 2 minutes for its back. */
+let inboxTimer = null, inboxBusy = false;
+function pollInbox() {
+  if (inboxTimer) return;
+  inboxTimer = setInterval(async () => {
+    if (invView !== "scan" || !$("#tab-inventory")?.classList.contains("active")) { clearInterval(inboxTimer); inboxTimer = null; return; }
+    if (inboxBusy) return;
+    inboxBusy = true;
+    try {
+      const list = await getJSON("/api/scan/inbox");
+      if (!list.length) return;
+      const byCard = new Map();
+      for (const x of list) {
+        const m = x.name.match(/^(.*)-([asb])\.jpg$/);
+        const e = byCard.get(m ? m[1] : x.name) || {};
+        e[m ? m[2] : "s"] = x;
+        byCard.set(m ? m[1] : x.name, e);
+      }
+      const singles = [], pairs = [];
+      for (const e of byCard.values()) {
+        if (e.s) singles.push(e.s);
+        else if (e.a && e.b) pairs.push(e.a, e.b);
+        else if (e.a && Date.now() - e.a.at > 120000) singles.push(e.a);
+        else if (e.b && !e.a) singles.push(e.b);
+      }
+      const take = async (x) => {
+        const blob = await (await fetch("/api/scan/inbox/" + encodeURIComponent(x.name))).blob();
+        await fetch("/api/scan/inbox/" + encodeURIComponent(x.name), { method: "DELETE" });
+        return new File([blob], x.name, { type: "image/jpeg", lastModified: Math.round(x.at) });
+      };
+      const s = await Promise.all(singles.map(take)), p = await Promise.all(pairs.map(take));
+      if (s.length) addScanFiles(s, { quiet: true, duplex: false });
+      if (p.length) addScanFiles(p, { quiet: true, duplex: true });
+      if (s.length || p.length) toast(`📱 ${plural(s.length + p.length / 2, "picture")} from the phone`, { ms: 1500 });
+    } catch {
+      /* the next tick tries again */
+    } finally {
+      inboxBusy = false;
+    }
+  }, 3000);
+}
+
+function addScanFiles(files, { quiet = false, duplex: forced = null } = {}) {
   files.sort((a, b) => byNumber(a.webkitRelativePath || a.name, b.webkitRelativePath || b.name));
-  const duplex = !quiet && $("#scanDuplex")?.checked;
+  const duplex = forced ?? (!quiet && $("#scanDuplex")?.checked);
   const have = new Set(scan.pages.map((p) => p.key));
   let added = 0;
   for (let i = 0; i < files.length; i += duplex ? 2 : 1) {
@@ -1034,6 +1245,7 @@ function cropCard(img, box, maxSide) {
  * mirrored left↔right (flipped like a page) or top↕bottom. Try both, keep the better fit, pair closest-first.
  */
 function matchBacks(fronts, backs) {
+  if (fronts.length === 1 && backs.length === 1) return [backs[0]]; // one card per picture (a phone shot)
   const mid = (b) => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
   const plan = (mirror) => {
     const pairs = [];
@@ -1150,7 +1362,7 @@ async function finishPage(p, cards) {
   } catch {
     /* unreadable now — the cards still list, without the picture */
   }
-  p.cards = cards.map((c, i) => ({ ...c, uid: `${p.key}#${i}`, page: p, include: true, thumb: img ? cropCard(img, c.box || null, 220).toDataURL("image/jpeg", 0.75) : null }));
+  p.cards = cards.map((c, i) => ({ ...c, read: c.read || { name: c.name, grade: c.grade, details: { ...(c.details || {}) } }, uid: `${p.key}#${i}`, page: p, include: true, thumb: img ? cropCard(img, c.box || null, 220).toDataURL("image/jpeg", 0.75) : null }));
   forgetPicture(p.file);
   forgetPicture(p.back);
   appendScanRows(p.cards);
@@ -1168,11 +1380,38 @@ async function openScanZoom(c) {
   forgetPicture(c.page?.file);
   forgetPicture(c.page?.back);
   const d = c.details || {};
-  const facts = [["Year", d.year], ["Set", d.set], ["Player / character", d.player], ["Number", d.number && "#" + d.number], ["Parallel", d.parallel || "base"], ["Serial", d.serial], ["Rookie", d.rookie && "yes"], ["Autograph", d.autograph && "yes"], ["Relic / patch", d.relic && "yes"], ["Grade", c.grade], ["Cert", c.cert]].filter(([, v]) => v);
-  openModal(c.name, `
+  const ck = c.checklist;
+  const field = (k, label, v = d[k]) => `<label>${label}<input name="${k}" value="${esc(v || "")}"></label>`;
+  const body = openModal(c.name, `
     <div class="row" style="align-items:flex-start;flex-wrap:wrap">${pics.map(([k, src]) => `<figure style="margin:0;flex:1 1 300px"><img src="${src}" alt="${k} of ${esc(c.name)}" style="width:100%;border-radius:8px"><figcaption class="small muted">${k}</figcaption></figure>`).join("") || `<p class="muted">No picture.</p>`}</div>
-    <table class="small" style="margin-top:.6rem">${facts.map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td><b>${esc(v)}</b></td></tr>`).join("")}</table>
-    ${c.parallel_check ? `<p class="small warn">⚠ Check by eye: ${esc(c.parallel_check)}</p>` : ""}${c.id_notes ? `<p class="small muted">${esc(c.id_notes)}</p>` : ""}${c.certNote ? `<p class="small">${esc(c.certNote)}</p>` : ""}`, { wide: true });
+    ${ck?.note ? `<p class="small warn">⚠ ${esc(ck.note)}</p>` : ""}${c.parallel_check ? `<p class="small warn">⚠ Check by eye: ${esc(c.parallel_check)}</p>` : ""}${c.id_notes ? `<p class="small muted">${esc(c.id_notes)}</p>` : ""}${c.certNote ? `<p class="small">${esc(c.certNote)}</p>` : ""}
+    <form class="form-grid small" data-fixform style="margin-top:.5rem">
+      ${field("year", "Year")}${field("set", "Set")}${field("player", "Player / character")}${field("number", "Card #")}
+      <label>Parallel / variant <span class="muted">(blank = base)</span><input name="parallel" value="${esc(d.parallel || "")}"></label>
+      ${field("serial", "Serial")}${field("grade", "Grade", c.grade)}
+      <div class="row" style="margin:0">${[["rookie", "Rookie"], ["autograph", "Autograph"], ["relic", "Relic / patch"]].map(([k, l]) => `<label class="check"><input type="checkbox" name="${k}"${d[k] ? " checked" : ""}> ${l}</label>`).join("")}</div>
+      ${ck?.parallels?.length ? `<div class="span2">Versions of #${esc(ck.number)} in ${esc(ck.set)} (click one): ${ck.parallels.map((p) => `<button type="button" class="small ghost" data-par="${esc(p)}">${esc(p)}</button>`).join(" ")}</div>` : ""}
+      <div class="span2 row"><button class="primary">Save and re-price</button><span class="muted">Fixes are remembered: the reader is told to look twice at the same thing next time.</span></div>
+    </form>`, { wide: true });
+  const form = $("[data-fixform]", body);
+  $$("[data-par]", form).forEach((b) => (b.onclick = () => { form.parallel.value = b.dataset.par === "Base" ? "" : b.dataset.par; form.parallel.focus(); }));
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const v = Object.fromEntries(new FormData(form));
+    const nd = { ...d, year: v.year.trim(), set: v.set.trim(), player: v.player.trim(), number: v.number.trim().replace(/^#/, ""), parallel: v.parallel.trim(), serial: v.serial.trim(), rookie: Boolean(v.rookie), autograph: Boolean(v.autograph), relic: Boolean(v.relic) };
+    const changedId = ["number", "player", "parallel", "set", "year"].some((k) => String(nd[k] || "") !== String(d[k] || ""));
+    Object.assign(c, { details: nd, grade: v.grade.trim() || "Raw", name: nameFromDetails(nd) || c.name, tags: tagsFromDetails(nd), structured: true, edited: true });
+    if (changedId && c.checklist) c.checklist = { ...c.checklist, note: null };
+    if (changedId) c.parallel_check = null;
+    modal.close();
+    const tr = $(`#scanReview tr[data-uid="${CSS.escape(c.uid)}"]`);
+    const r = await (await fetch("/api/lot/reprice", json("POST", { name: c.name, grade: c.grade, category: c.category || "other" }))).json().catch(() => ({}));
+    if (r.url) Object.assign(c, { value: r.value, url: r.url, matched: r.matched, volume: r.volume, confidence: "high" });
+    else Object.assign(c, { value: null, url: null });
+    if (tr) tr.outerHTML = scanRowHtml(c);
+    scanSummary();
+    if (!r.url) toast("Saved — no exact sales page for it; it can be priced later with 💲 Find price.", { ms: 4000 });
+  };
 }
 
 async function addCert(n) {
@@ -1185,7 +1424,7 @@ async function addCert(n) {
     const name = [cert.year, cert.brand, cert.subject, cert.cardNumber ? "#" + cert.cardNumber : "", cert.variety].filter(Boolean).join(" ");
     const cat = String(cert.category || "").toLowerCase();
     const category = ["baseball", "basketball", "football", "hockey", "soccer", "pokemon"].find((k) => cat.includes(k)) || (/yu.?gi/.test(cat) ? "yugioh" : /one.?piece/.test(cat) ? "onepiece" : "other");
-    const card = { uid: "cert:" + n, name, grade: num ? `PSA ${num}` : "PSA", category, cert: n, certUrl: cert.url, confidence: "high", certNote: "From PSA's record", position: "slab", include: true, thumb: null, value: null, url: null };
+    const card = { uid: "cert:" + n, name, grade: num ? `PSA ${num}` : "PSA", category, cert: n, certUrl: cert.url, certVerified: true, confidence: "high", certNote: "From PSA's record", position: "slab", include: true, thumb: null, value: null, url: null, details: { year: String(cert.year || ""), set: cert.brand || "", player: cert.subject || "", number: String(cert.cardNumber || ""), parallel: cert.variety || "" } };
     const page = { key: "cert:" + n, file: null, status: "done", cards: [card] };
     card.page = page;
     scan.pages.push(page);
@@ -1203,12 +1442,13 @@ function dupNote(c) {
   return have.length ? `<span class="chip warn" title="${esc(have.map((r) => `${r.sku} ${r.location ? "· " + r.location : ""}`).join("\n"))}">have ${have.reduce((n, r) => n + r.qty, 0)}</span>` : "";
 }
 function scanRowHtml(c) {
-  const low = c.confidence === "low" || c.parallel_check || /says|no record/.test(c.certNote || "");
+  const low = needsCheck(c);
   return `<tr data-uid="${esc(c.uid)}" class="${c.include ? "" : "sold"}">
     <td><input type="checkbox" data-inc${c.include ? " checked" : ""} aria-label="Add ${esc(c.name)}"></td>
     <td>${c.thumb ? `<button class="ghost bare" data-zoom title="Look at it big (front and back)"><img class="scan-thumb" src="${c.thumb}" alt="Card picture"></button>` : `<span class="muted small">slab</span>`}</td>
     <td><input data-name value="${esc(c.name)}" aria-label="Card name" class="scan-name">
-      <div class="small">${(c.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ")}${c.backBox ? ` <span class="chip" title="The back was read too">+ back</span>` : ""}${c.certVerified ? ` <span class="chip good" title="${esc(c.certNote || "")}">✓ PSA</span>` : ""}</div>
+      <div class="small">${(c.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ")}${c.backBox ? ` <span class="chip" title="The back was read too">+ back</span>` : ""}${c.certVerified ? ` <span class="chip good" title="${esc(c.certNote || "")}">✓ PSA</span>` : ""}${c.checklist && !c.checklist.note ? ` <span class="chip good" title="${esc(`#${c.checklist.number} in ${c.checklist.set}`)}">✓ checklist</span>` : ""} <button class="ghost small" data-fix title="Fix what was read, field by field (the reader learns from it)">✎ fix</button></div>
+      ${c.checklist?.note ? `<div class="small warn">⚠ ${esc(c.checklist.note)}</div>` : ""}
       ${c.parallel_check ? `<div class="small warn">⚠ Check: ${esc(c.parallel_check)}</div>` : ""}
       ${c.certNote && !c.certVerified ? `<div class="small bad">${esc(c.certNote)}</div>` : c.certNote && /says/.test(c.certNote) ? `<div class="small warn">${esc(c.certNote)}</div>` : ""}
       <div class="small muted">${esc(c.page?.file?.name || "")}${c.position ? " · " + esc(c.position) : ""}${c.condition_note ? " · " + esc(c.condition_note) : ""}${c.cert ? ` · cert ${c.certUrl ? link(c.certUrl, c.cert) : esc(c.cert)}` : ""}</div></td>
@@ -1220,6 +1460,8 @@ function scanRowHtml(c) {
 function scanReviewHtml() {
   const cards = scanCards();
   const locs = [...new Set(scan.inv.map((r) => r.location).filter(Boolean))].sort(byNumber);
+  const boxes = scan.inv.filter((r) => r.kind === "sealed" && r.status !== "sold");
+  const box = boxes.find((r) => r.id === scan.box);
   return `<div class="panel">
     <div class="row space"><h3 style="margin:0">Check the cards</h3><span class="small" data-scansum></span></div>
     <div class="row small"><button class="ghost small" data-skiplow>Untick the ones to check</button><button class="ghost small" data-tickall>Tick all</button></div>
@@ -1227,7 +1469,8 @@ function scanReviewHtml() {
       <tbody data-scanrows>${cards.map(scanRowHtml).join("")}</tbody></table></div>
     <form class="form-grid" data-scanadd style="margin-top:.8rem">
       <label>Location<input name="location" list="scanLocs" value="${esc(scan.location || "")}" placeholder="Box 3" autocomplete="off"><datalist id="scanLocs">${locs.map((l) => `<option value="${esc(l)}">`).join("")}</datalist></label>
-      <label>Paid for all of them $ <span class="muted small">(split by value — unpriced cards get $0; price them later and use ÷ Split lot cost to re-split)</span><input name="total" type="number" min="0" step="0.01" placeholder="0"></label>
+      ${boxes.length ? `<label>Came out of a box <span class="muted small">(its cost is spread over these cards)</span><select name="box" data-boxsel><option value="">— not from a box —</option>${boxes.map((r) => `<option value="${esc(r.id)}"${r.id === scan.box ? " selected" : ""}>${esc(r.name)} — ${usd(r.cost)} each, ${r.qty} left</option>`).join("")}</select></label>` : ""}
+      <label>Paid for all of them $ <span class="muted small">(split by value — unpriced cards get $0; price them later and use ÷ Split lot cost to re-split)</span><input name="total" type="number" min="0" step="0.01" placeholder="0" value="${box ? esc(box.cost) : ""}"${box ? " readonly" : ""}></label>
       <label>Status<select name="status">${["in_stock", "listed", "grading"].map((v) => `<option value="${v}">${STATUS_LABEL[v]}</option>`).join("")}</select></label>
       <label class="check"><input type="checkbox" name="combine" checked> Copies of the same card go on one row (qty)</label>
       <div class="span2 row"><button class="primary" data-addscan>＋ Add to inventory</button><span class="small muted" data-addprog></span></div>
@@ -1244,7 +1487,7 @@ function scanSummary() {
   const el = $("#scanReview [data-scansum]");
   if (!el) return;
   const on = scanCards().filter((c) => c.include);
-  const low = on.filter((c) => c.confidence === "low" || c.parallel_check).length;
+  const low = on.filter(needsCheck).length;
   el.innerHTML = `<b>${plural(on.length, "card")}</b> ticked · worth ${usd(on.reduce((n, c) => n + (c.value || 0), 0))}${low ? ` · <span class="bad">${low} to check</span>` : ""}${on.some((c) => c.value == null) ? ` · ${on.filter((c) => c.value == null).length} unpriced (💲 Find prices later)` : ""}`;
   const b = $("#scanReview [data-addscan]");
   if (b && !b.dataset.busy) b.textContent = `＋ Add ${plural(on.length, "card")} to inventory`;
@@ -1265,7 +1508,7 @@ function wireScanReview() {
   box.onclick = async (e) => {
     const t = e.target;
     if (t.matches("[data-skiplow], [data-tickall]")) {
-      for (const c of scanCards()) if (t.matches("[data-tickall]") || c.confidence === "low" || c.parallel_check) c.include = t.matches("[data-tickall]");
+      for (const c of scanCards()) if (t.matches("[data-tickall]") || needsCheck(c)) c.include = t.matches("[data-tickall]");
       $$("tr[data-uid]", box).forEach((tr) => { const c = cardOf(tr); $("[data-inc]", tr).checked = c.include; tr.classList.toggle("sold", !c.include); });
       return scanSummary();
     }
@@ -1279,10 +1522,17 @@ function wireScanReview() {
       tr.outerHTML = scanRowHtml(c);
       scanSummary();
     }
-    if (t.closest("[data-zoom]")) return openScanZoom(cardOf(t));
+    if (t.closest("[data-zoom]") || t.matches("[data-fix]")) return openScanZoom(cardOf(t));
     if (t.matches("[data-addscan]")) { e.preventDefault(); addScanned(t); }
   };
   $("[data-scanadd]", box).onsubmit = (e) => e.preventDefault(); // Enter in a box doesn't add anything by surprise
+  const boxSel = $("[data-boxsel]", box);
+  if (boxSel) boxSel.onchange = () => {
+    scan.box = boxSel.value || null;
+    const b = scan.inv.find((r) => r.id === scan.box), total = $('[name="total"]', box);
+    total.value = b ? b.cost : "";
+    total.readOnly = Boolean(b);
+  };
   scanSummary();
 }
 
@@ -1291,6 +1541,8 @@ async function addScanned(btn) {
   const chosen = scanCards().filter((c) => c.include && c.name);
   if (!chosen.length) return toast("Tick the cards to add.", { error: true });
   if (scan.running) return toast("Wait for the scan to finish (or pause it) first.", { error: true });
+  const fixes = new Map(chosen.map((c) => [c, scanFixes(c)])); // also brings typed-over names into the card's fields
+  const newIds = [];
   // copies of the same card → one row with a quantity (photos from the first copy)
   const groups = [];
   const byKey = new Map();
@@ -1327,6 +1579,7 @@ async function addScanned(btn) {
           cost: Math.round((g.reduce((n, x) => n + costEach(x), 0) / g.length) * 100) / 100,
           value: c.value ?? null, priceUrl: c.url || null, location: f.location || "", status: f.status, purchased: today(),
           tags: c.tags || [],
+          facts: factsOf(c),
           notes: [`Scanned ${today()}`, c.condition_note, c.cert ? `cert ${c.cert}${c.certVerified ? " (matches PSA)" : ""}` : "", c.parallel_check ? `check: ${c.parallel_check}` : ""].filter(Boolean).join(" · "),
           photos,
         });
@@ -1335,6 +1588,7 @@ async function addScanned(btn) {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "Couldn't add them");
       added += j.added;
+      newIds.push(...(j.rows || []).map((x) => x.id));
       for (const g of groups.slice(i, i + 20)) g.forEach((c) => doneCards.add(c));
       // free memory for files whose cards are all done
       for (const [file] of imageCache) if (!groups.slice(i + 20).some((g) => g[0].page.file === file || g[0].page.back === file)) forgetPicture(file);
@@ -1350,6 +1604,15 @@ async function addScanned(btn) {
   for (const p of scan.pages) p.cards = p.cards.filter((c) => !doneCards.has(c));
   scan.pages = scan.pages.filter((p) => p.cards.length || p.status !== "done");
   delete btn.dataset.busy;
+  const fb = [...doneCards].map((c) => fixes.get(c)).filter(Boolean);
+  if (fb.length) fetch("/api/scan/feedback", json("POST", { cards: fb })).then(loadScanAccuracy).catch(() => {});
+  if (f.box && newIds.length) {
+    const r = await fetch(`/api/inventory/${f.box}/open`, json("POST", { pullIds: newIds }));
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) toast(`📦 ${j.box.name}: ${plural(j.pulls, "card")} worth ${usd(j.value)} out of a ${usd(j.cost)} box`, { ms: 6000 });
+    else toast(j.error || "Couldn't record the box opening", { error: true });
+    scan.box = null;
+  }
   if (added) toast(`Added ${plural(added, "row")} (${plural(doneCards.size, "card")}) to inventory${f.location ? " in " + f.location : ""} ✓`);
   scan.inv = await getJSON("/api/inventory").catch(() => scan.inv);
   drawScan();
@@ -1493,9 +1756,85 @@ async function loadSales() {
       <div class="panel"><h3 style="margin-top:0">Best flips</h3>${flipTable(a.best)}</div>
       <div class="panel"><h3 style="margin-top:0">Worst flips</h3>${flipTable(a.worst)}</div>
     </div>
+    ${a.boxes?.count ? `<div class="panel table-wrap"><h3 style="margin-top:0">📦 Opening boxes</h3>
+      <p class="small">${plural(a.boxes.count, "box")} opened for ${usd(a.boxes.cost)} → sold for ${usd(a.boxes.soldFor)} after fees + ${usd(a.boxes.stillWorth)} still in stock = <b class="${a.boxes.result >= 0 ? "pos" : "neg"}">${a.boxes.result >= 0 ? "+" : ""}${usd(a.boxes.result)}</b></p>
+      <table><tr><th>Opened</th><th>Box</th><th class="num">Cards kept</th><th class="num">Cost</th><th class="num">Sold for</th><th class="num">Still worth</th><th class="num">Result</th></tr>
+      ${a.boxes.recent.map((b) => `<tr><td>${esc(b.at)}</td><td>${esc(b.name)}</td><td class="num">${b.cards}</td><td class="num">${usd(b.cost)}</td><td class="num">${usd(b.soldFor)}</td><td class="num">${usd(b.stillWorth)}</td><td class="num ${b.result >= 0 ? "pos" : "neg"}">${usd(b.result)}</td></tr>`).join("")}</table></div>` : ""}
     <div class="panel table-wrap"><h3 style="margin-top:0">By category</h3><table><tr><th>Category</th><th class="num">Sold</th><th class="num">Revenue</th><th class="num">Profit</th></tr>
       ${a.byCategory.map((c) => `<tr><td>${esc(CAT_LABEL[c.category] || c.category)}</td><td class="num">${c.sales}</td><td class="num">${usd(c.revenue)}</td><td class="num ${c.profit >= 0 ? "pos" : "neg"}">${usd(c.profit)}</td></tr>`).join("")}</table></div>`
     : `<div class="empty"><h2>No sales yet</h2><p>When a card sells, click <b>Sold</b> next to it in <b>Stock</b>. Profit, ROI, fees and days-to-sell show up here automatically.</p></div>`;
+}
+
+// ------------------------------------------------------------------ tilt video (refractor shine, surface) inside the editor
+
+function wireVideo(row, body) {
+  const box = $("[data-videobox]", body);
+  if (!box) return;
+  const draw = () => {
+    box.innerHTML = row.video
+      ? `<video src="/api/photos/${encodeURIComponent(row.id)}/${encodeURIComponent(row.video)}" muted loop playsinline autoplay controls style="max-width:220px;max-height:220px;border-radius:8px"></video>
+         <button type="button" class="small ghost" data-delvideo>Remove video</button>`
+      : `<button type="button" class="small" data-recvideo>🎞 Record a tilt video</button>
+         <label class="button small" for="videoIn">Choose a video</label><input type="file" id="videoIn" accept="video/mp4,video/webm,video/quicktime" hidden>
+         <span class="small muted">3 seconds tilting the card under a light — shows refractor shine and the surface. iPhone: Settings → Camera → Formats → Most Compatible.</span>`;
+    const del = $("[data-delvideo]", box);
+    if (del) del.onclick = async () => { await fetch(`/api/inventory/${row.id}/video`, { method: "DELETE" }); row.video = null; draw(); toast("Video removed"); };
+    const rec = $("[data-recvideo]", box);
+    if (rec) rec.onclick = () => recordTiltVideo((data) => upload(data));
+    const pick = $("#videoIn", box);
+    if (pick) pick.onchange = (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      if (f.size > 25e6) return toast("That video is over 25 MB — a few seconds is plenty.", { error: true });
+      const rd = new FileReader();
+      rd.onload = () => upload(String(rd.result).replace(/^data:video\/mov/, "data:video/quicktime"));
+      rd.readAsDataURL(f);
+    };
+  };
+  const upload = async (data) => {
+    toast("Saving the video…", { ms: 1500 });
+    const r = await fetch(`/api/inventory/${row.id}/video`, json("POST", { data }));
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return toast(j.error || "Couldn't save the video", { error: true });
+    row.video = j.video;
+    draw();
+    toast("Video saved ✓");
+  };
+  draw();
+}
+
+/** Record 3 seconds from a camera (H.264 MP4 where the computer can, else WebM) → onDone(dataUrl). */
+async function recordTiltVideo(onDone) {
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast("This computer can't record video here — choose a video file instead.", { error: true });
+  const type = ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"].find((t) => MediaRecorder.isTypeSupported(t));
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { ...(store.get("scanCam") ? { deviceId: store.get("scanCam") } : {}), width: { ideal: 1920 }, height: { ideal: 1080 } } });
+  } catch (err) {
+    return toast(`Couldn't open the camera (${err.name === "NotAllowedError" ? "permission denied" : err.message}).`, { error: true });
+  }
+  const layer = openLayer("🎞 Tilt video", `
+    <video data-live autoplay playsinline muted style="width:100%;max-height:55vh;background:#000;border-radius:10px"></video>
+    <div class="row"><button class="primary" data-go>● Record 3 seconds</button><span class="small" data-msg aria-live="polite">Hold the card under a light; tilt it slowly while it records.</span></div>`, { wide: true });
+  const live = $("[data-live]", layer.body);
+  live.srcObject = stream;
+  layer.dialog.addEventListener("close", () => stream.getTracks().forEach((t) => t.stop()));
+  $("[data-go]", layer.body).onclick = (e) => {
+    e.target.disabled = true;
+    const chunks = [];
+    const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 4_000_000 });
+    rec.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data);
+    rec.onstop = () => {
+      const blob = new Blob(chunks, { type: type.split(";")[0] });
+      const rd = new FileReader();
+      rd.onload = () => { layer.close(); onDone(rd.result); };
+      rd.readAsDataURL(blob);
+    };
+    rec.start();
+    let left = 3;
+    $("[data-msg]", layer.body).textContent = `Recording… ${left}`;
+    const t = setInterval(() => { left--; $("[data-msg]", layer.body).textContent = left > 0 ? `Recording… ${left}` : "Saving…"; if (left <= 0) { clearInterval(t); rec.stop(); } }, 1000);
+  };
 }
 
 // ------------------------------------------------------------------ MJC website: photos + description inside the editor

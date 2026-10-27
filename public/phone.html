@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Card Bot camera</title>
+  <meta name="theme-color" content="#141416" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <style>
+    :root { --bg: #141416; --panel: #1d1d21; --ink: #f2f2f4; --muted: #a0a0aa; --gold: #e2b33c; --good: #3fb37f; --bad: #e5484d; }
+    @media (prefers-color-scheme: light) { :root { --bg: #f6f6f7; --panel: #fff; --ink: #18181b; --muted: #61616b; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+    h1 { font-size: 1.25rem; margin: 0 0 .3rem; }
+    p { margin: .3rem 0; }
+    .muted { color: var(--muted); font-size: .9rem; }
+    .shoot { display: block; width: 100%; margin: 1rem 0 .6rem; padding: 1.4rem 1rem; font-size: 1.25rem; font-weight: 700; border: 0; border-radius: 16px; background: var(--gold); color: #1b1300; }
+    .shoot:active { transform: scale(.98); }
+    .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+    label.check { display: flex; gap: .5rem; align-items: center; padding: .6rem .8rem; border-radius: 12px; background: var(--panel); }
+    label.check input { width: 22px; height: 22px; }
+    .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; margin-top: .8rem; }
+    .gallery figure { margin: 0; position: relative; }
+    .gallery img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 8px; display: block; }
+    .gallery figcaption { position: absolute; left: 4px; bottom: 4px; font-size: .7rem; background: rgba(0,0,0,.65); color: #fff; padding: 1px 5px; border-radius: 6px; }
+    .status { min-height: 1.5em; font-weight: 600; }
+    .status.bad { color: var(--bad); }
+    .status.good { color: var(--good); }
+    .more { width: 100%; padding: .8rem; border-radius: 12px; border: 1px solid var(--muted); background: transparent; color: var(--ink); font-size: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>📷 Card Bot camera</h1>
+  <p class="muted">Each picture goes straight to Bulk scan on the computer. Card on a dark background, straight down, good light, no glare.</p>
+  <label class="check"><input type="checkbox" id="both" /> <span><b>Front + back</b>: take the front, then flip the card and take the back</span></label>
+  <button class="shoot" id="shoot">📸 Take a picture</button>
+  <input type="file" id="cam" accept="image/*" capture="environment" hidden />
+  <input type="file" id="pick" accept="image/*" multiple hidden />
+  <div class="status" id="status" aria-live="polite"></div>
+  <button class="more" id="pickBtn">🖼 Send pictures already on the phone</button>
+  <div class="gallery" id="gallery"></div>
+  <script src="phone.js"></script>
+</body>
+</html>

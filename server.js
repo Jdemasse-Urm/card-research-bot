@@ -37,7 +37,7 @@ app.use(express.json({ limit: "60mb" }));
 const LOG_DIR = path.join(store.DATA_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true });
 const LOG_FILE = path.join(LOG_DIR, "app.log");
-const redact = (s) => String(s).replace(/AIza[\w-]{20,}/g, "AIza…").replace(/(bearer|Basic)\s+[\w.=+/-]{12,}/gi, "$1 …");
+const redact = (s) => String(s).replace(/AIza[\w-]{20,}/g, "AIza…").replace(/\bAQ\.[\w.-]{20,}/g, "AQ.…").replace(/(bearer|Basic)\s+[\w.=+/-]{12,}/gi, "$1 …");
 function writeLog(level, args) {
   try {
     if (fs.existsSync(LOG_FILE) && fs.statSync(LOG_FILE).size > 1_000_000) fs.renameSync(LOG_FILE, LOG_FILE + ".1");
@@ -329,7 +329,7 @@ app.post("/api/settings", (req, res) => {
   };
   let restart = false;
   try {
-    if (b.apiKey != null && String(b.apiKey).trim()) vars.GEMINI_API_KEY = token(b.apiKey, /^[\w-]{30,}$/, "That doesn't look like a Gemini API key (it usually starts with AIza).");
+    if (b.apiKey != null && String(b.apiKey).trim()) vars.GEMINI_API_KEY = token(b.apiKey, /^[\w.-]{30,}$/, "That doesn't look like a Gemini API key (new keys start with AQ., older ones with AIza).");
     if (b.psaToken != null) vars.PSA_API_TOKEN = String(b.psaToken).trim() ? token(b.psaToken, /^[\w.-]{20,}$/, "That doesn't look like a PSA API token.") : null;
     if (b.ebayId != null) vars.EBAY_CLIENT_ID = String(b.ebayId).trim() ? token(b.ebayId, /^[\w.-]{10,}$/, "That doesn't look like an eBay App ID.") : null;
     if (b.ebaySecret != null) vars.EBAY_CLIENT_SECRET = String(b.ebaySecret).trim() ? token(b.ebaySecret, /^[\w.-]{10,}$/, "That doesn't look like an eBay Cert ID.") : null;

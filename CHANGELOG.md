@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.13.2 — Google's new Gemini keys
+
+- Settings now takes Google's new Gemini API keys (they start with `AQ.`). AI Studio stopped handing out the older
+  `AIza…` keys, and the app refused the new ones as "not a Gemini key". Older keys still work. New keys are also
+  scrubbed from the app's log like the old ones.
+
 ## 3.13.1 — drops tell your email list
 
 - When a scheduled drop goes live on the website, the email list hears about it once — the cards, prices and links,

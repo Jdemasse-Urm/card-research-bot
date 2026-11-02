@@ -150,6 +150,22 @@ async function startServer() {
   return { call, home, stop: () => child.kill() };
 }
 
+test("settings: Google's new AQ. Gemini keys are accepted (older AIza keys too); junk is refused", { timeout: 30000 }, async () => {
+  const srv = await startServer();
+  try {
+    const { call } = srv;
+    const aq = "AQ.Ab8" + "x".repeat(20) + "_" + "y".repeat(20) + "-z";
+    assert.equal((await call("POST", "/api/settings", { apiKey: aq })).status, 200, "the new key format");
+    assert.match(fs.readFileSync(path.join(srv.home, ".env"), "utf8"), new RegExp(`^GEMINI_API_KEY=${aq.replace(/\./g, "\\.")}$`, "m"));
+    assert.equal((await call("POST", "/api/settings", { apiKey: "AIza" + "S".repeat(35) })).status, 200, "the older format still works");
+    const bad = await call("POST", "/api/settings", { apiKey: "not a key" });
+    assert.equal(bad.status, 400);
+    assert.match(bad.body.error, /AQ\./);
+  } finally {
+    srv.stop();
+  }
+});
+
 test("routes: feedback + accuracy, phone inbox, box opening, video, card facts in the full card", { timeout: 30000 }, async () => {
   const srv = await startServer();
   try {

@@ -157,6 +157,7 @@ const log = (req, text) => store.logActivity(who(req), text);
 // Streams progress lines (NDJSON) while a job runs, then one {type:"done"} or {type:"error"} line.
 // Closing the page / pressing Cancel aborts the job so it stops spending.
 let busyJobs = 0; // AI jobs in flight (the desktop app asks before quitting)
+let lastJobAt = 0; // when a job last started or ended (an automatic update waits for a quiet stretch)
 function streamJob(req, res, work) {
   res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
@@ -170,6 +171,7 @@ function streamJob(req, res, work) {
   };
   const ping = setInterval(() => send({ type: "ping" }), 15000);
   busyJobs++;
+  lastJobAt = Date.now();
   work(send, ctrl.signal)
     .then((payload) => send({ type: "done", ...payload }))
     .catch((err) => {
@@ -179,6 +181,7 @@ function streamJob(req, res, work) {
     })
     .finally(() => {
       busyJobs--;
+      lastJobAt = Date.now();
       finished = true;
       clearInterval(ping);
       res.end();
@@ -269,6 +272,7 @@ app.get("/api/status", (req, res) => {
     psa: psa.hasToken(),
     ebay: ebay.hasKeys(),
     busy: busyJobs,
+    jobIdleSecs: lastJobAt ? Math.floor((Date.now() - lastJobAt) / 1000) : null, // null = no job since the app started
     desktop: DESKTOP,
     fees: FEE_PCT,
     payments: store.PAYMENTS,

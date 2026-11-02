@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.14.0 — updates install by themselves
+
+- **Automatic updates** (Settings → Desktop app → Update automatically, on by default). Every 6 hours the app looks
+  for a new version, downloads it in the background and checks it against GitHub's checksum. Then it waits for a quiet
+  moment — nobody has used the computer for 10 minutes and no research is running — and installs it. The app closes
+  and reopens on the new version by itself, and a notification says it updated. Your data and settings are kept.
+- **Mac: no more dragging.** Update now (and automatic updates) swap the new app in place and reopen it. If the app
+  isn't in a folder it can change (for example it was opened straight from the download), the installer window opens
+  as before.
+- The release build now tests both installs on the files it just built — the Windows silent install and the Mac
+  swap from the real .dmg — so a version that can't install itself never ships.
+
 ## 3.13.2 — Google's new Gemini keys
 
 - Settings now takes Google's new Gemini API keys (they start with `AQ.`). AI Studio stopped handing out the older

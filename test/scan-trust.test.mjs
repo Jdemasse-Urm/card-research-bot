@@ -158,6 +158,7 @@ test("settings: Google's new AQ. Gemini keys are accepted (older AIza keys too);
     assert.equal((await call("POST", "/api/settings", { apiKey: aq })).status, 200, "the new key format");
     assert.match(fs.readFileSync(path.join(srv.home, ".env"), "utf8"), new RegExp(`^GEMINI_API_KEY=${aq.replace(/\./g, "\\.")}$`, "m"));
     assert.equal((await call("POST", "/api/settings", { apiKey: "AIza" + "S".repeat(35) })).status, 200, "the older format still works");
+    assert.equal((await call("GET", "/api/status")).body.jobIdleSecs, null, "no research yet → an automatic update needn't wait for one");
     const bad = await call("POST", "/api/settings", { apiKey: "not a key" });
     assert.equal(bad.status, 400);
     assert.match(bad.body.error, /AQ\./);

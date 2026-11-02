@@ -84,6 +84,22 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "dist/mac-universal/Card Research Bot.app"
           codesign -dv "dist/mac-universal/Card Research Bot.app" 2>&1 | grep -E "Signature|Format"
           lipo -archs "dist/mac-universal/Card Research Bot.app/Contents/MacOS/Card Research Bot"
+      # Automatic updates: prove the exact install an update does, on the files just built, before they ship.
+      - name: Check the in-place update from the real .dmg (what an automatic update does on a Mac)
+        if: runner.os == 'macOS'
+        run: node --test test/update.test.mjs
+      - name: Check the silent install (what an automatic update runs on Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\*.exe | Select-Object -First 1
+          $p = Start-Process $setup.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the silent install exited $($p.ExitCode)" }
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\card-research-bot\Card Research Bot.exe'
+          if (-not (Test-Path $exe)) { throw "the silent install didn't put the app at $exe" }
+          $run = Start-Process $exe -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "the installed app failed its smoke test ($($run.ExitCode))" }
+          "silent install OK: $exe"
       - name: Attach to the release
         shell: bash
         env:

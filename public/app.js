@@ -219,7 +219,7 @@ async function openSettings() {
   getJSON("/api/version").then((v) => {
     const latest = (v.changelog.split(/\n(?=## )/)[1] || "").trim();
     $("#versionBox").innerHTML = `Card Research Bot <b>${esc(v.version)}</b> <button class="small" id="checkUpdBtn">Check for updates</button><div id="updateBox" class="small" role="status"></div>${latest ? `<details><summary>What's new</summary>${md(latest)}</details>` : ""}
-      <p class="small muted">To update: download and run the newest installer from <a href="https://github.com/Jdemasse-Urm/card-research-bot/releases/latest" target="_blank" rel="noopener">Releases</a> — your data and settings are kept.</p>`;
+      <p class="small muted">${window.desktop ? "New versions install by themselves (Desktop app → Update automatically), or click Update now on the banner." : `To update: download and run the newest installer from <a href="https://github.com/Jdemasse-Urm/card-research-bot/releases/latest" target="_blank" rel="noopener">Releases</a>`} — your data and settings are kept.</p>`;
     $("#checkUpdBtn").onclick = () => { $("#updateBox").textContent = "Checking…"; checkUpdates(true, true); };
   });
   if (window.desktop) {
@@ -229,6 +229,8 @@ async function openSettings() {
     $("#loginToggle").checked = Boolean(prefs.openAtLogin);
     $("#trayToggle").onchange = () => window.desktop.setPrefs({ closeToTray: $("#trayToggle").checked });
     $("#loginToggle").onchange = () => window.desktop.setPrefs({ openAtLogin: $("#loginToggle").checked });
+    $("#autoUpdToggle").checked = prefs.autoUpdate !== false;
+    $("#autoUpdToggle").onchange = () => window.desktop.setPrefs({ autoUpdate: $("#autoUpdToggle").checked });
     $$("#settings [data-notify]").forEach((c) => {
       c.checked = prefs.notify?.[c.dataset.notify] !== false;
       c.onchange = () => window.desktop.setPrefs({ notify: { [c.dataset.notify]: c.checked } });
@@ -1393,13 +1395,13 @@ function openSearch() {
 }
 
 // Desktop app: download the installer from the release (checked against GitHub's checksum) and run it.
-// Windows installs and reopens by itself; on a Mac the installer window opens for the usual drag to Applications.
+// Both install and reopen by themselves (a Mac whose app isn't in a folder it may change gets the installer window).
 async function installUpdate(asset) {
   const btn = $("#updateNow"), out = $("#updateProgress");
   if (btn) btn.disabled = true;
   window.desktop.onUpdateProgress?.((m) => {
     if (!out) return;
-    out.textContent = m.stage === "install" ? (window.desktop.platform === "win32" ? "Installing — the app will close and reopen…" : "Opening the installer…") : `Downloading… ${m.pct != null ? m.pct + "%" : Math.round(m.got / 1e6) + " MB"}`;
+    out.textContent = m.stage === "install" ? "Installing — the app will close and reopen…" : `Downloading… ${m.pct != null ? m.pct + "%" : Math.round(m.got / 1e6) + " MB"}`;
   });
   const r = await window.desktop.installUpdate(asset);
   if (!r.ok) {
@@ -1416,8 +1418,9 @@ async function checkUpdates(force = false, show = false) {
     const asset = want ? (u.assets || []).find((a) => want.test(a.name)) : null;
     const banner = $("#updateBanner");
     const oneClick = asset && window.desktop?.installUpdate;
+    const auto = oneClick && (await window.desktop.getPrefs().catch(() => ({}))).autoUpdate !== false;
     if (u.available && (show || store.get("dismissedUpdate") !== u.latest)) {
-      banner.innerHTML = `⬆ Version <b>${esc(u.latest)}</b> is available (you have ${esc(u.current)}). ${oneClick ? `<button class="primary" id="updateNow">Update now</button>` : asset ? `<a class="button" href="${esc(asset.url)}" target="_blank" rel="noopener">Download ${esc(asset.name)}</a>` : `<a class="button" href="${esc(u.url)}" target="_blank" rel="noopener">Open download page</a>`} <button class="ghost" id="dismissUpdate">Later</button>
+      banner.innerHTML = `⬆ Version <b>${esc(u.latest)}</b> is available (you have ${esc(u.current)})${auto ? " — it installs by itself the next time nobody is using the computer" : ""}. ${oneClick ? `<button class="primary" id="updateNow">Update now</button>` : asset ? `<a class="button" href="${esc(asset.url)}" target="_blank" rel="noopener">Download ${esc(asset.name)}</a>` : `<a class="button" href="${esc(u.url)}" target="_blank" rel="noopener">Open download page</a>`} <button class="ghost" id="dismissUpdate">Later</button>
         <span id="updateProgress" class="small"></span>${u.whatsNew ? `<details class="whats-new"><summary>What's new</summary>${md(u.whatsNew.replace(/^## .*\n/, ""))}</details>` : ""}`;
       banner.classList.remove("hidden");
       $("#dismissUpdate").onclick = () => { store.set("dismissedUpdate", u.latest); banner.classList.add("hidden"); };

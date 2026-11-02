@@ -134,6 +134,7 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Windows installer + Mac disk image | Built and smoke-tested on GitHub for every release (Mac on Intel runners) | 3.1 |
 | Data in your user folder | Installing a new version keeps everything; Settings → Open data folder | 3.1 |
 | Update checker → one-click update | Downloads the new installer, checks it against GitHub's SHA-256, installs; "What's new" shown first | 3.2 / 3.6 |
+| Automatic updates | Every 6 h: a new release downloads + is checksum-checked in the background, installs when the computer has been idle 10 min and no research is running (Windows silent install; Mac swaps the app in place, no dragging); "updated" notification; switch in Settings; the release build tests both installs | 3.14 |
 | Runs in the background | Tray / menu bar icon; start at login; daily re-pricing and alerts keep working | 3.2 |
 | Pop-up notifications | Website orders, offers/messages, price targets, pricing problems — click to open; choose which kinds; Mac Dock badge, Windows taskbar flash | 3.6 |
 | Tray menu | Open, Show mode, Website orders & messages, Check for updates, Quit | 3.6 |

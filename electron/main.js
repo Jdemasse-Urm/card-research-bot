@@ -2,12 +2,12 @@
 // Starts the app's own server inside this process and shows it in a native window.
 // No business logic lives here: everything is server.js + public/, exactly as when run from source.
 
-import { app, BrowserWindow, Menu, Tray, dialog, shell, ipcMain, nativeImage, Notification } from "electron";
+import { app, BrowserWindow, Menu, Tray, dialog, shell, ipcMain, nativeImage, Notification, powerMonitor } from "electron";
 import { spawn } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assetVersion, badAsset, download, macAppPath, macCleanup, macReplace, quietMoment } from "./update.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SMOKE_TEST = process.argv.includes("--smoke-test"); // CI: start, check, exit
@@ -27,7 +27,8 @@ process.env.NO_BROWSER = "1";
 // ---- small preferences file (window bounds, close-to-tray, open at login) ----
 const PREFS_PATH = path.join(process.env.CARD_BOT_HOME, "desktop-prefs.json");
 // notify: which alerts pop up as desktop notifications (orders + offers/messages from the website, price alerts, pricing notices)
-let prefs = { closeToTray: true, openAtLogin: false, bounds: null, zoom: 0, notify: { orders: true, messages: true, prices: true, pricing: true } };
+// autoUpdate: new versions install by themselves at a quiet moment; lastVersion: the version that ran last (→ "updated")
+let prefs = { closeToTray: true, openAtLogin: false, autoUpdate: true, lastVersion: null, bounds: null, zoom: 0, notify: { orders: true, messages: true, prices: true, pricing: true } };
 try {
   prefs = { ...prefs, ...JSON.parse(fs.readFileSync(PREFS_PATH, "utf8")) };
 } catch {}
@@ -159,11 +160,12 @@ function buildMenu() {
 }
 
 // ---- bridge calls from the page (see preload.cjs) ----
-const publicPrefs = () => ({ closeToTray: prefs.closeToTray, openAtLogin: prefs.openAtLogin, notify: { ...prefs.notify } });
+const publicPrefs = () => ({ closeToTray: prefs.closeToTray, openAtLogin: prefs.openAtLogin, autoUpdate: prefs.autoUpdate !== false, notify: { ...prefs.notify } });
 ipcMain.handle("prefs:get", publicPrefs);
 ipcMain.handle("prefs:set", (_e, patch) => {
   if (patch && typeof patch === "object") {
     if ("closeToTray" in patch) prefs.closeToTray = Boolean(patch.closeToTray);
+    if ("autoUpdate" in patch) prefs.autoUpdate = Boolean(patch.autoUpdate);
     if ("openAtLogin" in patch) {
       prefs.openAtLogin = Boolean(patch.openAtLogin);
       if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: prefs.openAtLogin, openAsHidden: true });
@@ -174,50 +176,95 @@ ipcMain.handle("prefs:set", (_e, patch) => {
   return publicPrefs();
 });
 
-// ---- one-click update: download the new installer from this app's GitHub release, check it, run it ----
-// Only files from this project's own releases are accepted, and when GitHub publishes a SHA-256 for the file
-// the download must match it byte for byte before anything is run.
-const RELEASES = "https://github.com/Jdemasse-Urm/card-research-bot/releases/download/";
-ipcMain.handle("update:install", async (e, { url, name, size, sha256 } = {}) => {
-  const send = (msg) => e.sender.isDestroyed() || e.sender.send("update:progress", msg);
-  if (typeof url !== "string" || !url.startsWith(RELEASES) || !/^[\w.-]+\.(exe|dmg)$/i.test(String(name))) return { ok: false, error: "That isn't a Card Research Bot release file." };
-  if ((process.platform === "win32") !== /\.exe$/i.test(name)) return { ok: false, error: "That installer is for the other kind of computer." };
-  try {
-    const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(15 * 60000) });
-    if (!r.ok || !r.body) throw new Error(`GitHub answered ${r.status}`);
-    const total = Number(r.headers.get("content-length")) || size || 0;
-    const file = path.join(app.getPath(process.platform === "win32" ? "temp" : "downloads"), name);
-    const out = fs.createWriteStream(file);
-    const hash = crypto.createHash("sha256");
-    let got = 0, lastPct = -1;
-    for await (const chunk of r.body) {
-      hash.update(chunk);
-      got += chunk.length;
-      if (!out.write(chunk)) await new Promise((res) => out.once("drain", res));
-      const pct = total ? Math.floor((got / total) * 100) : null;
-      if (pct !== lastPct) { lastPct = pct; send({ stage: "download", pct, got, total }); }
-    }
-    await new Promise((res, rej) => out.end((err) => (err ? rej(err) : res())));
-    if (size && got !== size) throw new Error("The download was incomplete — try again.");
-    const digest = hash.digest("hex");
-    if (sha256 && digest !== sha256) {
+// ---- updates: "Update now", and automatic updates (on unless switched off in Settings) ----
+// Only this project's own release files are accepted, checked against GitHub's SHA-256 before anything runs
+// (electron/update.mjs). Windows: the installer replaces the app and starts the new version. Mac: the new app is
+// swapped in place and reopened; when that can't be done here (the app isn't in a folder it may change), the
+// installer window opens for the usual drag to Applications.
+let installing = false;
+const autoUpd = { checkedAt: 0, ready: null, failed: null }; // ready = { version, asset, file } downloaded + checked
+
+async function installFile(file, version, { silent }) {
+  if (process.platform === "win32") {
+    spawn(file, silent ? ["/S", "--force-run"] : [], { detached: true, stdio: "ignore" }).unref();
+    setTimeout(() => { quitting = "confirmed"; app.quit(); }, 600);
+    return { swapped: true };
+  }
+  const appPath = app.isPackaged ? macAppPath(process.execPath) : null;
+  if (appPath) {
+    try {
+      await macReplace(file, appPath, version);
       fs.rmSync(file, { force: true });
-      throw new Error("The download didn't match GitHub's checksum, so it was deleted. Try again later.");
+      app.relaunch();
+      app.exit(0);
+      return { swapped: true };
+    } catch (err) {
+      console.warn("update: couldn't swap the app in place:", err.message);
+      if (silent) throw err;
     }
+  }
+  if (silent) throw new Error("This copy of the app isn't in a folder it can update (open it from Applications).");
+  await shell.openPath(file); // Finder shows the installer window
+  dialog.showMessageBox({ type: "info", title: "Finish the update", message: "Drag Card Research Bot into Applications and choose Replace.", detail: "Then quit this window and open Card Research Bot again from Applications. Your data and settings stay as they are." });
+  return { swapped: false };
+}
+
+ipcMain.handle("update:install", async (e, asset = {}) => {
+  const send = (msg) => e.sender.isDestroyed() || e.sender.send("update:progress", msg);
+  const bad = badAsset(asset);
+  if (bad) return { ok: false, error: bad };
+  if (installing) return { ok: false, error: "The update is already downloading — it installs in a moment." };
+  installing = true;
+  try {
+    const have = autoUpd.ready?.asset.name === asset.name && fs.existsSync(autoUpd.ready.file) ? autoUpd.ready.file : null;
+    const file = have || (await download(asset, app.getPath("temp"), (p) => send({ stage: "download", ...p })));
     send({ stage: "install" });
-    if (process.platform === "win32") {
-      // The installer replaces this app and starts the new version when it's done.
-      spawn(file, [], { detached: true, stdio: "ignore" }).unref();
-      setTimeout(() => { quitting = "confirmed"; app.quit(); }, 600);
-      return { ok: true, file, verified: Boolean(sha256) };
-    }
-    await shell.openPath(file); // Mac: Finder shows the installer window
-    dialog.showMessageBox({ type: "info", title: "Finish the update", message: "Drag Card Research Bot into Applications and choose Replace.", detail: "Then quit this window and open Card Research Bot again from Applications. Your data and settings stay as they are." });
-    return { ok: true, file, verified: Boolean(sha256) };
+    const r = await installFile(file, assetVersion(asset.name), { silent: false });
+    return { ok: true, file, verified: Boolean(asset.sha256), swapped: r.swapped };
   } catch (err) {
     return { ok: false, error: err.message };
+  } finally {
+    installing = false;
   }
 });
+
+// Automatic: every 6 hours ask the app's update check (the server caches GitHub's answer) for a newer release,
+// download and check it in the background, then install it at the first quiet moment (update.mjs quietMoment).
+// The new version starts by itself and says so in a notification (boot()).
+async function autoUpdateTick() {
+  if (!origin || SMOKE_TEST || !app.isPackaged || prefs.autoUpdate === false || installing) return;
+  try {
+    if (!autoUpd.ready && Date.now() - autoUpd.checkedAt > 6 * 3600000) {
+      autoUpd.checkedAt = Date.now();
+      const u = await (await fetch(origin + "/api/update-check")).json();
+      const asset = u.available && u.latest !== autoUpd.failed ? (u.assets || []).find((a) => !badAsset(a)) : null;
+      if (asset) {
+        installing = true;
+        try {
+          autoUpd.ready = { version: u.latest, asset, file: await download(asset, app.getPath("temp")) };
+        } finally {
+          installing = false;
+        }
+      }
+    }
+    if (autoUpd.ready && quietMoment({ busy: busyCount, jobIdleSecs, userIdleSecs: powerMonitor.getSystemIdleTime() })) {
+      const { file, version } = autoUpd.ready;
+      installing = true;
+      try {
+        await installFile(file, version, { silent: true });
+      } catch (err) {
+        installing = false;
+        autoUpd.failed = version; // not again for this version; "Update now" still works
+        autoUpd.ready = null;
+        console.warn("automatic update failed:", err.message);
+        if (Notification.isSupported()) new Notification({ title: `Card Research Bot ${version} is ready`, body: `It couldn't install by itself (${err.message}). Open the app and click Update now.` }).show();
+      }
+    }
+  } catch (err) {
+    console.warn("automatic update check:", err.message);
+  }
+}
+setTimeout(() => { autoUpdateTick(); setInterval(autoUpdateTick, 60000); }, 120000);
 
 // ---- open the app on a given screen (tray menu, notification clicks) ----
 function goto(where) {
@@ -293,6 +340,12 @@ async function boot() {
   buildMenu();
   createTray();
   createWindow();
+
+  // after an update: say so once, and (Mac) remove the previous version's copy left beside the app
+  const version = app.getVersion();
+  if (prefs.lastVersion && prefs.lastVersion !== version && Notification.isSupported()) new Notification({ title: `Card Research Bot updated to ${version}`, body: "Settings → What's new shows what changed. Your data and settings are as they were." }).show();
+  if (prefs.lastVersion !== version) { prefs.lastVersion = version; savePrefs(); }
+  if (isMac && app.isPackaged) macCleanup(macAppPath(process.execPath));
 }
 
 app.on("second-instance", showWindow);
@@ -320,12 +373,14 @@ app.on("before-quit", (e) => {
 
 // The server reports jobs in flight (so quitting can warn) and unseen alerts (desktop notifications); poll it cheaply.
 let busyCount = 0;
+let jobIdleSecs = null; // seconds since a research job last started or ended (null = none since start)
 let lastUnseen = -1;
 setInterval(async () => {
   if (!origin || SMOKE_TEST) return;
   try {
     const st = await (await fetch(origin + "/api/status")).json();
     busyCount = st.busy || 0;
+    jobIdleSecs = st.jobIdleSecs ?? null;
     if (st.unseenAlerts !== lastUnseen) {
       const grew = st.unseenAlerts > lastUnseen;
       lastUnseen = st.unseenAlerts;

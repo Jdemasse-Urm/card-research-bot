@@ -151,8 +151,12 @@ morning brief. Most of these are also in **Settings**.
 OneDrive, iCloud Drive, Dropbox or Google Drive folder and every backup is copied there too, so a broken or stolen
 computer doesn't take your records. Restore with **Settings → Restore from backup**.
 
-**Updates (desktop app):** when a new version is out, a banner offers **Update now** — it downloads the installer
-from this project's GitHub releases, checks it against GitHub's checksum, and installs it.
+**Updates (desktop app):** new versions install by themselves (**Settings → Desktop app → Update automatically**, on
+by default). Every 6 hours the app looks for a new release; it downloads the installer from this project's GitHub
+releases, checks it against GitHub's checksum, and installs it once nobody has used the computer for 10 minutes and
+no research is running. Windows installs silently and reopens; a Mac swaps the app in place and reopens. A
+notification says it updated. The banner's **Update now** does the same thing straight away. The release build
+tests both installs (the Windows silent install, the Mac swap from the real .dmg) before anything ships.
 
 Everything stays on your computer in your data folder (**Settings → Open data folder**): `data/` holds your
 inventory, lookups, watchlist and backups, `.env` holds your keys. Your inventory and keys never leave your computer;

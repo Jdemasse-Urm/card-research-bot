@@ -256,7 +256,18 @@
 
       <section class="set-block">
         <h3>Optional connections</h3>
-        <p class="small"><b>PSA</b> (verify slabs, population, grading progress): free token at
+        <p class="small"><b>Price search</b> — SportsCardsPro (sports) and PriceCharting (Yu-Gi-Oh, One Piece, Pokémon) put a
+          robot check on their search pages in late Oct 2026, so finding a new card's sold prices goes through their API:
+          $6/month each at <a href="https://www.sportscardspro.com/pricecharting-pro?f=api" target="_blank" rel="noopener">SportsCardsPro</a> /
+          <a href="https://www.pricecharting.com/pricecharting-pro?f=api" target="_blank" rel="noopener">PriceCharting</a> →
+          API Access; the 40-character token is on the Subscription page → API/Download. Cards already priced keep re-pricing
+          without it. <span id="priceApiState" class="muted"></span></p>
+        <div class="row" style="margin-top:.2rem">
+          <input id="scpInput" type="password" placeholder="SportsCardsPro API token" autocomplete="off" aria-label="SportsCardsPro API token" style="flex:1" />
+          <input id="pcInput" type="password" placeholder="PriceCharting API token (optional)" autocomplete="off" aria-label="PriceCharting API token" style="flex:1" />
+          <button id="savePriceApi">Save</button>
+        </div>
+        <p class="small" style="margin-top:.7rem"><b>PSA</b> (verify slabs, population, grading progress): free token at
           <a href="https://www.psacard.com/publicapi/documentation" target="_blank" rel="noopener">psacard.com/publicapi</a>.
           <span id="psaState" class="muted"></span></p>
         <div class="row" style="margin-top:.2rem">

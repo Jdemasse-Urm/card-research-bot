@@ -37,7 +37,7 @@ app.use(express.json({ limit: "60mb" }));
 const LOG_DIR = path.join(store.DATA_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true });
 const LOG_FILE = path.join(LOG_DIR, "app.log");
-const redact = (s) => String(s).replace(/AIza[\w-]{20,}/g, "AIza…").replace(/\bAQ\.[\w.-]{20,}/g, "AQ.…").replace(/(bearer|Basic)\s+[\w.=+/-]{12,}/gi, "$1 …");
+const redact = (s) => String(s).replace(/AIza[\w-]{20,}/g, "AIza…").replace(/\bAQ\.[\w.-]{20,}/g, "AQ.…").replace(/(bearer|Basic)\s+[\w.=+/-]{12,}/gi, "$1 …").replace(/([?&]t=)[a-z0-9]{40}/gi, "$1…");
 function writeLog(level, args) {
   try {
     if (fs.existsSync(LOG_FILE) && fs.statSync(LOG_FILE).size > 1_000_000) fs.renameSync(LOG_FILE, LOG_FILE + ".1");
@@ -286,7 +286,7 @@ app.get("/api/status", (req, res) => {
   });
 });
 
-app.get("/api/settings", (req, res) => {
+app.get("/api/settings", async (req, res) => {
   res.json({
     version: VERSION,
     hasKey: hasKey(),
@@ -304,6 +304,8 @@ app.get("/api/settings", (req, res) => {
     helperPinSet: Boolean(helperToken()),
     lanUrls: SHARE ? lanUrls() : [],
     psa: psa.hasToken(),
+    psaCheck: await psa.check(), // does PSA actually answer (checked at most hourly)
+    priceApi: pricecharting.apiTokens(),
     ebay: ebay.hasKeys(),
     dailyBrief: process.env.CARD_BOT_DAILY_BRIEF === "1",
     port: PORT,
@@ -321,7 +323,7 @@ app.post("/api/open-data-folder", (req, res) => {
   res.json({ ok: true, folder: HOME });
 });
 
-app.post("/api/settings", (req, res) => {
+app.post("/api/settings", async (req, res) => {
   // Only the computer running the bot may change keys/sharing.
   if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Settings can only be changed on the computer running the bot." });
   const b = req.body || {};
@@ -337,6 +339,15 @@ app.post("/api/settings", (req, res) => {
     if (b.psaToken != null) vars.PSA_API_TOKEN = String(b.psaToken).trim() ? token(b.psaToken, /^[\w.-]{20,}$/, "That doesn't look like a PSA API token.") : null;
     if (b.ebayId != null) vars.EBAY_CLIENT_ID = String(b.ebayId).trim() ? token(b.ebayId, /^[\w.-]{10,}$/, "That doesn't look like an eBay App ID.") : null;
     if (b.ebaySecret != null) vars.EBAY_CLIENT_SECRET = String(b.ebaySecret).trim() ? token(b.ebaySecret, /^[\w.-]{10,}$/, "That doesn't look like an eBay Cert ID.") : null;
+    // price-site API tokens (40 characters, Subscription page → API/Download): tried once before they're kept
+    for (const [field, env, site, label] of [["scpToken", "SPORTSCARDSPRO_API_TOKEN", "sportscardspro", "SportsCardsPro"], ["pcToken", "PRICECHARTING_API_TOKEN", "pricecharting", "PriceCharting"]]) {
+      if (b[field] == null) continue;
+      if (!String(b[field]).trim()) { vars[env] = null; continue; }
+      const t = token(b[field], /^[a-z0-9]{40}$/i, `That doesn't look like a ${label} API token (40 letters and numbers, on your ${label} Subscription page → API/Download).`);
+      const bad = await pricecharting.checkApiToken(site, t);
+      if (bad) throw new Error(`${label} didn't accept that token: ${bad}`);
+      vars[env] = t;
+    }
     if (b.budget !== undefined) {
       const n = parseFloat(b.budget);
       vars.CARD_BOT_MONTHLY_BUDGET = Number.isFinite(n) && n > 0 ? String(n) : null;
@@ -360,7 +371,9 @@ app.post("/api/settings", (req, res) => {
   setEnv(vars);
   if (vars.GEMINI_API_KEY) resetClient();
   if ("EBAY_CLIENT_ID" in vars || "EBAY_CLIENT_SECRET" in vars) ebay.resetToken();
-  res.json({ ok: true, restartNeeded: restart });
+  // a PSA token is kept even when PSA refuses it (an account waiting for approval) — but Save says so
+  const psaNow = vars.PSA_API_TOKEN ? await psa.check({ fresh: true }) : null;
+  res.json({ ok: true, restartNeeded: restart, warning: psaNow && !psaNow.ok ? psaNow.error : null });
 });
 
 app.get("/api/version", (_req, res) => {

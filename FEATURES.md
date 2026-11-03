@@ -15,6 +15,7 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Text lookup | Type a card name instead of a photo | 1.0 |
 | Batch mode | Several photos = several different cards in one go | 2.0 |
 | Quick price (no AI) | Free sold-price lookup from SportsCardsPro / PriceCharting | 3.0 |
+| Price search through the sites' API | Since the price sites put a robot check on their search pages (late Oct 2026), search goes through their official API ($6/month each) with a token in Settings; card pages, sales and set pages are read as before | 3.14.2 |
 | Set browser | Every card in a set sorted by value, rookies filter | 3.0 |
 | Hottest cards | Today / week / month per category, double-checked against real sold prices, NEW/↑↓ vs the last scan, one-click watch | 1.0 / 3.0 |
 | Ask | Any market question with Google-searched sources; follow-ups about a specific card | 1.0 |

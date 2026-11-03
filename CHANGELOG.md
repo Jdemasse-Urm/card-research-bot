@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.14.2 — price search through the sites' API; Settings shows whether PSA really works
+
+- **Price search token** (Settings → Optional connections → Price search). SportsCardsPro and PriceCharting put a robot
+  check on their search pages, so the app can't find a new card's sold prices by itself any more. Their official API
+  ($6/month each — SportsCardsPro for sports cards, PriceCharting for Yu-Gi-Oh / One Piece / Pokémon) is the way
+  in: paste the 40-character token and Save tries it once before keeping it. With it, card lookups, bulk scans, Quick
+  price, the set browser, hottest-cards price checks and 💲 Find price search through the API, and still read each
+  card's own page for its recent sales, exactly as before (same page addresses, so nothing already saved changes).
+  The API allows one call a second; calls queue.
+- **PSA shows "working", not just "saved".** Settings asks PSA (at most hourly) whether the token really works and
+  shows PSA's answer — e.g. that the account isn't approved for the API yet. Saving a PSA token says so straight away.
+
 ## 3.14.1 — when Google, PSA or the price sites say no, the app says why
 
 - **Gemini busy no longer looks like a hang.** When Google says the main model (gemini-3.8-flash) is overloaded — it

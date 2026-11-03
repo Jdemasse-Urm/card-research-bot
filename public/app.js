@@ -200,7 +200,9 @@ async function openSettings() {
   $("#shareToggle").checked = s.share;
   $("#helperPinState").textContent = s.helperPinSet ? "set — leave blank and Save to remove it" : "not set";
   $("#briefToggle").checked = s.dailyBrief;
-  $("#psaState").innerHTML = s.psa ? `<span class="ok">✓ connected</span>` : "";
+  // "saved" isn't "working": show what PSA actually answered
+  $("#psaState").innerHTML = !s.psa ? "" : s.psaCheck?.ok ? `<span class="ok">✓ working</span>` : `<span class="warn">⚠ token saved, but PSA says no: ${esc(s.psaCheck?.error || "not checked yet")}</span>`;
+  $("#priceApiState").innerHTML = [s.priceApi?.sportscardspro && "SportsCardsPro ✓", s.priceApi?.pricecharting && "PriceCharting ✓"].filter(Boolean).map((t) => `<span class="ok">${t}</span>`).join(" · ");
   $("#ebayState").innerHTML = s.ebay ? `<span class="ok">✓ connected</span>` : "";
   $("#usageBox").innerHTML = `Estimated AI cost this month: <b>${usd(s.spendThisMonth)}</b> <span class="muted">(only charged if you turned on billing in Google AI Studio; the free tier is $0)</span><br>
     Google searches this month: <b>${s.groundedThisMonth}</b> of ${s.freeGrounded.toLocaleString()} free · AI model ${esc(s.model)}${s.fallbackModel ? `, backup ${esc(s.fallbackModel)}` : ""} · key ${s.hasKey ? "saved ✓" : "not set"}`;
@@ -281,12 +283,20 @@ async function saveSettings(body, msgEl) {
   const r = await fetch("/api/settings", json("POST", body));
   const j = await r.json();
   const restart = isDesktop ? "quit the app and open it again to apply." : "close the bot window and start it again to apply.";
-  msgEl.innerHTML = j.ok ? (j.restartNeeded ? `Saved ✓ — ${restart}` : "Saved ✓") : `<span class="bad">${esc(j.error)}</span>`;
+  msgEl.innerHTML = j.ok ? (j.restartNeeded ? `Saved ✓ — ${restart}` : "Saved ✓") + (j.warning ? ` <span class="warn">— but ${esc(j.warning)}</span>` : "") : `<span class="bad">${esc(j.error)}</span>`;
   await refreshStatus();
   return j.ok;
 }
 $("#saveKey").onclick = async () => { if (await saveSettings({ apiKey: $("#keyInput").value }, $("#keyMsg"))) $("#keyInput").value = ""; };
 $("#savePsa").onclick = async () => { if (await saveSettings({ psaToken: $("#psaInput").value }, $("#connMsg"))) { $("#psaInput").value = ""; openSettings(); } };
+$("#savePriceApi").onclick = async () => {
+  const body = {};
+  if ($("#scpInput").value.trim()) body.scpToken = $("#scpInput").value;
+  if ($("#pcInput").value.trim()) body.pcToken = $("#pcInput").value;
+  if (!Object.keys(body).length) return ($("#connMsg").textContent = "Paste a token first.");
+  $("#connMsg").textContent = "Trying the token…";
+  if (await saveSettings(body, $("#connMsg"))) { $("#scpInput").value = $("#pcInput").value = ""; openSettings(); }
+};
 $("#saveEbay").onclick = async () => { if (await saveSettings({ ebayId: $("#ebayIdInput").value, ebaySecret: $("#ebaySecretInput").value }, $("#connMsg"))) { $("#ebayIdInput").value = $("#ebaySecretInput").value = ""; openSettings(); } };
 $("#saveBudget").onclick = () => saveSettings({ budget: $("#budgetInput").value }, $("#keyMsg"));
 $("#briefToggle").onchange = () => saveSettings({ dailyBrief: $("#briefToggle").checked }, $("#keyMsg"));

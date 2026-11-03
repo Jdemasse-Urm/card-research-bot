@@ -74,6 +74,12 @@ Go to **[Releases](../../releases/latest)** and download the one for your comput
 Then get a **free Gemini API key** at <https://aistudio.google.com/apikey> (sign in with Google → **Create API key**),
 paste it in the app's **⚙ Settings**, and click **🩺 Run self-test**.
 
+**Price search:** SportsCardsPro and PriceCharting put a robot check on their search pages in late Oct 2026, so
+finding a new card's sold prices needs their API: $6/month each (SportsCardsPro for sports cards; PriceCharting
+for Yu-Gi-Oh, One Piece and Pokémon — optional, those also have free sources). Paste the 40-character token from the
+site's Subscription page → API/Download in **Settings → Optional connections**; Save tries it once. Cards already priced
+keep re-pricing without it.
+
 *(Optional)* **PSA token** — free at <https://www.psacard.com/publicapi/documentation> — for slab checks, population
 and grading progress. **eBay keys** — free at <https://developer.ebay.com/my/keys> (Production keyset: App ID +
 Cert ID) — for the deal finder. Paste them in **Settings → Optional connections**.

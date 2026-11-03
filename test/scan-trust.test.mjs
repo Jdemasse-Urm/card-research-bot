@@ -162,9 +162,28 @@ test("settings: Google's new AQ. Gemini keys are accepted (older AIza keys too);
     const bad = await call("POST", "/api/settings", { apiKey: "not a key" });
     assert.equal(bad.status, 400);
     assert.match(bad.body.error, /AQ\./);
+    // a price-site API token that isn't 40 letters/numbers is refused before anything is asked of the site
+    const scp = await call("POST", "/api/settings", { scpToken: "too-short" });
+    assert.equal(scp.status, 400);
+    assert.match(scp.body.error, /SportsCardsPro API token \(40 letters and numbers/);
+    assert.doesNotMatch(fs.readFileSync(path.join(srv.home, ".env"), "utf8"), /SPORTSCARDSPRO_API_TOKEN/);
+    const s = (await call("GET", "/api/settings")).body;
+    assert.deepEqual(s.priceApi, { sportscardspro: false, pricecharting: false });
+    assert.equal(s.psaCheck, null, "no PSA token → nothing to check");
   } finally {
     srv.stop();
   }
+});
+
+test("price sites: a card's page address is built the way both sites build theirs", async () => {
+  const { pageSlug } = await import("../lib/sources/pricecharting.js");
+  // real addresses from the sites' set pages (899 of 900 matched the first rule; "&" was the one fix)
+  assert.equal(pageSlug("Shaquille O'Neal [Silver] #181"), "shaquille-o%27neal-silver-181");
+  assert.equal(pageSlug("Monkey.D.Luffy [Alt Art] OP01-003"), "monkeydluffy-alt-art-op01-003");
+  assert.equal(pageSlug("Ray & Temperature LOB-035"), "ray-&-temperature-lob-035");
+  assert.equal(pageSlug("Ken Griffey Jr. #1"), "ken-griffey-jr-1");
+  assert.equal(pageSlug("Basketball Cards 2023 Panini Prizm"), "basketball-cards-2023-panini-prizm");
+  assert.equal(pageSlug("Pokemon Scarlet & Violet 151"), "pokemon-scarlet-&-violet-151");
 });
 
 test("routes: feedback + accuracy, phone inbox, box opening, video, card facts in the full card", { timeout: 30000 }, async () => {

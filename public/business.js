@@ -982,7 +982,11 @@ const fileKey = (f) => `${f.webkitRelativePath || f.name}|${f.size}|${f.lastModi
 const scanCards = () => scan.pages.flatMap((p) => p.cards);
 const normName = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 /** A card a person should look at before it's added. */
-const needsCheck = (c) => c.confidence === "low" || Boolean(c.parallel_check) || Boolean(c.checklist?.note) || /says|no record/.test(c.certNote || "");
+const needsCheck = (c) => c.confidence === "low" || Boolean(c.parallel_check) || Boolean(c.checklist?.note) || /says|no record/.test(c.certNote || "") || (Boolean(c.problem) && c.confidence !== "high");
+/** What spoiled a card's photo, in words (the finder's note; the phone shows the same). */
+const PROBLEM_LABEL = { glare: "glare", blurry: "blurry", cut_off: "cut off by the edge", too_small: "too small in the picture", covered: "something covers it" };
+/** "phone-mhx1a-0003-a.jpg" → "📱 picture 3" (the phone's own numbering) */
+const fileLabel = (name) => { const m = String(name || "").match(/^phone-\w+-(\d+)-([asb])\.jpg$/); return m ? `📱 picture ${+m[1]}` : name || ""; };
 /** The display name from the card's fields — the same order the reader uses (lib/jobs.js normalizeRead). */
 const nameFromDetails = (d) => [String(d.set || "").startsWith(d.year || "") ? "" : d.year, d.set, d.player, d.number ? "#" + d.number : "", d.parallel, d.serial, d.rookie ? "RC" : "", d.autograph ? "Auto" : "", d.relic ? "Relic" : ""].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 const tagsFromDetails = (d) => [d.rookie && "rookie", d.autograph && "auto", d.relic && "relic", d.serial && "numbered", d.parallel && String(d.parallel).toLowerCase().slice(0, 30)].filter(Boolean);
@@ -1022,6 +1026,8 @@ function scanFixes(c) {
 }
 
 async function loadScan() {
+  scan.unseen = 0;
+  scanBadge();
   $("#invActions").innerHTML = "";
   [scan.inv, scan.people] = await Promise.all([getJSON("/api/inventory").catch(() => []), getJSON("/api/customers").catch(() => [])]);
   drawScan();
@@ -1114,13 +1120,16 @@ async function openPhoneLink() {
     <p class="small muted">The code works for 15 minutes; the phone stays signed in after that.</p>`);
 }
 
-/** Pictures from the phone (named …-a front, …-b back, …-s single) join the scan; a front waits 2 minutes for its back. */
+/**
+ * Pictures from the phone (named …-a front, …-b back, …-s single) join the scan; a front waits 2 minutes for its back.
+ * Runs on the computer running the bot whatever screen is open (the phone shouldn't wait for someone to open Bulk
+ * scan); other screens (the other computer, a phone) never pick up. Each picture is claimed, so it's read once.
+ */
 let inboxTimer = null, inboxBusy = false;
 function pollInbox() {
   if (inboxTimer) return;
   inboxTimer = setInterval(async () => {
-    if (invView !== "scan" || !$("#tab-inventory")?.classList.contains("active")) { clearInterval(inboxTimer); inboxTimer = null; return; }
-    if (inboxBusy) return;
+    if (!status.canEditSettings || status.role === "helper" || inboxBusy) return;
     inboxBusy = true;
     try {
       const list = await getJSON("/api/scan/inbox");
@@ -1140,20 +1149,31 @@ function pollInbox() {
         else if (e.b && !e.a) singles.push(e.b);
       }
       const take = async (x) => {
-        const blob = await (await fetch("/api/scan/inbox/" + encodeURIComponent(x.name))).blob();
-        await fetch("/api/scan/inbox/" + encodeURIComponent(x.name), { method: "DELETE" });
-        return new File([blob], x.name, { type: "image/jpeg", lastModified: Math.round(x.at) });
+        const r = await fetch("/api/scan/inbox/" + encodeURIComponent(x.name) + "/claim", { method: "POST" });
+        return r.ok ? new File([await r.blob()], x.name, { type: "image/jpeg", lastModified: Math.round(x.at) }) : null;
       };
-      const s = await Promise.all(singles.map(take)), p = await Promise.all(pairs.map(take));
+      const s = (await Promise.all(singles.map(take))).filter(Boolean);
+      const got = await Promise.all(pairs.map(take));
+      const mate = (i) => got[i % 2 ? i - 1 : i + 1];
+      const p = got.filter((f, i) => f && mate(i));
+      s.push(...got.filter((f, i) => f && !mate(i))); // half a pair still gets read, on its own
       if (s.length) addScanFiles(s, { quiet: true, duplex: false });
       if (p.length) addScanFiles(p, { quiet: true, duplex: true });
-      if (s.length || p.length) toast(`📱 ${plural(s.length + p.length / 2, "picture")} from the phone`, { ms: 1500 });
+      if (s.length || p.length) toast(`📱 ${plural(s.length + p.length / 2, "picture")} from the phone — reading ${s.length + p.length / 2 === 1 ? "it" : "them"}`, { ms: 1800 });
     } catch {
       /* the next tick tries again */
     } finally {
       inboxBusy = false;
     }
   }, 3000);
+}
+
+pollInbox();
+
+/** Cards read while Bulk scan wasn't open: a count on its button until it's opened. */
+function scanBadge() {
+  const b = $('#invView button[data-v="scan"]');
+  if (b) b.textContent = `📥 Bulk scan${scan.unseen ? ` (${scan.unseen} new)` : ""}`;
 }
 
 function addScanFiles(files, { quiet = false, duplex: forced = null } = {}) {
@@ -1189,6 +1209,7 @@ function drawScanProgress() {
     <progress max="${p.length}" value="${done}" style="width:100%"></progress>
     <div class="small muted">${scan.running ? `Reading… ${eta ? `about ${eta} min left` : ""}` : waiting ? "Paused" : "All files read"}${empty ? ` · ${plural(empty, "file")} with no card found` : ""}${scan.usd ? ` · AI ≈ $${scan.usd.toFixed(2)} on the paid tier ($0 on the free tier)` : ""}</div>
     ${scan.msg ? `<p class="small ${/Paused/.test(scan.msg) ? "bad" : ""}">${esc(scan.msg)}</p>` : ""}
+    ${p.filter((x) => x.countNote).map((x) => `<p class="small warn" style="margin:.2rem 0">⚠ ${esc(fileLabel(x.file.name))}: ${esc(x.countNote)} — a back may be missing or two cards overlap; check those cards' backs.</p>`).join("")}
     <div class="progress small hidden" id="scanSteps"></div></div>`;
   const b = (sel, fn) => { const x = $(sel, el); if (x) x.onclick = fn; };
   b("[data-pause]", () => { scan.paused = true; scan.ctrl?.abort(); });
@@ -1301,15 +1322,17 @@ function forgetPicture(file) {
 async function locatePages(pages) {
   const files = pages.flatMap((p) => (p.back ? [p.file, p.back] : [p.file]));
   const images = await Promise.all(files.map(async (f) => jpegPart(drawScaled(await pictureOf(f), 1600), 0.85)));
-  scan.ctrl = new AbortController();
-  const r = await streamPost("/api/scan/locate", { images }, $("#scanSteps") || document.createElement("div"), scan.ctrl);
+  const r = await streamPost("/api/scan/locate", { images, keys: files.map(fileKey) }, $("#scanSteps") || document.createElement("div"), scan.ctrl);
   scan.usd += r.usage?.usd || 0;
   let i = 0;
   for (const p of pages) {
-    const fronts = r.photos[i++]?.boxes || [];
+    const front = r.photos[i++] || {};
     const backs = p.back ? r.photos[i++]?.boxes || [] : [];
+    const fronts = front.boxes || [];
     const paired = p.back ? matchBacks(fronts, backs) : fronts.map(() => null);
-    p.slots = fronts.map((box, k) => ({ box, backBox: paired[k] }));
+    // note: where it sits on the page, what it's in, and what (if anything) spoiled its photo
+    p.slots = fronts.map((box, k) => ({ box, backBox: paired[k], note: front.notes?.[k] || null }));
+    if (p.back && backs.length !== fronts.length) p.countNote = `front picture has ${fronts.length} cards, back picture ${backs.length}`;
     if (!p.slots.length) { p.status = "done"; p.cards = []; forgetPicture(p.file); forgetPicture(p.back); }
   }
 }
@@ -1321,10 +1344,9 @@ async function readPages(pages) {
     const img = await pictureOf(p.file), back = p.back ? await pictureOf(p.back) : null;
     for (const sl of p.slots) {
       cards.push({ front: jpegPart(cropCard(img, sl.box, 1400)), back: back && sl.backBox ? jpegPart(cropCard(back, sl.backBox, 1400)) : null });
-      slots.push({ key: p.key, box: sl.box, backBox: sl.backBox });
+      slots.push({ key: p.key, backKey: p.back ? fileKey(p.back) : "", box: sl.box, backBox: sl.backBox, note: sl.note });
     }
   }
-  scan.ctrl = new AbortController();
   const { read } = await streamPost("/api/scan/read", { cards, slots }, $("#scanSteps") || document.createElement("div"), scan.ctrl);
   scan.usd += read.usage?.usd || 0;
   for (const p of pages) await finishPage(p, read.cards.filter((_, i) => slots[i].key === p.key));
@@ -1335,6 +1357,7 @@ async function runScan() {
   scan.running = true;
   scan.paused = false;
   scan.msg = "";
+  scan.ctrl = new AbortController(); // one for the whole run: Pause stops the finding and the reading together
   drawScanProgress();
   try {
     // files read before (an earlier session, or before a pause) come back free
@@ -1345,25 +1368,25 @@ async function runScan() {
       const waiting = scan.pages.filter((p) => p.status === "waiting" && p.file);
       if (!waiting.length) break;
       const t0 = Date.now();
-      // find the cards in up to 6 pictures at a time, then read whole files, up to 12 cards per call
-      const unlocated = waiting.filter((p) => !p.slots).slice(0, 6);
+      // Read whole files whose cards are found (up to 12 cards per call) WHILE the next pictures (up to 6) are being
+      // found — the two calls run side by side, so a phone sending a page every few seconds doesn't build a queue.
       const batch = [];
-      if (!unlocated.length) {
-        let n = 0;
-        for (const p of waiting) { if (batch.length && n + p.slots.length > 12) break; batch.push(p); n += p.slots.length; }
-      }
-      const work = unlocated.length ? unlocated : batch;
+      let n = 0;
+      for (const p of waiting.filter((x) => x.slots)) { if (batch.length && n + p.slots.length > 12) break; batch.push(p); n += p.slots.length; }
+      const unlocated = waiting.filter((p) => !p.slots).slice(0, 6);
+      const steps = [];
+      if (batch.length) steps.push([batch, () => readPages(batch).then(() => {
+        const per = (Date.now() - t0) / 1000 / batch.length;
+        scan.secsPerFile = scan.secsPerFile ? scan.secsPerFile * 0.6 + per * 0.4 : per;
+      })]);
+      if (unlocated.length) steps.push([unlocated, () => locatePages(unlocated)]);
+      const work = steps.flatMap(([pages]) => pages);
       work.forEach((p) => (p.status = "reading"));
-      try {
-        if (unlocated.length) await locatePages(unlocated);
-        else {
-          await readPages(batch);
-          const per = (Date.now() - t0) / 1000 / batch.length;
-          scan.secsPerFile = scan.secsPerFile ? scan.secsPerFile * 0.6 + per * 0.4 : per;
-        }
-        work.forEach((p) => p.status === "reading" && (p.status = "waiting"));
-      } catch (err) {
-        work.forEach((p) => p.status === "reading" && (p.status = "waiting"));
+      const results = await Promise.allSettled(steps.map(([, run]) => run()));
+      work.forEach((p) => p.status === "reading" && (p.status = "waiting"));
+      const failed = results.find((r) => r.status === "rejected");
+      if (failed) {
+        const err = failed.reason;
         scan.paused = true;
         scan.msg = /cancel/i.test(err.message) ? "" : `Paused: ${err.message}${/quota|limit|429/i.test(err.message) ? " Everything read so far is kept — press Resume later (or tomorrow)." : ""}`;
       }
@@ -1472,11 +1495,11 @@ function scanRowHtml(c) {
     <td><input type="checkbox" data-inc${c.include ? " checked" : ""} aria-label="Add ${esc(c.name)}"></td>
     <td>${c.thumb ? `<button class="ghost bare" data-zoom title="Look at it big (front and back)"><img class="scan-thumb" src="${c.thumb}" alt="Card picture"></button>` : `<span class="muted small">slab</span>`}</td>
     <td><input data-name value="${esc(c.name)}" aria-label="Card name" class="scan-name">
-      <div class="small">${(c.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ")}${c.backBox ? ` <span class="chip" title="The back was read too">+ back</span>` : ""}${c.certVerified ? ` <span class="chip good" title="${esc(c.certNote || "")}">✓ PSA</span>` : ""}${c.checklist && !c.checklist.note ? ` <span class="chip good" title="${esc(`#${c.checklist.number} in ${c.checklist.set}`)}">✓ checklist</span>` : ""} <button class="ghost small" data-fix title="Fix what was read, field by field (the reader learns from it)">✎ fix</button></div>
+      <div class="small">${(c.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ")}${c.backBox ? ` <span class="chip" title="The back was read too">+ back</span>` : ""}${c.problem ? ` <span class="chip warn" title="The picture of this card: ${esc(PROBLEM_LABEL[c.problem] || c.problem)} — a retake reads better">📷 ${esc(PROBLEM_LABEL[c.problem] || c.problem)}</span>` : ""}${c.lookedTwice ? ` <span class="chip${c.lookedTwice.sure ? " good" : ""}" title="${esc(c.lookedTwice.note || "")}">👀 looked twice${c.lookedTwice.changed ? " — changed" : ""}</span>` : ""}${c.certVerified ? ` <span class="chip good" title="${esc(c.certNote || "")}">✓ PSA</span>` : ""}${c.checklist && !c.checklist.note ? ` <span class="chip good" title="${esc(`#${c.checklist.number} in ${c.checklist.set}`)}">✓ checklist</span>` : ""} <button class="ghost small" data-fix title="Fix what was read, field by field (the reader learns from it)">✎ fix</button></div>
       ${c.checklist?.note ? `<div class="small warn">⚠ ${esc(c.checklist.note)}</div>` : ""}
       ${c.parallel_check ? `<div class="small warn">⚠ Check: ${esc(c.parallel_check)}</div>` : ""}
       ${c.certNote && !c.certVerified ? `<div class="small bad">${esc(c.certNote)}</div>` : c.certNote && /says/.test(c.certNote) ? `<div class="small warn">${esc(c.certNote)}</div>` : ""}
-      <div class="small muted">${esc(c.page?.file?.name || "")}${c.position ? " · " + esc(c.position) : ""}${c.condition_note ? " · " + esc(c.condition_note) : ""}${c.cert ? ` · cert ${c.certUrl ? link(c.certUrl, c.cert) : esc(c.cert)}` : ""}</div></td>
+      <div class="small muted">${esc(fileLabel(c.page?.file?.name))}${c.position ? " · " + esc(c.position) : ""}${c.holder && c.holder !== "none" ? " · in a " + esc(c.holder.replace("_", "-")) : ""}${c.condition?.scale ? ` · <b title="${esc(c.condition.notes || "")}">${esc(c.condition.scale)}</b>${c.condition.centering ? " " + esc(c.condition.centering) : ""}` : ""}${c.condition_note ? " · " + esc(c.condition_note) : ""}${c.cert ? ` · cert ${c.certUrl ? link(c.certUrl, c.cert) : esc(c.cert)}` : ""}</div></td>
     <td><input data-grade value="${esc(c.grade)}" size="7" aria-label="Grade"></td>
     <td><span class="chip ${c.confidence === "high" && !low ? "good" : low ? "bad" : "warn"}" title="How sure the reader is">${low ? "check" : esc(c.confidence || "")}</span> ${dupNote(c)}</td>
     <td class="num" data-val>${usd(c.value)}<div class="small">${c.url ? link(c.url, "sales") : `<span class="muted">no match</span>`}</div></td>
@@ -1504,6 +1527,7 @@ function scanReviewHtml() {
 }
 function appendScanRows(cards) {
   if (!cards.length) return;
+  if (!$("#scanReview")) { scan.unseen = (scan.unseen || 0) + cards.length; return scanBadge(); } // drawn when Bulk scan opens
   const tb = $("#scanReview [data-scanrows]");
   if (!tb) { $("#scanReview").innerHTML = scanReviewHtml(); wireScanReview(); return; }
   tb.insertAdjacentHTML("beforeend", cards.map(scanRowHtml).join(""));
@@ -1607,6 +1631,8 @@ async function addScanned(btn) {
           value: c.value ?? null, priceUrl: c.url || null, location: f.location || "", status: f.status, purchased: today(),
           tags: c.tags || [],
           facts: factsOf(c),
+          // the reader's condition estimate (scale, corners, edges, surface, centering) — raw cards only
+          ...(c.condition && /^raw$/i.test(c.grade || "Raw") ? { condition: c.condition } : {}),
           notes: [`Scanned ${today()}`, c.condition_note, c.cert ? `cert ${c.cert}${c.certVerified ? " (matches PSA)" : ""}` : "", c.parallel_check ? `check: ${c.parallel_check}` : ""].filter(Boolean).join(" · "),
           photos,
         });

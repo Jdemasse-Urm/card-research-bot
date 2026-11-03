@@ -468,10 +468,22 @@ app.post("/api/lot", (req, res) => {
 });
 
 // Bulk scan, step 1: where the cards are in each picture (fronts and backs), so each can be cut out.
+// keys[i] = which scanned file images[i] is (a phone picture's name inside it lets the phone see the result)
 app.post("/api/scan/locate", (req, res) => {
   const images = cleanImages(req.body?.images, 12);
   if (!images.length) return res.status(400).json({ error: "No pictures to look at." });
-  streamJob(req, res, (send, signal) => locateCards({ images }, { onEvent: send, signal }));
+  const keys = (Array.isArray(req.body?.keys) ? req.body.keys : []).slice(0, images.length).map((k) => String(k || "").slice(0, 300));
+  streamJob(req, res, async (send, signal) => {
+    try {
+      const r = await locateCards({ images }, { onEvent: send, signal });
+      const each = (r.usage?.usd || 0) / Math.max(1, images.length); // what finding cost, per picture (paid tier)
+      r.photos.forEach((p, i) => setPhone(keys[i], { stage: "found", found: p.boxes.length, findUsd: each, problems: p.notes.filter((n) => n.problem !== "none").map(({ position, problem }) => ({ position, problem })) }));
+      return r;
+    } catch (err) {
+      keys.forEach((k) => setPhone(k, { stage: "error", error: explainError(err) }));
+      throw err;
+    }
+  });
 });
 // Bulk scan, step 2: each card's own cut-out (+ its back) read up close and priced. Each scanned file's cards are
 // kept ("scan-queue", a month) so opening the same folder again after a pause or a crash never pays twice.
@@ -481,10 +493,27 @@ app.post("/api/scan/read", (req, res) => {
   const cards = raw.map((c) => ({ front: cleanImages([c?.front], 1)[0], back: cleanImages([c?.back], 1)[0] || null }));
   if (!cards.length || cards.some((c) => !c.front)) return res.status(400).json({ error: "Each card needs its picture." });
   const box = (b) => (Array.isArray(b) && b.length === 4 && b.every((v) => Number.isFinite(+v)) ? b.map((v) => Math.min(1000, Math.max(0, Math.round(+v)))) : null);
-  const slots = (Array.isArray(req.body?.slots) ? req.body.slots : []).slice(0, cards.length).map((x) => ({ key: String(x?.key || "").slice(0, 300), box: box(x?.box), backBox: box(x?.backBox) }));
+  const slots = (Array.isArray(req.body?.slots) ? req.body.slots : []).slice(0, cards.length).map((x) => ({
+    key: String(x?.key || "").slice(0, 300), backKey: String(x?.backKey || "").slice(0, 300), box: box(x?.box), backBox: box(x?.backBox),
+    // the finder's note on this card: where it sits on the page, what it's in, what spoiled its photo
+    position: store.clean.str(x?.note?.position, 30), holder: store.clean.str(x?.note?.holder, 20), problem: store.clean.str(x?.note?.problem, 20),
+  }));
   streamJob(req, res, async (send, signal) => {
-    const read = await readCards({ cards, hints: store.scanHints() }, { onEvent: send, signal });
-    read.cards.forEach((c, i) => Object.assign(c, { wanted: wantMatches(c.url, c.grade, c.name), box: slots[i]?.box ?? null, backBox: slots[i]?.backBox ?? null }));
+    let read;
+    try {
+      read = await readCards({ cards, hints: store.scanHints() }, { onEvent: send, signal });
+    } catch (err) {
+      for (const s of slots) setPhone(s.key, { stage: "error", error: explainError(err) });
+      throw err;
+    }
+    read.cards.forEach((c, i) => Object.assign(c, { wanted: wantMatches(c.url, c.grade, c.name), box: slots[i]?.box ?? null, backBox: slots[i]?.backBox ?? null, position: slots[i]?.position || c.position || "", holder: slots[i]?.holder || "", problem: slots[i]?.problem && slots[i].problem !== "none" ? slots[i].problem : "" }));
+    // the phone sees each card it sent: name, value, and whether to look again
+    for (const key of new Set(slots.map((x) => x.key))) {
+      const mine = read.cards.filter((_, i) => slots[i].key === key);
+      setPhone(key, { stage: "read", readUsd: ((read.usage?.usd || 0) * mine.length) / Math.max(1, read.cards.length), cards: mine.map((c) => ({ name: c.name, grade: c.grade, value: c.value, position: c.position, problem: c.problem, check: c.checklist?.note || c.parallel_check || (c.confidence === "low" ? "The reader isn't sure — look at it on the computer" : "") || "" })) });
+      const back = slots.find((x) => x.key === key && x.backKey)?.backKey;
+      if (back) setPhone(back, { stage: "read", backOf: phoneName(key) });
+    }
     if (slots.length === cards.length && slots.every((x) => x.key)) {
       const q = store.load("scan-queue", {});
       const at = new Date().toISOString();
@@ -505,6 +534,24 @@ app.get("/api/scan/accuracy", (_req, res) => res.json({ ...store.scanAccuracy(),
 // Phone → computer: photos taken on the phone land in an inbox the computer's Bulk scan picks up.
 const INBOX = path.join(store.DATA_DIR, "scan-inbox");
 const inboxName = (n) => String(n || "").replace(/[^\w.-]/g, "").slice(0, 80);
+
+// What the phone sees after each picture: sent → being read → found (and which cards need a retake) → read (each
+// card and its value), or the error. In memory for the session, by picture name (phone-<session>-<n>-<side>.jpg).
+const phoneStatus = new Map();
+const phoneName = (key) => String(key || "").split("|")[0].split("/").pop().match(/^phone-[\w-]+\.jpg$/)?.[0] || null;
+function setPhone(key, patch) {
+  const n = phoneName(key);
+  if (!n) return;
+  phoneStatus.set(n, { ...(phoneStatus.get(n) || {}), ...patch, at: Date.now() });
+  if (phoneStatus.size > 3000) for (const k of [...phoneStatus.keys()].slice(0, 1000)) phoneStatus.delete(k);
+}
+app.get("/api/scan/phone-status", (req, res) => {
+  const s = String(req.query.session || "").replace(/\W/g, "");
+  const out = {};
+  if (s) for (const [n, v] of phoneStatus) if (n.startsWith(`phone-${s}-`)) out[n] = v;
+  res.json({ pictures: out, computer: inboxSeenAt ? Math.round((Date.now() - inboxSeenAt) / 1000) : null });
+});
+let inboxSeenAt = 0; // when the computer's Bulk scan last looked for phone pictures (the phone says if nobody is)
 app.get("/api/scan/phone-link", async (req, res) => {
   if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
   if (!SHARE) return res.json({ share: false });
@@ -518,12 +565,16 @@ app.post("/api/scan/inbox", (req, res) => {
   const buf = m ? Buffer.from(m[1], "base64") : null;
   if (!buf || buf.length < 1000 || buf.length > 15e6 || buf[0] !== 0xff || buf[1] !== 0xd8) return res.status(400).json({ error: "Send a JPEG photo." });
   fs.mkdirSync(INBOX, { recursive: true });
-  if (fs.readdirSync(INBOX).length >= 500) return res.status(429).json({ error: "500 photos are waiting — open Bulk scan on the computer to read them first." });
+  if (fs.readdirSync(INBOX).filter((f) => f.endsWith(".jpg")).length >= 500) return res.status(429).json({ error: "500 photos are waiting — is Card Research Bot open on the computer? It reads them as they come in." });
   const name = `${inboxName(req.body?.name) || "phone-" + Date.now()}.jpg`;
+  // the same name again (a retry after a dropped answer) replaces the picture — never a second copy
+  if (fs.existsSync(path.join(INBOX, "done", name))) return res.json({ ok: true, name, already: true });
   fs.writeFileSync(path.join(INBOX, name), buf);
+  setPhone(name, { stage: "sent", error: null });
   res.json({ ok: true, name });
 });
 app.get("/api/scan/inbox", (_req, res) => {
+  inboxSeenAt = Date.now();
   let files = [];
   try {
     files = fs.readdirSync(INBOX).filter((f) => f.endsWith(".jpg")).map((f) => ({ name: f, at: fs.statSync(path.join(INBOX, f)).mtimeMs }));
@@ -532,17 +583,31 @@ app.get("/api/scan/inbox", (_req, res) => {
   } catch {}
   res.json(files.sort((a, b) => a.at - b.at));
 });
-app.get("/api/scan/inbox/:name", (req, res) => {
-  const f = path.join(INBOX, inboxName(req.params.name));
-  if (!fs.existsSync(f)) return res.status(404).end();
-  res.sendFile(f);
-});
-// picked up by the computer: kept a week in done/ in case the scan never finished
-app.delete("/api/scan/inbox/:name", (req, res) => {
+// The computer takes a picture: the first to ask gets it (moved to done/, kept a week in case the scan never finishes);
+// anyone else gets 404 — two open screens never read the same picture twice.
+app.post("/api/scan/inbox/:name/claim", (req, res) => {
+  const name = inboxName(req.params.name), f = path.join(INBOX, name);
+  let buf;
   try {
+    buf = fs.readFileSync(f);
     fs.mkdirSync(path.join(INBOX, "done"), { recursive: true });
-    fs.renameSync(path.join(INBOX, inboxName(req.params.name)), path.join(INBOX, "done", inboxName(req.params.name)));
-  } catch {}
+    fs.renameSync(f, path.join(INBOX, "done", name));
+  } catch {
+    return res.status(404).json({ error: "Already taken." });
+  }
+  setPhone(name, { stage: "reading" });
+  res.setHeader("Content-Type", "image/jpeg");
+  res.send(buf);
+});
+// The phone takes back a picture the computer hasn't started on (Undo).
+app.delete("/api/scan/inbox/:name", (req, res) => {
+  const name = inboxName(req.params.name);
+  try {
+    fs.unlinkSync(path.join(INBOX, name));
+  } catch {
+    return res.status(409).json({ error: "The computer is already reading it — remove the card from the list there." });
+  }
+  phoneStatus.delete(name);
   res.json({ ok: true });
 });
 app.delete("/api/scan", (req, res) => {

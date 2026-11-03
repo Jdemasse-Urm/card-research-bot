@@ -66,6 +66,45 @@ test("checklist: One Piece codes and zero-padded numbers match", () => {
   assert.equal(jobs.checklistCheck(wemby({ number: "0136" }), PRIZM_136).note, null);
 });
 
+test("phone scans: each found card gets its place on the page, what it's in, and what spoiled its photo", () => {
+  const photos = jobs.placeCards(2, [
+    { photo: 1, box: [520, 40, 990, 480], problem: "none", holder: "sleeve" },
+    { photo: 1, box: [10, 520, 480, 960], problem: "glare", holder: "toploader" },
+    { photo: 1, box: [10, 40, 480, 480], problem: "made-up", holder: "?" },
+    { photo: 2, box: [100, 100, 900, 900], problem: "blurry", holder: "slab" },
+    { photo: 9, box: [1, 1, 500, 500] }, // a photo that doesn't exist
+  ]);
+  assert.equal(photos.length, 2);
+  assert.deepEqual(photos[0].boxes, [[10, 40, 480, 480], [10, 520, 480, 960], [520, 40, 990, 480]], "rows top to bottom, left to right");
+  assert.deepEqual(photos[0].notes, [
+    { problem: "none", holder: "none", position: "row 1, card 1" }, // unknown words become none
+    { problem: "glare", holder: "toploader", position: "row 1, card 2" },
+    { problem: "none", holder: "sleeve", position: "row 2, card 1" },
+  ]);
+  assert.deepEqual(photos[1].notes, [{ problem: "blurry", holder: "slab", position: "" }], "one card in the picture: no position");
+});
+
+test("full details: a raw card's condition, centering and PSA odds from the scan land in the inventory's own fields", () => {
+  const raw = jobs.normalizeRead({ player_or_character: "Wemby", card_number: "136", grading_company: null, condition: "NM", corners: "Sharp", edges: "Light wear", surface: "Clean", centering: "55/45 L/R · 60/40 T/B", psa10_pct: 22.4, psa9_pct: 48, identification_confidence: "high" }, 1);
+  assert.deepEqual(raw.condition, { scale: "NM", corners: "Sharp", edges: "Light wear", surface: "Clean", centering: "55/45 L/R · 60/40 T/B", notes: "Estimated from the scan photo · PSA 10 ~22% · PSA 9 ~48%" });
+  const slab = jobs.normalizeRead({ player_or_character: "Wemby", grading_company: "PSA", grade: "10", condition: "NM" }, 2);
+  assert.equal(slab.condition, null, "a slab's grade is the grade — no photo estimate");
+  const hidden = jobs.normalizeRead({ player_or_character: "X", condition: "n/a", corners: "n/a", edges: "n/a", surface: "n/a", centering: null }, 3);
+  assert.equal(hidden.condition, null, "glare hid everything: nothing made up");
+  // the row keeps it as the editor would, so "What to grade next" reads it
+  const row = store.addInventory({ name: raw.name, condition: raw.condition });
+  assert.equal(find(row.id).condition.scale, "NM");
+  assert.equal(find(row.id).condition.centering, "55/45 L/R · 60/40 T/B");
+});
+
+test("a second look goes to the unsure cards only — never to a PSA-verified slab", () => {
+  assert.equal(jobs.needsSecondLook({ confidence: "high" }), false);
+  assert.equal(jobs.needsSecondLook({ confidence: "low" }), true);
+  assert.equal(jobs.needsSecondLook({ confidence: "high", parallel_check: "Silver or base?" }), true);
+  assert.equal(jobs.needsSecondLook({ confidence: "high", checklist: { note: "no Gold version listed" } }), true);
+  assert.equal(jobs.needsSecondLook({ confidence: "low", certVerified: true }), false);
+});
+
 test("parallel matching: noise words and print runs don't count; a word the listing lacks does", () => {
   assert.ok(jobs.parallelMatches("Silver Prizm", "Silver"));
   assert.ok(jobs.parallelMatches("Blue /199", "Blue"));
@@ -203,9 +242,27 @@ test("routes: feedback + accuracy, phone inbox, box opening, video, card facts i
     const sent = (await call("POST", "/api/scan/inbox", { image: jpeg, name: "phone-x-0001-a/../evil" })).body;
     assert.equal(sent.name, "phone-x-0001-a..evil.jpg", "no path tricks in the name");
     assert.deepEqual((await call("GET", "/api/scan/inbox")).body.map((x) => x.name), [sent.name]);
-    await call("DELETE", "/api/scan/inbox/" + sent.name);
+    // the computer claims it: it gets the picture, a second claim (another open screen) gets nothing
+    const claim = await call("POST", "/api/scan/inbox/" + sent.name + "/claim");
+    assert.equal(claim.status, 200);
+    assert.equal(claim.text.length > 1000, true, "the picture itself");
+    assert.equal((await call("POST", "/api/scan/inbox/" + sent.name + "/claim")).status, 404, "read once, never twice");
     assert.deepEqual((await call("GET", "/api/scan/inbox")).body, [], "picked up = out of the inbox");
     assert.ok(fs.existsSync(path.join(srv.home, "data", "scan-inbox", "done", sent.name)), "kept a week in case the scan never finished");
+    assert.equal((await call("POST", "/api/scan/inbox", { image: jpeg, name: "phone-x-0001-a..evil" })).body.already, true, "a retry of a picture already taken isn't a second copy");
+    assert.equal((await call("DELETE", "/api/scan/inbox/" + sent.name)).status, 409, "too late to take it back once it's being read");
+
+    // the phone's view: sent → being read, per picture of its own session; Undo takes back one not started
+    const p1 = (await call("POST", "/api/scan/inbox", { image: jpeg, name: "phone-sess1-0001-s" })).body.name;
+    (await call("POST", "/api/scan/inbox", { image: jpeg, name: "phone-other-0001-s" }));
+    const ps = (await call("GET", "/api/scan/phone-status?session=sess1")).body;
+    assert.deepEqual(Object.keys(ps.pictures), [p1], "only this phone's pictures");
+    assert.equal(ps.pictures[p1].stage, "sent");
+    assert.ok(ps.computer != null, "the computer has looked for pictures (seconds ago)");
+    await call("POST", "/api/scan/inbox/" + p1 + "/claim");
+    assert.equal((await call("GET", "/api/scan/phone-status?session=sess1")).body.pictures[p1].stage, "reading");
+    assert.equal((await call("DELETE", "/api/scan/inbox/phone-other-0001-s.jpg")).status, 200, "undo before the computer took it");
+    assert.deepEqual((await call("GET", "/api/scan/phone-status?session=other")).body.pictures, {});
 
     // a box opened into the cards just added
     const box = (await call("POST", "/api/inventory", { name: "Blaster", kind: "sealed", sealedType: "Blaster box", cost: 30 })).body;

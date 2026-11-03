@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.15.0 — the iPhone scans pages of cards and tells you what it found
+
+- **Full-resolution pictures.** The phone sends its camera's full picture (up to 4096 px, an iPhone's 4032) instead
+  of shrinking it to 2400 — on a 9-card page that's about 1.7× the detail on every card number and serial.
+- **Read whatever screen the computer is on.** Phone pictures used to wait until someone opened Bulk scan. Now the
+  computer running the bot reads them as they arrive, on any screen; Bulk scan shows "(5 new)" until it's opened.
+  Each picture is claimed by one screen, so it's never read twice.
+- **The phone shows what was found**, a few seconds after each picture: how many cards, which ones to retake —
+  glare, blurry, cut off by the edge, too small — by position ("row 2, card 3"), and each card's name and value. Tap a
+  picture for the list. Running totals (cards, value, how many to check), a warning when the same page seems to have
+  been shot twice, and when a front and its back show a different number of cards.
+- **Nothing lost on a Wi-Fi drop.** Pictures wait on the phone and go when the connection is back (with a count of
+  how many are waiting); a retry is never a second copy. **Undo last** takes back a picture the computer hasn't
+  started. A quick check before sending warns when a picture is too dark or blurry. Optional short sound when a
+  picture is read. The phone keeps its session through a reload; **Start over** begins a new one.
+- **A second look at the unsure cards.** After the first read, cards it wasn't sure of — or that don't match the set's
+  checklist — are read again up close, choosing from the versions the checklist really lists for that number (Base,
+  Silver, Red Wave…). What changed is re-checked and re-priced; the row shows 👀 looked twice.
+- **Full details on every raw card**: condition (NM / LP / MP / HP / DMG, corners, edges, surface), centering and the
+  PSA 10 / 9 odds, as an estimate from the photo, saved on the inventory row — "What to grade next" uses them.
+- **Faster pages.** Finding the cards in the next pictures and reading the last ones now run side by side.
+- The review list shows each card's place on the page, what it's in (sleeve, toploader, slab), a 📷 note when its
+  photo had glare or blur, and "📱 picture 3" for phone pictures.
+
 ## 3.14.3 — the search message says what the free tier really allows
 
 - When Google refuses a search, the message now says plainly that the key's project is on Google's free tier, which

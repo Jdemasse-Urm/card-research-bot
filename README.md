@@ -126,6 +126,13 @@ Turn on **Settings → Share on home network** (or use a phone hotspot that the 
 shows on the phone, enter the PIN, then use **Share → Add to Home Screen** (iPhone Safari) or **Install app**
 (Android Chrome). The **📷 Take photo** button opens the camera.
 
+**Scanning a stack or binder pages with the phone:** Inventory → Bulk scan → **📱 Phone** shows a QR code; open it on
+the phone (same Wi-Fi). Each picture goes to the computer at full resolution and is read there — whatever screen the
+app is on — and the phone shows what was found a few seconds later: how many cards, which ones to retake (glare,
+blurry, cut off — "row 2, card 3"), and each card's name and value. Tick **Front + back** to flip the card (or the whole
+page, like a book page) after each front. A dropped Wi-Fi doesn't lose a picture: it waits on the phone and goes when
+the connection is back. Check and add the cards on the computer (Inventory → Bulk scan shows how many are new).
+
 ## Card shows: Show mode, labels and a barcode scanner
 
 **Inventory → 🏪 Show mode** is a register: scan or type a card, set its price, tap how they paid, **Complete sale**.

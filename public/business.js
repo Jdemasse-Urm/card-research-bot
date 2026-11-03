@@ -283,7 +283,7 @@ function drawStock() {
     return `<tr data-id="${esc(r.id)}" class="${r.status === "sold" ? "sold" : ""}${invSel.has(r.id) ? " picked" : ""}">
       <td><input type="checkbox" data-sel aria-label="Select ${esc(r.name)}"${invSel.has(r.id) ? " checked" : ""}></td>
       <td><b>${esc(r.name)}</b>${r.kind === "sealed" ? ` <span class="chip">📦 ${esc(r.sealedType || "sealed")}</span>` : r.condition?.scale && /^raw$/i.test(r.grade) ? ` <span class="chip" title="${esc(status.conditions?.[r.condition.scale] || "")}">${esc(r.condition.scale)}</span>` : ""}<div class="small muted">${esc(r.sku || "")}${r.location ? " · 📍" + esc(r.location) : ""}${(r.tags || []).length ? " · " + r.tags.map((t) => "#" + esc(t)).join(" ") : ""}${r.priceUrl ? " · " + link(r.priceUrl, "sales") : ""}${r.addedBy ? " · " + esc(r.addedBy) : ""}</div></td>
-      <td class="small">${esc(r.grade)}</td><td class="num">${esc(r.qty)}</td>
+      <td class="small">${esc(r.grade)}${r.facts?.certVerified ? ` <span class="chip good" title="PSA's record for cert ${esc(r.facts.cert)} matches this card">✓</span>` : ""}${r.psaPop?.flagged ? ` <span class="chip bad" title="PSA's record for this cert doesn't match the row — see the alert">⚠</span>` : ""}${r.psaPop?.pop != null ? `<div class="muted" title="PSA population at this grade (and higher), checked ${esc(when(r.psaPop.at))}">pop ${esc(r.psaPop.pop)}${r.psaPop.higher != null ? ` · ${esc(r.psaPop.higher)} higher` : ""}</div>` : ""}</td><td class="num">${esc(r.qty)}</td>
       <td class="num">${usd(r.cost)}</td>
       <td class="num">${r.status === "sold" ? `sold ${usd(r.soldPrice)}` : r.priceUrl ? usd(r.value) + (r.spark ? sparkline(r.spark) : "") + trend : `<button class="small" data-findprice title="Link to a sales page so this card gets valued">💲 Find price</button>`}<div class="small muted">${r.status === "sold" ? esc(r.soldOn || "") : r.priceUrl ? `${esc(when(r.valuedAt))}${!r.valuedAt || Date.now() - Date.parse(r.valuedAt) > 7 * 86400000 ? ` <span class="chip warn" title="Older than a week">stale</span> <button class="ghost small" data-revalue aria-label="Re-value now">↻</button>` : ""}` : ""}</div></td>
       <td class="num ${pl == null ? "" : pl >= 0 ? "pos" : "neg"}">${usd(pl)}</td>
@@ -787,6 +787,7 @@ async function openItemEditor(row = null) {
         <label style="margin-top:.5rem">Website description <span class="muted">(blank = the research summary)</span><textarea name="webDescription" rows="3">${esc(r.webDescription || "")}</textarea></label>
         ${row ? `<div class="row" style="margin:.3rem 0 0"><button type="button" class="small" data-describe>✍ Write it with AI</button><span class="small muted">uses the card's research report</span></div>
         <div class="photo-strip" data-photos></div>
+        ${r.facts?.cert && /^PSA\b/i.test(r.grade || "") ? `<div class="row small" style="margin:.3rem 0 0"><button type="button" class="small ghost" data-psaphotos>🖼 PSA's own photos of cert ${esc(r.facts.cert)}</button>${r.facts.certVerified ? "<span class=\"chip good\">✓ matches PSA</span>" : ""}</div><div data-psaphotobox></div>` : ""}
         <div class="row" style="margin:.3rem 0 0"><label class="button small" for="photoIn">📷 Add photos</label><input type="file" id="photoIn" accept="image/*" multiple hidden><span class="small muted">Front first. Your own photos — up to 8.</span></div>
         <div class="row" style="margin:.5rem 0 0;align-items:center" data-videobox></div>` : `<p class="small muted">Save the card first, then reopen it to add photos and a video.</p>`}
       </fieldset>
@@ -1678,7 +1679,7 @@ async function openGradePicker() {
   const body = openModal("🧮 What to grade next", `
     <form class="row" data-gp><label>Raw cards worth at least $<input name="minRaw" type="number" min="0" value="${esc(store.get("gradeMin", 10))}" style="width:90px"></label><button class="primary">Rank them</button></form>
     <p class="small muted">For each raw card with a sales page: its sold value at PSA 10 / 9 / 8 / 7, the odds of each from the card's condition and centering (rules of thumb — set the condition on your cards for better odds), less eBay fees and your grading cost (Shop settings). Estimates, not promises.</p>
-    <div class="progress small hidden" data-gpprog></div><div data-gpout></div>`, { wide: true });
+    <div class="progress small hidden" data-gpprog></div><div data-precheckout class="small"></div><div data-gpout></div>`, { wide: true });
   $("[data-gp]", body).onsubmit = async (e) => {
     e.preventDefault();
     store.set("gradeMin", e.target.minRaw.value);
@@ -1692,11 +1693,65 @@ async function openGradePicker() {
     const ODDS = { great: "NM, centered", good: "NM, 60/40", off: "NM, off-center", lp: "LP", unknown: "condition not set" };
     $("[data-gpout]", body).innerHTML = r.cards.length ? `<div class="table-wrap" style="max-height:55vh"><table class="small"><tr><th></th><th>Card</th><th class="num">Raw</th><th class="num">PSA 10 / 9 / 8</th><th>Odds from</th><th class="num">Grading adds</th><th class="num">ROI</th></tr>
       ${r.cards.map((c) => `<tr><td><input type="checkbox" data-gid="${esc(c.id)}"${c.gain > 0 ? " checked" : ""} aria-label="Grade ${esc(c.name)}"></td><td>${esc(c.name)}<div class="muted">${esc(c.sku || "")}${c.location ? " · 📍" + esc(c.location) : ""}</div></td><td class="num">${usd(c.raw)}</td><td class="num">${usd(c.values.psa10)} / ${usd(c.values.psa9)} / ${usd(c.values.psa8)}</td><td>${esc(ODDS[c.oddsFrom])} <span class="muted">(${Math.round(c.odds[0] * 100)}% 10s)</span></td><td class="num ${c.gain > 0 ? "pos" : "neg"}">${usd(c.gain)}</td><td class="num">${c.roi}%</td></tr>`).join("")}</table></div>
-      <div class="row"><button class="primary" data-mksub>＋ New submission with the ticked cards</button><span class="small muted">grading cost used: ${usd(r.fee)} a card</span></div>`
+      <div class="row"><button data-precheck title="Look at the ticked cards' photos the way a grader would — centering, corners, edges, surface — and rank them again">🔍 Check their photos first</button><button data-prep title="Year, set, number, player, variety and declared value for each — and which service level fits">📋 List for the grader</button><button class="primary" data-mksub>＋ New submission with the ticked cards</button><span class="small muted">grading cost used: ${usd(r.fee)} a card</span></div>`
       : `<p class="muted">No raw cards with a sales page worth that much (and not Moderately Played or worse).</p>`;
+    const ticked = () => { const ids = $$("[data-gid]:checked", body).map((c) => c.dataset.gid); if (!ids.length) toast("Tick some cards.", { error: true }); return ids; };
     const mk = $("[data-mksub]", body);
-    if (mk) mk.onclick = () => { const ids = $$("[data-gid]:checked", body).map((c) => c.dataset.gid); if (!ids.length) return toast("Tick some cards.", { error: true }); openSubmissionEditor(ids); };
+    if (mk) mk.onclick = () => { const ids = ticked(); if (ids.length) openSubmissionEditor(ids); };
+    const prep = $("[data-prep]", body);
+    if (prep) prep.onclick = () => { const ids = ticked(); if (ids.length) { modal.close(); openPrepSheet(ids, "PSA"); } };
+    const pc = $("[data-precheck]", body);
+    if (pc) pc.onclick = async () => {
+      const ids = ticked();
+      if (!ids.length || needKey()) return;
+      pc.disabled = true;
+      try {
+        const out = await streamPost("/api/grading/precheck", { ids }, $("[data-gpprog]", body), new AbortController());
+        $("[data-precheckout]", body).innerHTML = `<ul class="tight">${out.cards.map((c) => `<li><b>${esc(c.name)}</b>: ${c.condition ? `${esc(c.condition.scale || "?")}${c.condition.centering ? " · " + esc(c.condition.centering) : ""} · ${esc(c.condition.notes.replace(/^Estimated from the pre-grade check photo · ?/, ""))}` : "couldn't judge from the photo"}${c.flaw ? ` — <span class="warn">${esc(c.flaw)}</span>` : ""}${c.kept ? ' <span class="muted">(your own condition setting is kept)</span>' : ""}</li>`).join("")}</ul><p class="muted">Ranking again with what the photos show…</p>`;
+        e.target.requestSubmit(); // the ranking re-runs with the new condition and centering
+      } catch (err) {
+        toast(err.message, { error: true });
+      } finally {
+        pc.disabled = false;
+      }
+    };
   };
+}
+
+/** A carrier's own tracking page for a number (the carrier PSA names, or the number's shape). */
+const TRACK = { UPS: (n) => `https://www.ups.com/track?tracknum=${n}`, FedEx: (n) => `https://www.fedex.com/fedextrack/?trknbr=${n}`, USPS: (n) => `https://tools.usps.com/go/TrackConfirmAction?tLabels=${n}` };
+function trackUrl(carrier, n) {
+  const num = String(n || "").replace(/\s/g, "");
+  const k = Object.keys(TRACK).find((c) => new RegExp(c, "i").test(carrier || "")) || (/^1Z/i.test(num) ? "UPS" : /^\d{20,22}$/.test(num) ? "USPS" : /^\d{12,15}$/.test(num) ? "FedEx" : null);
+  return k && num ? TRACK[k](encodeURIComponent(num)) : null;
+}
+const daysFrom = (a, b = new Date().toISOString()) => Math.max(0, Math.round((Date.parse(b) - Date.parse(a.length === 10 ? a + "T12:00:00" : a)) / 86400000));
+const gradeNumber = (g) => parseFloat(String(g || "").match(/(\d+(\.\d)?)\s*$/)?.[1]);
+
+/** What grading did for a finished submission: the cards' values when they went out vs now, less what it cost. */
+function subResult(s, byId) {
+  const items = s.itemIds.map((id) => byId[id]).filter(Boolean);
+  const known = items.filter((r) => s.before?.[r.id] != null && r.value != null);
+  if (!known.length) return null;
+  const before = known.reduce((n, r) => n + s.before[r.id] * (r.qty || 1), 0), after = known.reduce((n, r) => n + r.value * (r.qty || 1), 0);
+  const cost = (s.cost || 0) * (known.length / Math.max(1, items.length));
+  return { before, after, cost, gain: after - before - cost, cards: known.length, of: items.length };
+}
+
+/** By company + service, from finished submissions: how long it took, the grades, and what it added per card. */
+function gradingHistory(subs, byId) {
+  const groups = new Map();
+  for (const s of subs.filter((x) => x.status === "complete" && x.returned)) {
+    const k = `${s.company} ${s.service || ""}`.trim();
+    const g = groups.get(k) || { subs: 0, days: 0, grades: [], gain: 0, gainCards: 0 };
+    g.subs++;
+    g.days += daysFrom(s.sent, s.returned + "T12:00:00");
+    for (const id of s.itemIds) { const n = gradeNumber(byId[id]?.grade); if (Number.isFinite(n)) g.grades.push(n); }
+    const r = subResult(s, byId);
+    if (r) { g.gain += r.gain; g.gainCards += r.cards; }
+    groups.set(k, g);
+  }
+  return [...groups].map(([k, g]) => ({ service: k, subs: g.subs, days: Math.round(g.days / g.subs), avgGrade: g.grades.length ? Math.round((g.grades.reduce((a, b) => a + b, 0) / g.grades.length) * 10) / 10 : null, tens: g.grades.filter((n) => n === 10).length, graded: g.grades.length, perCard: g.gainCards ? g.gain / g.gainCards : null }));
 }
 
 async function loadGrading() {
@@ -1707,85 +1762,212 @@ async function loadGrading() {
     if (!status.psa) return toast("Add a PSA API token in Settings to check progress automatically.", { error: true });
     e.target.disabled = true;
     const r = await (await fetch("/api/submissions/refresh", { method: "POST" })).json();
-    toast(`Checked ${r.checked} PSA submission${r.checked === 1 ? "" : "s"}`);
+    toast(r.checked ? `Checked ${plural(r.checked, "PSA submission")}` : "PSA didn't answer for any submission — Settings → Optional connections shows why", { error: !r.checked });
     loadGrading();
   };
   const [subs, inv] = await Promise.all([getJSON("/api/submissions"), getJSON("/api/inventory")]);
   invRows = inv;
   const byId = Object.fromEntries(inv.map((r) => [r.id, r]));
-  $("#invBody").innerHTML = subs.length
-    ? subs.map((s) => {
-        const items = s.itemIds.map((id) => byId[id]).filter(Boolean);
-        const daysOut = Math.round((Date.now() - Date.parse(s.sent + "T12:00:00")) / 86400000);
-        return `<div class="panel sub" data-id="${esc(s.id)}">
+  const hist = gradingHistory(subs, byId);
+  const todayIso = new Date().toLocaleDateString("en-CA");
+  $("#invBody").innerHTML = (hist.length ? `<details class="panel small"><summary><b>Grading history</b> — ${hist.map((h) => `${esc(h.service)}: ${h.days} days${h.perCard != null ? `, ${usd(h.perCard)} a card` : ""}`).join(" · ")}</summary>
+      <div class="table-wrap"><table><tr><th>Service</th><th class="num">Submissions</th><th class="num">Days out (avg)</th><th class="num">Avg grade</th><th class="num">10s</th><th class="num">Grading added / card</th></tr>
+      ${hist.map((h) => `<tr><td>${esc(h.service)}</td><td class="num">${h.subs}</td><td class="num">${h.days}</td><td class="num">${h.avgGrade ?? "—"}</td><td class="num">${h.tens} of ${h.graded}</td><td class="num ${h.perCard == null ? "" : h.perCard >= 0 ? "pos" : "neg"}">${usd(h.perCard)}</td></tr>`).join("")}</table></div>
+      <p class="muted">"Grading added" = the cards' values now − their values when they went out − what it cost. Values come from sold prices at the new grade.</p></details>` : "") +
+    (subs.length
+      ? subs.map((s) => {
+          const items = s.itemIds.map((id) => byId[id]).filter(Boolean);
+          const out = daysFrom(s.sent);
+          const p = s.progress?.found ? s.progress : null;
+          const late = s.expected && todayIso > s.expected.to && s.status !== "complete";
+          const res = s.status === "complete" ? subResult(s, byId) : null;
+          const stages = (s.stages || []).map((x, i, a) => `${esc(x.stage)} <span class="muted">${esc(day(x.at))}${a[i + 1] ? ` · ${daysFrom(x.at, a[i + 1].at)} d` : ` · ${daysFrom(x.at)} d so far`}</span>`).join(" → ");
+          const track = p?.trackingNumber ? trackUrl(p.carrier, p.trackingNumber) : null;
+          return `<div class="panel sub" data-id="${esc(s.id)}">
           <div class="row space" style="margin:0">
-            <div><b>${esc(s.company)}</b> ${esc(s.service || "")} ${s.number ? `· #${esc(s.number)}` : ""} <span class="chip ${s.status === "complete" ? "good" : "warn"}">${esc(s.status)}</span>
-              <div class="small muted">Sent ${esc(day(s.sent))} · ${s.status === "complete" ? `back ${esc(day(s.returned))}` : `${daysOut} days out`} · ${items.length} cards · cost ${usd(s.cost)}${s.addedBy ? " · " + esc(s.addedBy) : ""}</div>
-              ${s.progress?.found ? `<div class="small">PSA: <b>${esc(s.progress.stage)}</b>${s.progress.trackingNumber ? ` · tracking ${esc(s.progress.carrier || "")} ${esc(s.progress.trackingNumber)}` : ""} <span class="muted">(checked ${esc(when(s.progress.checked))})</span></div>` : ""}
+            <div><b>${esc(s.company)}</b> ${esc(s.service || "")} ${s.number ? `· #${esc(s.number)}` : ""} <span class="chip ${s.status === "complete" ? "good" : "warn"}">${esc(s.status)}</span>${late ? ` <span class="chip bad" title="Past the turnaround for ${esc(s.expected.service)}">overdue</span>` : ""}
+              <div class="small muted">Sent ${esc(day(s.sent))} · ${s.status === "complete" ? `back ${esc(day(s.returned))} (${daysFrom(s.sent, s.returned + "T12:00:00")} days)` : `<span class="${late ? "warn" : ""}">${out} days out</span>`} · ${plural(items.length, "card")} · cost ${usd(s.cost)}${s.addedBy ? " · " + esc(s.addedBy) : ""}</div>
+              ${s.expected ? `<div class="small">Expected back <b>${esc(day(s.expected.from))}${s.expected.to !== s.expected.from ? ` – ${esc(day(s.expected.to))}` : ""}</b> <span class="muted">(${esc(s.expected.service)}'s turnaround, business days from the day it was sent)</span></div>` : s.status !== "complete" ? `<div class="small muted">Set ${esc(s.company)} ${esc(s.service || "this service")}'s turnaround in Shop → Settings → Grading services to see when it's due.</div>` : ""}
+              ${p ? `<div class="small" style="margin-top:.25rem">${esc(s.company)}: <b>${esc(p.stage)}</b>${p.stepsTotal ? ` <progress max="${p.stepsTotal}" value="${p.stepsDone}" style="width:120px;vertical-align:middle" aria-label="${p.stepsDone} of ${p.stepsTotal} steps"></progress>` : ""}${p.trackingNumber ? ` · ${track ? link(track, `${p.carrier || "tracking"} ${p.trackingNumber}`) : esc(`${p.carrier || ""} ${p.trackingNumber}`)}` : ""} <span class="muted">(checked ${esc(when(p.checked))})</span>${p.problem ? `<div class="bad">PSA flagged a problem — open ${link("https://www.psacard.com/myaccount/myorders", "My Orders at PSA")} to see what they need.</div>` : ""}</div>` : ""}
+              ${stages ? `<div class="small muted">Stages: ${stages}</div>` : ""}
+              ${res ? `<div class="small" style="margin-top:.25rem">Worth <b>${usd(res.before)}</b> when sent → <b>${usd(res.after)}</b> now · cost ${usd(res.cost)} · grading added <b class="${res.gain >= 0 ? "pos" : "neg"}">${usd(res.gain)}</b>${res.cards < res.of ? ` <span class="muted">(${res.cards} of ${res.of} cards priced)</span>` : ""}</div>` : s.status === "complete" ? `<div class="small muted">Re-pricing at the new grades… (what grading added shows here once they're valued)</div>` : ""}
             </div>
             <div class="actions">
               ${s.status !== "complete" ? `<select data-status aria-label="Status">${["sent", "received", "grading", "shipped"].map((x) => `<option${x === s.status ? " selected" : ""}>${x}</option>`).join("")}</select><button class="primary small" data-back>Cards are back</button>` : ""}
+              <button class="ghost small" data-prep title="Printable list of the cards, with declared values">📋 List</button>
               <button class="ghost small" data-del aria-label="Delete submission">🗑</button>
             </div>
           </div>
-          <ul class="tight small">${items.map((r) => `<li>${esc(r.name)} — <b>${esc(r.grade)}</b>${r.status === "grading" ? "" : ` <span class="muted">(${esc(STATUS_LABEL[r.status])})</span>`}</li>`).join("") || "<li class='muted'>No inventory cards attached</li>"}</ul>
+          <ul class="tight small">${items.map((r) => `<li>${esc(r.name)} — <b>${esc(r.grade)}</b>${r.facts?.certVerified ? ' <span class="chip good" title="Matches PSA\'s record">✓ PSA</span>' : ""}${r.status === "grading" ? "" : ` <span class="muted">(${esc(STATUS_LABEL[r.status])})</span>`}</li>`).join("") || "<li class='muted'>No inventory cards attached</li>"}</ul>
         </div>`;
-      }).join("")
-    : `<div class="empty"><h2>No grading submissions</h2><p>Select cards in <b>Stock</b> → <b>Send selected to grading</b>, or click <b>＋ New submission</b>. When they come back, enter the grades and the bot updates each card's grade, cost basis and value.</p></div>`;
+        }).join("")
+      : `<div class="empty"><h2>No grading submissions</h2><p>Cards already at PSA? Click <b>＋ New submission</b>, enter the submission number, and list them (they don't need to be in inventory yet) — the bot checks PSA's progress every hour once PSA has approved your API access. Planning one? <b>🧮 What to grade next</b> ranks your raw cards, checks their photos, and makes the list for PSA's form.</p></div>`);
   $$("#invBody .sub").forEach((el) => {
     const s = subs.find((x) => x.id === el.dataset.id);
     const st = $("[data-status]", el);
     if (st) st.onchange = async () => { await fetch("/api/submissions/" + s.id, json("PATCH", { status: st.value })); toast("Status updated", { ms: 1500 }); };
     const back = $("[data-back]", el);
     if (back) back.onclick = () => openReturnDialog(s, s.itemIds.map((id) => byId[id]).filter(Boolean));
+    $("[data-prep]", el).onclick = () => openPrepSheet(s.itemIds, s.company, s);
     $("[data-del]", el).onclick = () => removeWithUndo("/api/submissions/" + s.id, "submission", loadGrading);
   });
 }
 
-function openSubmissionEditor(itemIds) {
-  const candidates = invRows.filter((r) => r.status === "in_stock" || itemIds.includes(r.id));
+async function openSubmissionEditor(itemIds, preset = {}) {
+  const settings = await getJSON("/api/shop/settings").catch(() => ({ gradingPrices: [] }));
+  const services = settings.gradingPrices || [];
+  const candidates = invRows.filter((r) => (["in_stock", "listed"].includes(r.status) && /^raw$/i.test(r.grade || "Raw") && r.kind !== "sealed") || itemIds.includes(r.id));
   const body = openModal("New grading submission", `
     <form class="form-grid" data-form>
-      <label>Company<select name="company">${opts(COMPANIES, "PSA")}</select></label>
-      <label>Service level<input name="service" placeholder="Value, Regular, Express…"></label>
+      <label>Company<select name="company">${opts(COMPANIES, preset.company || "PSA")}</select></label>
+      <label>Service level<input name="service" list="gradeServices" value="${esc(preset.service || "")}" placeholder="Regular, Express…" autocomplete="off"><datalist id="gradeServices">${services.map((g) => `<option value="${esc(g.service.replace(/^(PSA|BGS|SGC|CGC|TAG)\s+/i, ""))}">`).join("")}</datalist></label>
       <label>Submission #<input name="number" placeholder="from the grader (lets PSA progress auto-update)"></label>
       <label>Sent on<input name="sent" type="date" value="${today()}"></label>
-      <label>Total cost $<input name="cost" type="number" min="0" step="0.01" placeholder="fees + shipping + insurance"></label>
+      <label>Total cost $<input name="cost" type="number" min="0" step="0.01" value="${esc(preset.cost ?? "")}" placeholder="fees + shipping + insurance"></label>
       <label class="span2">Notes<input name="notes"></label>
       <fieldset class="span2"><legend class="small">Cards in this submission (their share of the cost is added to their cost basis when they come back)</legend>
-        <div class="pick-list">${candidates.length ? candidates.map((r) => `<label class="check"><input type="checkbox" name="item" value="${esc(r.id)}"${itemIds.includes(r.id) ? " checked" : ""}> ${esc(r.name)} <span class="muted small">${esc(r.grade)}</span></label>`).join("") : `<p class="small muted">No raw/in-stock cards in inventory — add them first, or save an empty submission.</p>`}</div>
+        <div class="pick-list">${candidates.length ? candidates.map((r) => `<label class="check"><input type="checkbox" name="item" value="${esc(r.id)}"${itemIds.includes(r.id) ? " checked" : ""}> ${esc(r.name)} <span class="muted small">${esc(r.grade)}${r.value != null ? " · " + usd(r.value) : ""}</span></label>`).join("") : `<p class="small muted">No raw cards in stock.</p>`}</div>
       </fieldset>
+      <label class="span2">Cards already sent that aren't in inventory <span class="muted small">— one per line: the card, then what you paid (e.g. "2023 Prizm Wembanyama #136, 40"). They're added to inventory as "at grading".</span><textarea name="newCards" rows="3" placeholder="2023 Panini Prizm Victor Wembanyama #136, 40"></textarea></label>
       <div class="span2 row"><button class="primary">Save submission</button></div>
     </form>`, { wide: true });
-  $("[data-form]", body).onsubmit = async (e) => {
+  const form = $("[data-form]", body);
+  // a known service fills the cost (price per card × cards) while the cost box is empty
+  const fillCost = () => {
+    if (form.cost.value && !form.cost.dataset.auto) return;
+    const svc = services.find((g) => g.service.toLowerCase() === `${form.company.value} ${form.service.value}`.toLowerCase() || g.service.toLowerCase() === form.service.value.toLowerCase());
+    const n = $$('[name="item"]:checked', form).length + form.newCards.value.split("\n").filter((l) => l.trim()).length;
+    if (svc?.cost != null && n) { form.cost.value = (svc.cost * n).toFixed(2); form.cost.dataset.auto = "1"; }
+  };
+  form.cost.oninput = () => delete form.cost.dataset.auto;
+  form.service.onchange = form.company.onchange = form.newCards.onchange = fillCost;
+  $$('[name="item"]', form).forEach((c) => (c.onchange = fillCost));
+  form.onsubmit = async (e) => {
     e.preventDefault();
-    const fd = new FormData(e.target);
+    const fd = new FormData(form);
     const f = Object.fromEntries(fd);
     f.itemIds = fd.getAll("item");
     delete f.item;
+    f.newCards = String(f.newCards || "").split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const m = l.match(/^(.*?)(?:,\s*\$?([\d.]+))?\s*$/); return { name: m[1].trim(), cost: m[2] || null }; });
     await fetch("/api/submissions", json("POST", f));
     modal.close();
-    toast(`Submission saved — ${f.itemIds.length} cards marked "at grading"`);
+    toast(`Submission saved — ${plural(f.itemIds.length + f.newCards.length, "card")} marked "at grading"`);
     invView = "grading";
     loadInventory();
   };
 }
 
+/** PSA's record for a cert → which of the submission's cards it is (number, player, year, version), or null. */
+function matchCert(cert, items, taken) {
+  const words = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+  const num = String(cert.cardNumber || "").replace(/^#/, "").replace(/^0+/, "").toLowerCase();
+  const subj = words(cert.subject), variety = words(cert.variety);
+  let best = null, bestScore = 0;
+  for (const r of items) {
+    if (taken.has(r.id)) continue;
+    const f = r.facts || {}, name = words(r.name);
+    const last = words(f.player).filter((w) => !["jr", "sr", "ii", "iii"].includes(w)).pop();
+    let score = 0;
+    if (num && (String(f.number || "").replace(/^0+/, "").toLowerCase() === num || name.includes(num))) score += 3;
+    if ((last && subj.includes(last)) || subj.some((w) => w.length > 3 && name.includes(w))) score += 3;
+    if (cert.year && (String(f.year || "").includes(String(cert.year).slice(0, 4)) || name.includes(String(cert.year).slice(0, 4)))) score += 1;
+    if (variety.length && variety.every((w) => name.includes(w))) score += 1;
+    if (score > bestScore) { best = r; bestScore = score; }
+  }
+  return bestScore >= 4 ? best : null;
+}
+
 function openReturnDialog(sub, items) {
+  const certs = {}; // rowId → { cert, verified, label }
   const body = openModal(`Cards back from ${sub.company}`, `
+    <form data-certform class="row" style="margin:0 0 .4rem"><label style="flex:1">Scan each slab's barcode <span class="muted small">(or type the cert number, Enter) — PSA's record fills in the card's grade and verifies the slab</span><input name="cert" inputmode="numeric" autocomplete="off" placeholder="e.g. 81234567"></label></form>
+    <div data-certs class="small"></div>
     <form data-form>
-      <p class="small">Enter each card's grade (e.g. <b>10</b>, <b>9</b>, <b>8.5</b>, or <b>Authentic</b>). The grading cost (${usd(sub.cost)}) is split across the cards and added to what you paid.</p>
-      <div class="table-wrap"><table>${items.map((r) => `<tr><td>${esc(r.name)}</td><td><input name="${esc(r.id)}" placeholder="grade" style="width:110px" aria-label="Grade for ${esc(r.name)}"></td></tr>`).join("") || "<tr><td class='muted'>No cards attached.</td></tr>"}</table></div>
+      <p class="small">Each card's grade (e.g. <b>10</b>, <b>9</b>, <b>8.5</b>, or <b>Authentic</b>). The grading cost (${usd(sub.cost)}) is split across the cards and added to what you paid.</p>
+      <div class="table-wrap"><table>${items.map((r) => `<tr data-row="${esc(r.id)}"><td>${esc(r.name)}<div class="small muted" data-certnote></div></td><td><input name="${esc(r.id)}" placeholder="grade" style="width:110px" aria-label="Grade for ${esc(r.name)}"></td></tr>`).join("") || "<tr><td class='muted'>No cards attached.</td></tr>"}</table></div>
       <div class="row"><button class="primary">Save grades</button></div>
-    </form>`);
-  $("[data-form]", body).onsubmit = async (e) => {
+    </form>`, { wide: true });
+  const form = $("[data-form]", body), certForm = $("[data-certform]", body);
+  const taken = new Set();
+  const note = (html, bad = false) => $("[data-certs]", body).insertAdjacentHTML("afterbegin", `<div class="${bad ? "bad" : ""}">${html}</div>`);
+  certForm.cert.focus();
+  certForm.onsubmit = async (e) => {
     e.preventDefault();
-    const grades = Object.fromEntries(new FormData(e.target));
-    await fetch(`/api/submissions/${sub.id}/complete`, json("POST", { grades }));
+    const n = certForm.cert.value.replace(/\D/g, "");
+    certForm.cert.value = "";
+    if (!n) return;
+    if (Object.values(certs).some((c) => c.cert === n)) return note(`Cert ${esc(n)} is already in.`);
+    let rec = null, err = null;
+    try {
+      rec = (await getJSON("/api/psa/cert/" + n)).cert;
+    } catch (x) {
+      err = x.message;
+    }
+    if (rec && !rec.found) return note(`PSA has no record of cert ${esc(n)} — check the number (or the slab).`, true);
+    const row = rec ? matchCert(rec, items, taken) : null;
+    if (!rec) {
+      // PSA didn't answer (e.g. the account isn't approved for the API yet): keep the cert, a person picks the card
+      note(`Cert ${esc(n)}: PSA didn't answer (${esc(err)}). Pick its card: <select data-pick="${esc(n)}"><option value="">—</option>${items.filter((r) => !taken.has(r.id)).map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("")}</select>`, true);
+      const sel = $(`[data-pick="${n}"]`, body);
+      sel.onchange = () => { if (sel.value) { certs[sel.value] = { cert: n, verified: false, label: "" }; taken.add(sel.value); $(`[data-row="${sel.value}"] [data-certnote]`, body).textContent = `cert ${n} (not checked with PSA)`; sel.disabled = true; } };
+      return;
+    }
+    const num = gradeNumber(rec.grade);
+    const label = [rec.grade, rec.gradeDescription && rec.gradeDescription !== rec.grade ? rec.gradeDescription : "", rec.autographGrade ? `auto ${rec.autographGrade}` : ""].filter(Boolean).join(" · ");
+    const psaName = [rec.year, rec.brand, rec.subject, rec.cardNumber ? "#" + rec.cardNumber : "", rec.variety].filter(Boolean).join(" ");
+    if (!row) return note(`Cert ${esc(n)} is <b>${esc(psaName)}</b> ${esc(rec.grade)} — not one of this submission's cards. ${link(rec.url, "PSA's record")}`, true);
+    taken.add(row.id);
+    certs[row.id] = { cert: n, verified: true, label };
+    const input = form.elements[row.id];
+    if (input && Number.isFinite(num)) input.value = String(num);
+    else if (input && /auth/i.test(rec.grade || "")) input.value = "Authentic";
+    $(`[data-row="${row.id}"] [data-certnote]`, body).innerHTML = `✓ cert ${esc(n)} · PSA: ${esc(label)}`;
+    note(`✓ ${esc(row.name)} — ${esc(rec.grade)} (cert ${esc(n)})`);
+  };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const grades = Object.fromEntries(new FormData(form));
+    await fetch(`/api/submissions/${sub.id}/complete`, json("POST", { grades, certs }));
     modal.close();
     toast("Grades saved — values will refresh at the new grades");
     loadGrading();
   };
+}
+
+/**
+ * The list for the grader's form (and the packing slip): each card's year, set, number, player and variety, the
+ * declared value (what it should be worth once graded), and the cheapest open service that covers every card.
+ */
+async function openPrepSheet(ids, company = "PSA", sub = null) {
+  if (!ids.length) return toast("No cards.", { error: true });
+  let r;
+  try {
+    r = await (await fetch("/api/grading/prep", json("POST", { ids, company }))).json();
+  } catch (err) {
+    return toast(err.message, { error: true });
+  }
+  const s = r.suggestion;
+  const body = openModal(sub ? `Cards in ${company} ${sub.service || ""} #${sub.number || ""}` : `Ready to send to ${company}`, `
+    <p class="small">${s ? `Fits <b>${esc(s.service)}</b>${s.cost != null ? ` — ${usd(s.cost)} a card, ${usd(s.total)} for ${plural(r.cards.length, "card")}` : ""} (the highest declared value, ${usd(r.top)}, is under its ${usd(s.maxValue)} limit${s.days ? `; about ${esc(s.days)} business days` : ""}).` : r.services.length ? `No open ${esc(company)} service in your list covers a declared value of ${usd(r.top)} — check the levels in Shop → Settings → Grading services.` : `Add ${esc(company)}'s service levels (price, maximum value, turnaround) in Shop → Settings → Grading services to get the right level suggested.`}
+      <span class="muted">Declared value = what the card should sell for once graded (each grade's sold price × its odds); the grader charges by the value after grading, so a card that could be a big 10 may need a higher level — see "if it's a 10".</span></p>
+    <div class="table-wrap" style="max-height:50vh"><table class="small"><tr><th>Year</th><th>Set</th><th>#</th><th>Player / character</th><th>Variety</th><th class="num">Declared $</th><th class="num">If it's a 10</th><th>SKU</th></tr>
+      ${r.cards.map((c) => `<tr><td>${esc(c.year)}</td><td>${esc(c.set)}</td><td>${esc(c.number)}</td><td>${esc(c.player || c.name)}</td><td>${esc(c.variety)}</td><td class="num" title="${esc(c.basis)}">${usd(c.declared)}</td><td class="num">${usd(c.ifTen)}</td><td>${esc(c.sku || "")}</td></tr>`).join("")}</table></div>
+    <div class="row"><button data-print>🖨 Print (packing list)</button><button data-csv>⬇ CSV for the grader's form</button>${sub ? "" : `<button class="primary" data-mk>＋ Make the submission</button>`}</div>`, { wide: true });
+  const rowsFor = () => r.cards.map((c) => [c.year, c.set, c.number, c.player || c.name, c.variety, c.declared ?? "", c.sku || ""]);
+  $("[data-print]", body).onclick = () => printDoc(`${company} submission`, `<h1>${esc(company)} submission${sub?.number ? ` #${esc(sub.number)}` : ""}</h1><p class="muted">${esc(shopName())} · ${esc(day(today()))} · ${plural(r.cards.length, "card")}${s ? ` · ${esc(s.service)}` : ""}</p>
+    <table><tr><th>#</th><th>Year</th><th>Set</th><th>Card #</th><th>Player / character</th><th>Variety</th><th class="num">Declared value</th><th>SKU</th><th>✓ packed</th></tr>${r.cards.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c.year)}</td><td>${esc(c.set)}</td><td>${esc(c.number)}</td><td>${esc(c.player || c.name)}</td><td>${esc(c.variety)}</td><td class="num">${usd(c.declared)}</td><td>${esc(c.sku || "")}</td><td>☐</td></tr>`).join("")}
+    <tr class="tot"><td colspan="6">Total declared value</td><td class="num">${usd(r.cards.reduce((n, c) => n + (c.declared || 0), 0))}</td><td colspan="2"></td></tr></table>`);
+  $("[data-csv]", body).onclick = () => {
+    const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = [["Year", "Set", "Card number", "Player / character", "Variety", "Declared value", "SKU"], ...rowsFor()].map((row) => row.map(cell).join(",")).join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = `${company.toLowerCase()}-submission-${today()}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+  const mk = $("[data-mk]", body);
+  if (mk) mk.onclick = () => { modal.close(); openSubmissionEditor(ids, { company, service: s ? s.service.replace(new RegExp(`^${company}\\s+`, "i"), "") : "", cost: s?.total ?? "" }); };
 }
 
 // ------------------------------------------------------------------ SALES & PROFIT
@@ -1945,6 +2127,13 @@ function wireWebExtras(row, body) {
       }
     }
     e.target.value = "";
+  };
+  // a slab: PSA's own pictures of it, to compare with the one in hand
+  const psaBtn = $("[data-psaphotos]", body);
+  if (psaBtn) psaBtn.onclick = async () => {
+    psaBtn.disabled = true;
+    const imgs = await getJSON("/api/psa/images/" + encodeURIComponent(row.facts.cert)).catch((err) => ({ error: err.message }));
+    $("[data-psaphotobox]", body).innerHTML = imgs?.error ? `<p class="small bad">${esc(imgs.error)}</p>` : psaPhotos(imgs) || `<p class="small muted">PSA has no photos of this slab.</p>`;
   };
   $("[data-describe]", body).onclick = async (e) => {
     if (needKey()) return;

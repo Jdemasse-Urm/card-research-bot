@@ -54,7 +54,7 @@ test("inventory on a date counts what was owned then, at cost (sold later = stil
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 async function startServer() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tcrb-books-srv-"));
-  const port = 45000 + Math.floor(Math.random() * 2000);
+  const port = 51000 + Math.floor(Math.random() * 2000); // clear of the ports Windows reserves (46179-46278 here)
   const child = spawn(process.execPath, ["server.js"], { cwd: root, env: { ...process.env, CARD_BOT_HOME: home, PORT: String(port), NO_BROWSER: "1", GEMINI_API_KEY: "", SHARE_ON_NETWORK: "0" }, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   child.stdout.on("data", (d) => (out += d));

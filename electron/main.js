@@ -28,9 +28,10 @@ process.env.NO_BROWSER = "1";
 const PREFS_PATH = path.join(process.env.CARD_BOT_HOME, "desktop-prefs.json");
 // notify: which alerts pop up as desktop notifications (orders + offers/messages from the website, price alerts, pricing notices)
 // autoUpdate: new versions install by themselves at a quiet moment; lastVersion: the version that ran last (→ "updated")
-let prefs = { closeToTray: true, openAtLogin: false, autoUpdate: true, lastVersion: null, bounds: null, zoom: 0, notify: { orders: true, messages: true, prices: true, pricing: true } };
+let prefs = { closeToTray: true, openAtLogin: false, autoUpdate: true, lastVersion: null, bounds: null, zoom: 0, notify: { orders: true, messages: true, prices: true, pricing: true, grading: true } };
 try {
-  prefs = { ...prefs, ...JSON.parse(fs.readFileSync(PREFS_PATH, "utf8")) };
+  const saved = JSON.parse(fs.readFileSync(PREFS_PATH, "utf8"));
+  prefs = { ...prefs, ...saved, notify: { ...prefs.notify, ...(saved.notify || {}) } }; // a new kind of notification starts on
 } catch {}
 const savePrefs = () => {
   try {
@@ -279,8 +280,8 @@ function goto(where) {
 // up each new one with its own words. Clicking it opens the screen that deals with it.
 const notified = new Set();
 let alertsPrimed = false;
-const KIND_PREF = { order: "orders", ticket: "messages", above: "prices", below: "prices", pop: "prices", pricing: "pricing" };
-const KIND_SCREEN = { order: "mjc", ticket: "mjc-messages", pricing: "mjc-pricing", above: "watch", below: "watch", brief: "hot", pop: "home" };
+const KIND_PREF = { order: "orders", ticket: "messages", above: "prices", below: "prices", pop: "prices", pricing: "pricing", grading: "grading" };
+const KIND_SCREEN = { order: "mjc", ticket: "mjc-messages", pricing: "mjc-pricing", above: "watch", below: "watch", brief: "hot", pop: "home", grading: "grading" };
 async function notifyNewAlerts(unseen) {
   if (isMac || process.platform === "linux") app.setBadgeCount(unseen); // Dock badge = alerts waiting
   if (tray) tray.setToolTip(unseen ? `Card Research Bot — ${unseen} new alert${unseen === 1 ? "" : "s"}` : "Card Research Bot");

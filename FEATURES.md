@@ -60,7 +60,10 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Sold dialog | Sell some or all of a stack, how they paid, profit after fees as you type | 3.0 / 3.6 |
 | Show mode | A register for card shows: scan a label or type a card, set prices, tap the payment type, complete sale; totals by payment, Undo, copy the day's summary | 3.6 |
 | Barcode labels | Code 128 barcode of the SKU on every label; letter sheet (3 across) or 2.25" × 1.25" thermal roll; any USB/Bluetooth scanner works (Show mode, Stock search) | 3.0 / 3.6 |
-| Grading tracker | Submissions, cards at grading, PSA progress checked automatically, grades + cost basis when they return | 3.0 |
+| Grading tracker | Submissions (cards not yet in inventory too), PSA progress hourly with a progress bar, each stage and its days, due date from the service's turnaround + overdue mark, tracking link, notifications (grades ready / shipped / problem), grades + cost basis when they return | 3.0 / 3.16 |
+| Cards are back by barcode | Scan each slab: PSA's record fills the grade, matches the card, keeps cert + label (qualifiers, auto grade) + ✓ matches PSA; what grading added per submission and a grading history per service | 3.16 |
+| Submission prep | The list for PSA's form (year, set, #, player, variety, declared value = expected graded value, "if it's a 10"), the cheapest open service that covers every card, printable packing list + CSV | 3.16 |
+| Pre-grade photo check | Each card's photos judged the way a grader would (centering, corners, edges, surface, worst flaw) before sending; re-ranks What to grade next | 3.16 |
 | What to grade next | Raw cards ranked by what grading adds after fees (sold value per grade × odds from condition + centering) → a submission | 3.12 |
 | Sales & profit | Revenue, fees, profit, ROI, days to sell, best/worst flips, by month and category; year selector; tax CSV (every sale and expense with totals) | 3.0 / 3.2 |
 | Expenses | Supplies, shipping, grading, show tables, fees, travel, software; receipt photos (see AI) | 3.0 / 3.6 |
@@ -79,7 +82,7 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Condition report | Raw cards: Near Mint / Lightly Played / Moderately Played / Heavily Played / Damaged + centering (measured on the photo), corners, edges, surface, notes; bulk set; shown on the website | 3.10 |
 | Sealed product | Boxes, blasters, packs, cases with UPC; 📦 Opened spreads a box's cost over what came out; Sales shows whether opening boxes pays | 3.10 |
 | Tilt video | 3 seconds recorded with the camera (or a file) per card — refractor shine and surface — sent to the website | 3.10 |
-| PSA population watch | Your PSA slabs re-checked a batch a day; an alert when the count at your grade grows 10%+ | 3.10 |
+| PSA population watch | Your PSA slabs re-checked a batch a day; an alert when the count at your grade grows 10%+; the same check verifies each slab against PSA's record (✓ / alert); population + higher on the row; PSA's own photos in a slab's editor | 3.10 / 3.16 |
 | PSA slabs by barcode | Scan a slab's cert barcode → PSA's exact card + grade, priced, ready to add; a cert read off a scanned slab is cross-checked with PSA (grade mismatch flagged, PSA's used) | 3.8 / 3.9 |
 | Bulk edit + Undo | Location, status, category, grade, tags, cost, listing for any number of cards; select all matching, shift-click, whole groups; Undo for a week | 3.8 |
 | Merge / split lot cost | The same card on several rows → one row (qty, averaged cost); spread what a lot cost over its cards by value | 3.8 |

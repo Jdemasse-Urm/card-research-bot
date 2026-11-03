@@ -1,5 +1,39 @@
 # Changelog
 
+## 3.16.0 — PSA: track what's out, send the right cards, check what came back
+
+Everything that asks PSA works the moment PSA approves your account for its API (Settings shows PSA's answer);
+the rest works now.
+
+- **Cards already at PSA can be tracked.** A new submission takes cards that were never in inventory — one per line
+  with what you paid — and adds them as "at grading". Enter the submission number and the bot checks PSA every hour.
+- **The tracker:** PSA's stage with a progress bar, every stage it passed and how many days it spent there, when it's
+  due back (the service's turnaround in business days from the day it was sent) and an **overdue** mark past that,
+  the return tracking number as a link to UPS / FedEx / USPS, and a link to PSA's My Orders.
+- **Notifications** (desktop, and in Alerts) when grades are ready, when the box ships back, and when PSA flags a
+  problem with the order — with what to do. Settings → Desktop app → notifications has a switch for them.
+- **Cards are back — scan the slabs.** Scan each slab's barcode (or type the cert): PSA's record fills in the grade,
+  matches it to the right card in the submission, and keeps the cert, the label's words (qualifiers, an autograph
+  grade) and "✓ matches PSA" on the card. A slab from somewhere else is called out. If PSA doesn't answer, you pick
+  the card and the cert is still kept.
+- **What grading did:** each finished submission shows the cards' value when they went out → now, the cost, and what
+  grading added. **Grading history** sums it up per service: days out, average grade, 10s, and what it added per card.
+- **📋 The list for PSA's form** (from What to grade next, or any submission): year, set, number, player, variety and
+  a declared value for each card — what it should be worth once graded (each grade's sold price × its odds), with
+  "if it's a 10" — and the cheapest open service level whose limit covers every card, with the total. Print it as a
+  packing list with tick boxes, or download it as a CSV. **＋ Make the submission** carries the service and cost over.
+- **🔍 Check their photos first** (What to grade next): each ticked card's own photos looked at the way a grader would
+  — centering, corners, edges, surface, and the one flaw most likely to cost it a grade — then ranked again with what
+  the photos show. A condition you set yourself is never overwritten.
+- **Grading services** (Shop → Settings) now hold, next to what you charge a customer, what the grader charges you,
+  the most a card may be declared at, the turnaround and paused levels. **Fill in PSA's levels** adds PSA's levels as
+  Sports Illustrated reported them in June 2026 (Regular, Express, Super Express, Walk-Through; the Value levels
+  paused) — check them on psacard.com, PSA changes them often. Customers are only offered services you've priced.
+- **Slabs in stock:** the daily PSA check now also verifies each slab — PSA's record must say the same card and
+  grade (✓ on the row; an alert if not, or if PSA has no such cert) — and the row shows the population at its grade
+  and how many are higher. A slab's editor has **🖼 PSA's own photos** to compare with the one in hand.
+- Settings shows how many PSA calls the app made today (PSA allows about 100 a day).
+
 ## 3.15.0 — the iPhone scans pages of cards and tells you what it found
 
 - **Full-resolution pictures.** The phone sends its camera's full picture (up to 4096 px, an iPhone's 4032) instead

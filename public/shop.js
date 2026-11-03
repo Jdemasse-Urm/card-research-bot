@@ -216,7 +216,7 @@ async function loadGradingService() {
 
 async function openGradingOrder(o = null) {
   const [cust, settings] = await Promise.all([getJSON("/api/customers"), getJSON("/api/shop/settings")]);
-  const prices = settings.gradingPrices || [];
+  const prices = (settings.gradingPrices || []).filter((p) => p.fee > 0); // what you offer customers (rows with your price)
   const service = o?.service || prices[0]?.service || "";
   const fee = (sv) => prices.find((p) => p.service === sv)?.fee ?? "";
   const line = (c = {}) => `<div class="row" data-line style="margin:.2rem 0"><input name="desc" value="${esc(c.desc || "")}" placeholder="2003 Topps Chrome LeBron James #111" style="flex:3" aria-label="Card"><input name="declared" type="number" min="0" step="1" value="${esc(c.declared ?? "")}" placeholder="value $" style="width:90px" aria-label="Declared value"><input name="fee" type="number" min="0" step="0.01" value="${esc(c.fee ?? fee(service))}" style="width:80px" aria-label="Fee"><input name="grade" value="${esc(c.grade || "")}" placeholder="grade" style="width:70px" aria-label="Grade"><input name="cert" value="${esc(c.cert || "")}" placeholder="cert" style="width:100px" aria-label="Cert"><button type="button" class="ghost small" data-rmline aria-label="Remove">✕</button></div>`;
@@ -400,7 +400,14 @@ function openSupply(x = null) {
 
 async function loadShopSettings() {
   const s = await getJSON("/api/shop/settings");
-  const priceRow = (p = {}) => `<div class="row" data-price style="margin:.2rem 0"><input name="service" value="${esc(p.service || "")}" placeholder="PSA Value" style="flex:1" aria-label="Service"><input name="fee" type="number" min="0" step="0.01" value="${esc(p.fee ?? "")}" placeholder="$ per card" style="width:110px" aria-label="Fee per card"><button type="button" class="ghost small" data-rm aria-label="Remove">✕</button></div>`;
+  const priceRow = (p = {}) => `<div class="row" data-price style="margin:.2rem 0"><input name="service" value="${esc(p.service || "")}" placeholder="PSA Regular" style="flex:1 1 150px" aria-label="Service"><input name="fee" type="number" min="0" step="0.01" value="${esc(p.fee || "")}" placeholder="you charge $" style="width:105px" aria-label="What you charge a customer per card"><input name="cost" type="number" min="0" step="0.01" value="${esc(p.cost ?? "")}" placeholder="grader $" style="width:95px" aria-label="What the grader charges you per card"><input name="maxValue" type="number" min="0" step="1" value="${esc(p.maxValue ?? "")}" placeholder="max value $" style="width:105px" aria-label="Most a card may be declared at"><input name="days" value="${esc(p.days || "")}" placeholder="days 40-50" style="width:90px" aria-label="Turnaround in business days"><label class="check small" title="The grader isn't taking new cards at this level"><input type="checkbox" name="paused"${p.paused ? " checked" : ""}> paused</label><button type="button" class="ghost small" data-rm aria-label="Remove">✕</button></div>`;
+  // PSA's levels as last reported (Sports Illustrated, June 2026) — PSA changes them often, so they're a starting point
+  const PSA_REPORTED = [
+    { service: "PSA Regular", cost: 79.99, maxValue: 1500, days: "40-50" },
+    { service: "PSA Express", cost: 149, maxValue: 2500, days: "20-30" },
+    { service: "PSA Super Express", cost: 349, maxValue: 5000, days: "7-10" },
+    { service: "PSA Walk-Through", cost: 599, maxValue: 10000, days: "5-7" },
+  ];
   $("#shopBody").innerHTML = `<div class="panel"><form class="form-grid" data-shopset>
     <label>Consignment commission % <span class="muted small">(what the shop keeps of each sale)</span><input name="consignPct" type="number" min="0" max="60" step="0.5" value="${esc(s.consignPct)}"></label>
     <label>Grading one of your own cards costs $ <span class="muted small">(fee + shipping share — "what to grade next")</span><input name="ownGradingFee" type="number" min="0" step="0.5" value="${esc(s.ownGradingFee)}"></label>
@@ -409,15 +416,28 @@ async function loadShopSettings() {
     <label>Insure packages worth over $<input name="insureOver" type="number" min="0" step="1" value="${esc(s.insureOver)}"></label>
     <label>Signature required over $<input name="signatureOver" type="number" min="0" step="1" value="${esc(s.signatureOver)}"></label>
     <label class="span2">Weekly report goes to <span class="muted small">(emails, comma separated)</span><input name="weeklyTo" value="${esc(s.weeklyTo || "")}" placeholder="jeff@…, joseph@…"></label>
-    <div class="span2"><b>Grading service prices</b> <span class="small muted">— what you charge a customer per card, by service</span><div data-prices>${(s.gradingPrices.length ? s.gradingPrices : [{}]).map(priceRow).join("")}</div><button type="button" class="small" data-addprice>＋ Service</button></div>
+    <div class="span2"><b>Grading services</b> <span class="small muted">— per card: what you charge a customer; and for your own submissions what the grader charges you, the most a card may be declared at, and the turnaround in business days (the Grading tab uses these for "expected back" and the right service level)</span><div data-prices>${(s.gradingPrices.length ? s.gradingPrices : [{}]).map(priceRow).join("")}</div><button type="button" class="small" data-addprice>＋ Service</button> <button type="button" class="small ghost" data-psafill title="PSA's levels as Sports Illustrated reported them in June 2026 (the Value levels paused since June 2). Check psacard.com — PSA changes them often.">Fill in PSA's levels (as reported June 2026)</button></div>
     <div class="span2 row"><button class="primary">Save</button></div></form></div>`;
   const box = $("#shopBody [data-prices]");
   const wire = () => $$("[data-rm]", box).forEach((b) => (b.onclick = () => { b.closest("[data-price]").remove(); wire(); }));
   wire();
   $("#shopBody [data-addprice]").onclick = () => { box.insertAdjacentHTML("beforeend", priceRow()); wire(); };
+  const rowsNow = () => $$("[data-price]", box).map((r) => ({ service: $('[name="service"]', r).value, fee: $('[name="fee"]', r).value, cost: $('[name="cost"]', r).value, maxValue: $('[name="maxValue"]', r).value, days: $('[name="days"]', r).value, paused: $('[name="paused"]', r).checked })).filter((g) => g.service.trim());
+  $("#shopBody [data-psafill]").onclick = () => {
+    const rows = rowsNow();
+    for (const p of PSA_REPORTED) {
+      const have = rows.find((g) => g.service.toLowerCase() === p.service.toLowerCase());
+      if (have) Object.assign(have, { cost: p.cost, maxValue: p.maxValue, days: p.days, paused: false });
+      else rows.push({ ...p, fee: "" });
+    }
+    for (const g of rows) if (/^psa value/i.test(g.service)) g.paused = true;
+    box.innerHTML = rows.map(priceRow).join("");
+    wire();
+    toast("Filled in — check them against psacard.com, then Save. Your customer prices are kept.", { ms: 4000 });
+  };
   $("#shopBody [data-shopset]").onsubmit = async (e) => {
     e.preventDefault();
-    const gradingPrices = $$("[data-price]", box).map((r) => ({ service: $('[name="service"]', r).value, fee: $('[name="fee"]', r).value })).filter((g) => g.service.trim());
+    const gradingPrices = rowsNow();
     const f = e.target;
     await fetch("/api/shop/settings", json("PUT", { consignPct: f.consignPct.value, gradingPrices, ownGradingFee: f.ownGradingFee.value, salesTaxPct: f.salesTaxPct.value, taxIncluded: f.taxIncluded.checked, insureOver: f.insureOver.value, signatureOver: f.signatureOver.value, weeklyTo: f.weeklyTo.value }));
     toast("Saved");

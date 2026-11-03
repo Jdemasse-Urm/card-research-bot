@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 import { exec, execFile } from "node:child_process";
 
 import { hasKey, resetClient, explainError, MODEL, FALLBACK_MODEL, monthlyBudget, FREE_GROUNDED_PER_MONTH, aiQueue } from "./lib/ai.js";
-import { cardLookup, hotCards, ask, askBusiness, lotLookup, locateCards, readCards, writeListing, slabCheck, adviseInventory, readReceipt, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
+import { cardLookup, hotCards, ask, askBusiness, lotLookup, locateCards, readCards, precheckCards, writeListing, slabCheck, adviseInventory, readReceipt, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
 import { runSelfTest } from "./lib/selftest.js";
 import * as store from "./lib/store.js";
 import * as pricecharting from "./lib/sources/pricecharting.js";
@@ -305,6 +305,7 @@ app.get("/api/settings", async (req, res) => {
     lanUrls: SHARE ? lanUrls() : [],
     psa: psa.hasToken(),
     psaCheck: await psa.check(), // does PSA actually answer (checked at most hourly)
+    psaCallsToday: psa.callsToday(),
     priceApi: pricecharting.apiTokens(),
     ebay: ebay.hasKeys(),
     dailyBrief: process.env.CARD_BOT_DAILY_BRIEF === "1",
@@ -870,6 +871,8 @@ app.get("/api/inventory", (req, res) => {
   if (req.helper) return res.json(store.inventoryView().filter((r) => r.status !== "sold").map(({ id, name, grade, qty, sku, location, value, listPrice, web, webMode, webPrice, webFixedPrice, category, status, kind }) => ({ id, name, grade, qty, sku, location, value, listPrice, web, webMode, webPrice, webFixedPrice, category, status, kind })));
   const h = store.historyView();
   const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  // PSA slabs: the population at their grade from the daily watch (by row)
+  const pops = new Map(Object.entries(store.popWatch()).filter(([k, e]) => k !== "_day" && e?.rowId).map(([cert, e]) => [e.rowId, { cert, pop: e.pop ?? null, higher: e.higher ?? null, at: e.at, flagged: Boolean(e.flagged) }]));
   res.json(store.inventoryView().map(({ photoUrls, thumbUrls, webDescription, ...r }) => {
     const v = h[r.id]?.v;
     const base = v ? [...v].reverse().find(([d]) => d <= since) : null;
@@ -880,6 +883,7 @@ app.get("/api/inventory", (req, res) => {
       ...(base && last && base[1] > 0 && base[0] !== last[0] ? { trend30: Math.round(((last[1] - base[1]) / base[1]) * 1000) / 1000 } : {}),
       ...(h[r.id]?.p?.length ? { lastPriceReason: h[r.id].p.at(-1).reason } : {}),
       ...(webDescription ? { hasDescription: true } : {}),
+      ...(pops.has(r.id) ? { psaPop: pops.get(r.id) } : {}),
     };
   }));
 });
@@ -1428,6 +1432,24 @@ function gradeOdds(r) {
   return worst <= 55 ? ["great", GRADE_ODDS.great] : worst <= 60 ? ["good", GRADE_ODDS.good] : ["off", GRADE_ODDS.off];
 }
 const guideCache = new Map(); // sales page → { at, d }
+/** A raw card's sold value raw and at PSA 10 / 9 / 8 / 7 (a missing grade counts as the next one down) → or null. */
+async function gradeValues(r) {
+  if (!r.priceUrl) return null;
+  let d = guideCache.get(r.priceUrl);
+  if (!d || Date.now() - d.at > 6 * 3600000) {
+    try {
+      d = { at: Date.now(), d: await pricecharting.card(r.priceUrl) };
+      guideCache.set(r.priceUrl, d);
+    } catch {
+      return null;
+    }
+  }
+  const raw = pricecharting.valueAtGrade(d.d, "Raw") ?? r.value ?? 0;
+  const v = ["PSA 10", "PSA 9", "PSA 8", "PSA 7"].map((g) => pricecharting.valueAtGrade(d.d, g));
+  if (v[0] == null && v[1] == null) return null;
+  for (let k = 3; k >= 0; k--) if (v[k] == null) v[k] = k === 3 ? raw : v[k + 1];
+  return { raw, v };
+}
 app.post("/api/grading/candidates", (req, res) => {
   const minRaw = parseFloat(req.body?.minRaw) || 5;
   const fee = store.shopSettings().ownGradingFee || 25;
@@ -1443,25 +1465,77 @@ app.post("/api/grading/candidates", (req, res) => {
         const odds = gradeOdds(r);
         if (!odds) continue;
         send({ type: "step", text: `Grade values: ${r.name}` });
-        let d = guideCache.get(r.priceUrl);
-        if (!d || Date.now() - d.at > 6 * 3600000) {
-          try {
-            d = { at: Date.now(), d: await pricecharting.card(r.priceUrl) };
-            guideCache.set(r.priceUrl, d);
-          } catch {
-            continue;
-          }
-        }
-        const raw = pricecharting.valueAtGrade(d.d, "Raw") ?? r.value ?? 0;
-        const v = ["PSA 10", "PSA 9", "PSA 8", "PSA 7"].map((g) => pricecharting.valueAtGrade(d.d, g));
-        if (v[0] == null && v[1] == null) continue;
-        for (let k = 3; k >= 0; k--) if (v[k] == null) v[k] = k === 3 ? raw : v[k + 1]; // a missing grade counts as the next one down
+        const gv = await gradeValues(r);
+        if (!gv) continue;
+        const { raw, v } = gv;
         const graded = odds[1].reduce((n, p, k) => n + p * net(v[k]), 0);
         const gain = Math.round((graded - net(raw) - fee) * 100) / 100;
         out.push({ id: r.id, name: r.name, sku: r.sku, location: r.location, condition: r.condition?.scale || "", centering: r.condition?.centering || "", oddsFrom: odds[0], odds: odds[1], raw, values: { psa10: v[0], psa9: v[1], psa8: v[2], psa7: v[3] }, gain, roi: Math.round((gain / fee) * 100) });
       }
     }));
     return { fee, cards: out.sort((a, b) => b.gain - a.gain) };
+  });
+});
+
+/**
+ * Submission prep: what goes on the grader's form for each card (year, set, number, player, variety, declared value)
+ * and which service level fits. The declared value is what the card should be worth once graded — the sold value at
+ * each grade × its odds — because the grader charges by the value after grading; "if it's a 10" shows the top case.
+ * The service is the cheapest open one (Shop → grading services) whose maximum covers every card.
+ */
+app.post("/api/grading/prep", async (req, res) => {
+  const ids = new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(String).slice(0, 300));
+  const company = store.clean.oneOf(req.body?.company, store.COMPANIES, "PSA");
+  const rows = store.inventoryView().filter((r) => ids.has(r.id));
+  const cards = [];
+  let i = 0;
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    while (i < rows.length) {
+      const r = rows[i++];
+      const f = r.facts || {};
+      const odds = gradeOdds(r);
+      const gv = odds ? await gradeValues(r) : null;
+      const expected = gv ? odds[1].reduce((n, p, k) => n + p * (gv.v[k] || 0), 0) : null;
+      cards.push({
+        id: r.id, sku: r.sku, name: r.name, location: r.location || "", year: f.year || "", set: f.set || "", number: f.number || "", player: f.player || "", variety: f.parallel || "",
+        declared: expected != null ? Math.round(expected) : r.value != null ? Math.round(r.value) : null,
+        basis: expected != null ? "expected graded value" : r.value != null ? "raw value (no graded sales found)" : "no value yet — enter one",
+        ifTen: gv?.v[0] != null ? Math.round(gv.v[0]) : null,
+      });
+    }
+  }));
+  cards.sort((a, b) => (a.set + a.number).localeCompare(b.set + b.number, undefined, { numeric: true }));
+  const services = store.shopSettings().gradingPrices.filter((g) => g.service.toLowerCase().startsWith(company.toLowerCase()) && g.maxValue);
+  const top = Math.max(0, ...cards.map((c) => c.declared || 0));
+  const fit = services.filter((g) => !g.paused && g.maxValue >= top).sort((a, b) => (a.cost ?? Infinity) - (b.cost ?? Infinity))[0] || null;
+  res.json({ company, cards, top, services, suggestion: fit ? { ...fit, total: fit.cost != null ? Math.round(fit.cost * cards.length * 100) / 100 : null } : null });
+});
+
+// Pre-grade check: each card's own photos looked at the way a grader would; the estimate goes on the card (unless a
+// person already set its condition) so "What to grade next" ranks it with real centering and corners.
+app.post("/api/grading/precheck", (req, res) => {
+  const ids = new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(String).slice(0, 60));
+  const rows = store.inventoryView().filter((r) => ids.has(r.id) && (r.photos || []).length);
+  if (!rows.length) return res.status(400).json({ error: "None of those cards has a photo yet — add photos in the card editor (or scan them) first." });
+  const part = (file) => {
+    try {
+      return { mediaType: "image/jpeg", data: fs.readFileSync(file).toString("base64") };
+    } catch {
+      return null;
+    }
+  };
+  const cards = rows.map((r) => ({ id: r.id, name: r.name, front: part(mjc.photoPath(r.id, r.photos[0])), back: r.photos[1] ? part(mjc.photoPath(r.id, r.photos[1])) : null })).filter((c) => c.front);
+  streamJob(req, res, async (send, signal) => {
+    const r = await precheckCards({ cards }, { onEvent: send, signal });
+    const out = cards.map((c, k) => {
+      const row = rows.find((x) => x.id === c.id);
+      const est = r.cards[k]?.condition;
+      const personSet = row.condition && !/^Estimated/.test(row.condition.notes || "");
+      if (est && !personSet) store.updateInventory(c.id, { condition: est }, who(req));
+      return { id: c.id, name: c.name, condition: est, flaw: r.cards[k]?.flaw || "", kept: personSet };
+    });
+    log(req, `pre-grade checked ${out.length} card${out.length === 1 ? "" : "s"}`);
+    return { cards: out, usage: r.usage };
   });
 });
 
@@ -2021,7 +2095,11 @@ app.get("/api/portfolio", (_req, res) => res.json(store.portfolio()));
 
 // ---------------- grading submissions ----------------
 
-app.get("/api/submissions", (_req, res) => res.json(store.submissions()));
+// each submission with when it should be back (its service's turnaround, Shop → grading services)
+app.get("/api/submissions", (_req, res) => {
+  const services = store.shopSettings().gradingPrices;
+  res.json(store.submissions().map((s) => ({ ...s, expected: s.status === "complete" ? null : store.expectedBack(s, services) })));
+});
 
 app.post("/api/submissions", (req, res) => {
   const sub = store.addSubmission({ ...(req.body || {}), addedBy: who(req) });
@@ -2035,7 +2113,7 @@ app.patch("/api/submissions/:id", (req, res) => {
 });
 
 app.post("/api/submissions/:id/complete", async (req, res) => {
-  const s = store.completeSubmission(req.params.id, req.body?.grades || {});
+  const s = store.completeSubmission(req.params.id, req.body?.grades || {}, req.body?.certs || {});
   if (!s) return res.status(404).json({ error: "not found" });
   log(req, `got ${s.itemIds.length} cards back from ${s.company}`);
   revalueInventory().catch(() => {});
@@ -2053,9 +2131,16 @@ async function refreshSubmissions() {
       if (p.found) {
         store.updateSubmission(s.id, { progress: { ...p, checked: new Date().toISOString() }, ...(p.shipped ? { status: "shipped" } : p.gradesReady ? { status: "grading" } : {}) });
         n++;
+        // the moments worth a notification: grades are up, the box shipped back, or PSA flagged a problem
+        const was = s.progress || {};
+        const name = `${s.company} #${s.number}${s.service ? ` (${s.service})` : ""}`;
+        if (p.gradesReady && !was.gradesReady) store.addAlert({ kind: "grading", name, text: `Grades are ready for ${s.itemIds.length} card${s.itemIds.length === 1 ? "" : "s"} — see them at psacard.com → My Orders. When the box arrives, Inventory → Grading → Cards are back (scan each slab's barcode).` });
+        if (p.shipped && !was.shipped) store.addAlert({ kind: "grading", name, text: `Shipped back${p.trackingNumber ? ` — ${p.carrier || "tracking"} ${p.trackingNumber}` : ""}.` });
+        if (p.problem && !was.problem) store.addAlert({ kind: "grading", name, text: "PSA flagged a problem with this order — log in at psacard.com → My Orders to see what they need (often a payment, a missing card, or a card they can't grade)." });
       }
     } catch (err) {
       console.warn("PSA progress check failed:", err.message);
+      if (/approved|token/i.test(err.message)) break; // the same answer for every submission
     }
   }
   return n;
@@ -2578,9 +2663,23 @@ async function watchPops() {
     const cert = certOf(r);
     try {
       const c = await psa.cert(cert, { fresh: true });
-      if (!c.found || c.population == null) continue;
+      // the same visit verifies the slab: does PSA's record for this cert say the card and grade the row says?
+      const e0 = w[cert] || {};
+      if (!c.found) {
+        if (!e0.flagged) store.addAlert({ kind: "pop", name: r.name, text: `PSA has no record of cert ${cert} — check the number on the slab (a misread digit?), or whether the slab is real.` });
+        w[cert] = { ...e0, rowId: r.id, flagged: true, at: new Date().toISOString() };
+        continue;
+      }
+      const gradeNum = (s) => String(s || "").match(/(\d+(\.\d)?)\s*\)?\s*$/)?.[1] || String(s || "").match(/\d+(\.\d)?/)?.[0] || "";
+      const last = (s) => String(s || "").toLowerCase().replace(/[^a-z ]/g, " ").trim().split(/\s+/).filter((x) => !["jr", "sr", "ii", "iii"].includes(x)).pop() || "";
+      const mine = last(r.facts?.player), subj = String(c.subject || "").toLowerCase();
+      const wrong = [gradeNum(r.grade) && gradeNum(c.grade) && gradeNum(r.grade) !== gradeNum(c.grade) && `grade (row: ${r.grade}, PSA: ${c.grade})`, mine && subj && !subj.includes(mine) && `card (row: ${r.facts.player}, PSA: ${c.subject})`].filter(Boolean);
+      if (wrong.length && !e0.flagged) store.addAlert({ kind: "pop", name: r.name, text: `PSA's record for cert ${cert} doesn't match this card's ${wrong.join(" and ")}. Check the row (or the slab).` });
+      if (!wrong.length && !r.facts?.certVerified) store.updateInventory(r.id, { facts: { ...(r.facts || {}), cert, certVerified: true } });
+      if (c.population == null) { w[cert] = { ...e0, rowId: r.id, flagged: Boolean(wrong.length), at: new Date().toISOString() }; continue; }
       const e = w[cert] || { base: c.population, baseAt: day };
-      Object.assign(e, { rowId: r.id, name: r.name, grade: r.grade, pop: c.population, higher: c.populationHigher, at: new Date().toISOString() });
+      if (e.base == null) Object.assign(e, { base: c.population, baseAt: day });
+      Object.assign(e, { rowId: r.id, name: r.name, grade: r.grade, pop: c.population, higher: c.populationHigher, flagged: Boolean(wrong.length), at: new Date().toISOString() });
       const grew = e.pop - e.base;
       if (grew >= Math.max(3, Math.ceil(e.base * 0.1))) {
         store.addAlert({ kind: "pop", name: r.name, text: `PSA population at ${r.grade} went ${e.base} → ${e.pop} (+${grew}) since ${e.baseAt}. More copies at your grade usually pull the price down — think about selling, or watch its price.` });

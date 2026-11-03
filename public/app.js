@@ -201,7 +201,7 @@ async function openSettings() {
   $("#helperPinState").textContent = s.helperPinSet ? "set — leave blank and Save to remove it" : "not set";
   $("#briefToggle").checked = s.dailyBrief;
   // "saved" isn't "working": show what PSA actually answered
-  $("#psaState").innerHTML = !s.psa ? "" : s.psaCheck?.ok ? `<span class="ok">✓ working</span>` : `<span class="warn">⚠ token saved, but PSA says no: ${esc(s.psaCheck?.error || "not checked yet")}</span>`;
+  $("#psaState").innerHTML = !s.psa ? "" : (s.psaCheck?.ok ? `<span class="ok">✓ working</span>` : `<span class="warn">⚠ token saved, but PSA says no: ${esc(s.psaCheck?.error || "not checked yet")}</span>`) + ` <span class="muted">· ${s.psaCallsToday || 0} PSA call${s.psaCallsToday === 1 ? "" : "s"} today (PSA allows about 100 a day)</span>`;
   $("#priceApiState").innerHTML = [s.priceApi?.sportscardspro && "SportsCardsPro ✓", s.priceApi?.pricecharting && "PriceCharting ✓"].filter(Boolean).map((t) => `<span class="ok">${t}</span>`).join(" · ");
   $("#ebayState").innerHTML = s.ebay ? `<span class="ok">✓ connected</span>` : "";
   $("#usageBox").innerHTML = `Estimated AI cost this month: <b>${usd(s.spendThisMonth)}</b> <span class="muted">(only charged if you turned on billing in Google AI Studio; the free tier is $0)</span><br>
@@ -1120,7 +1120,7 @@ async function loadWatch() {
   const [{ items, movers }, alerts] = await Promise.all([getJSON("/api/watchlist"), getJSON("/api/alerts")]);
   const unseen = alerts.filter((a) => !a.seen);
   const alertText = (a) => (a.kind === "brief" ? `☀️ <b>${esc(a.name)}</b>: ${esc(a.text)} <a href="#" data-gohot>Open</a>`
-    : a.text ? `${a.kind === "order" ? "🛒" : a.kind === "ticket" ? "✉" : a.kind === "pricing" ? "📈" : "🔔"} <b>${esc(a.name)}</b>: ${esc(a.text)}` // website orders, messages, pricing-engine notices
+    : a.text ? `${a.kind === "order" ? "🛒" : a.kind === "ticket" ? "✉" : a.kind === "pricing" ? "📈" : a.kind === "grading" ? "🏷" : "🔔"} <b>${esc(a.name)}</b>: ${esc(a.text)}` // website orders, messages, pricing-engine notices
     : `🔔 <b>${esc(a.name)}</b> is ${a.kind === "above" ? "up to" : "down to"} <b>${usd(a.value)}</b> (your ${a.kind === "above" ? "sell" : "buy"} target ${usd(a.target)})`);
   $("#alertList").innerHTML = unseen.length
     ? unseen.map((a) => `<div class="alert-item" role="status"><span>${alertText(a)} · ${esc(when(a.at))}</span></div>`).join("") +
@@ -1492,7 +1492,7 @@ TAB_LOADERS.ask = loadAdvice;
 
 // ---- the desktop shell (tray menu, notification clicks) can ask for a screen ----
 window.desktop?.onGoto?.((where) => {
-  const inv = { show: "show", mjc: "mjc", "mjc-messages": "mjc", "mjc-pricing": "mjc" }[where];
+  const inv = { show: "show", mjc: "mjc", "mjc-messages": "mjc", "mjc-pricing": "mjc", grading: "grading" }[where];
   if (inv) {
     if (where === "mjc-messages") mjcTab = "messages";
     else if (where === "mjc-pricing") mjcTab = "pricing";

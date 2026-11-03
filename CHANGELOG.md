@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.14.3 — the search message says what the free tier really allows
+
+- When Google refuses a search, the message now says plainly that the key's project is on Google's free tier, which
+  has no Google Search at all on Gemini 3 models (0 searches — the 5,000 free a month only start once billing is on),
+  and how to tell in AI Studio that billing took (the key's row shows a paid tier instead of "Free tier").
+- After a refusal the app asks Google again after 2 minutes instead of 30, so turning billing on starts working
+  within minutes without re-saving the key.
+
 ## 3.14.2 — price search through the sites' API; Settings shows whether PSA really works
 
 - **Price search token** (Settings → Optional connections → Price search). SportsCardsPro and PriceCharting put a robot

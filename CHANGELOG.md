@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.17.0 — hottest cards you can check, act on, and hold to account
+
+The Google-searched part needs Gemini billing on (Google's free tier has no search on Gemini 3 models); everything
+marked * works without it.
+
+- **Sold prices first.** Every card on the list is checked against its own sales page: the sales inside the period
+  against the ones before, and the 1-month trend. "✓ sold prices back it" cards rank above the buzz, then the ones
+  with no data, then the ones sold prices don't show yet — with the numbers and a small price chart on each.
+- **Targeted searches.** "All" runs one search per category (baseball, basketball, football, Yu-Gi-Oh, One Piece) and
+  a single category two (the news, and the market trackers) — side by side — instead of one broad search.
+- **Sources per card**: each card shows the pages that back it, not one pile at the bottom (that's still there as
+  "All sources"). A card whose newest evidence is older than the list's window is marked with the date.
+- * **What you have**: "you own 2 (PSA 10)", 🎯 wanted, ★ watching on each card. Owned: recent raw sales to sell
+  into; not owned: what you could pay for a raw one and still flip it (raw sold value less eBay's fees and a 20%
+  margin — hover for the math). **A card you own that turns up on the list raises an alert** (🔥).
+- * **The list's track record**: 🔥 "3 in a row" when a card stays on the list, when it first showed up, and a
+  scoreboard — the cards it flagged 1–8 weeks ago and what their raw sold prices did since.
+- * **No Google search? Still a list.** Without search (free-tier key, or Google down) the list is built from your own
+  watchlist and inventory, ranked by how much their real sold values rose — said plainly at the top, nothing made up.
+  When Google refuses search, the other searches of the same list don't wait in line to be refused too.
+- 🔎 **Deals** on each card (live eBay listings under its sold value), ⚡ **Price** (free Quick price), **Research →**,
+  and ✕ to hide a card you don't care about (Show hidden brings them back).
+- **💬 Ask about this list** opens Ask with the whole list as the context ("which of these is safest to hold?").
+  **📋 Copy as text** to paste it in a message. Each category button shows how old its last list is.
+- The cost line counts the Google searches the list used. Settings → the morning brief has a time.
+
 ## 3.16.0 — PSA: track what's out, send the right cards, check what came back
 
 Everything that asks PSA works the moment PSA approves your account for its API (Settings shows PSA's answer);

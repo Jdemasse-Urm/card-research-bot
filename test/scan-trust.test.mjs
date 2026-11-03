@@ -97,6 +97,27 @@ test("full details: a raw card's condition, centering and PSA odds from the scan
   assert.equal(find(row.id).condition.centering, "55/45 L/R · 60/40 T/B");
 });
 
+test("hottest cards: a claimed move is checked against the card's own sold prices", () => {
+  const now = Date.parse("2026-11-03T12:00:00Z");
+  const page = (rows, trend) => ({ recentSales: rows.length ? { Ungraded: rows } : {}, trendPct: trend != null ? { Ungraded: { "1mo": trend } } : {}, history: { Ungraded: [[1, 10], [2, 12], [3, 15]] } });
+  const up = jobs.soldCheck(page([{ date: "2026-11-01", price: 150 }, { date: "2026-10-30", price: 140 }, { date: "2026-10-10", price: 100 }, { date: "2026-10-01", price: 100 }]), "weekly", now);
+  assert.equal(up.confirmed, true);
+  assert.equal(up.changePct, 45);
+  assert.match(up.why, /raw sales in the last 7 days average \+45% vs the ones before/);
+  assert.deepEqual(up.spark, [10, 12, 15]);
+  const flat = jobs.soldCheck(page([{ date: "2026-11-01", price: 101 }, { date: "2026-10-10", price: 100 }], 2), "weekly", now);
+  assert.equal(flat.confirmed, false, "sales say +1%, the trend +2%: the claim isn't backed");
+  assert.equal(jobs.soldCheck(page([], 15), "monthly", now).confirmed, true, "no recent sales, but a +15% month");
+  assert.equal(jobs.soldCheck({}, "weekly", now).confirmed, null, "no data: no verdict either way");
+});
+
+test("hottest cards without search: your own tracked cards that rose, biggest first, nothing made up", () => {
+  const r = jobs.trackedHotList({ category: "basketball", period: "weekly", reason: "no search", trackedMovers: [{ name: "Wemby", category: "basketball", from: 10, to: 14, pct: 40 }, { name: "Mahomes", category: "football", from: 10, to: 20, pct: 100 }, { name: "Down", category: "basketball", from: 10, to: 8, pct: -20 }], stockMovers: [{ name: "wemby", grade: "Raw", from: 10, to: 12, pct: 0.2 }] });
+  assert.deepEqual(r.cards.map((c) => c.name), ["Wemby"], "other categories, falls and the same card twice are left out");
+  assert.equal(r.tracked, true);
+  assert.deepEqual(r.cards[0].sources, []);
+});
+
 test("a second look goes to the unsure cards only — never to a PSA-verified slab", () => {
   assert.equal(jobs.needsSecondLook({ confidence: "high" }), false);
   assert.equal(jobs.needsSecondLook({ confidence: "low" }), true);

@@ -16,8 +16,10 @@ Ask, news) need billing turned on, because Google’s free tier has no Google Se
 - **Listing writer** — eBay / TCGplayer / Whatnot title, description, item specifics and pricing.
 - **Centering tool** — measure left/right and top/bottom centering on the photo.
 - **⚡ Quick price** and **📖 Set browser** — free sold-price lookups and every card in a set sorted by value (no AI).
-- **🔥 Hottest cards** — today / this week / this month per category, double-checked against real sold prices, with
-  NEW / ↑↓ markers vs the last scan. Optional automatic **morning brief**.
+- **🔥 Hottest cards** — today / this week / this month per category: targeted Google searches, then every card checked
+  against its own sold prices (the ones sold prices back rank first), with its sources, whether you own / want /
+  watch it, an alert when a card you own shows up, and how the list's past picks did since. Without Google Search
+  (needs billing on Gemini 3) it ranks your own tracked cards by their real price moves. Optional **morning brief**.
 - **Ask** — any market question (or follow-ups about a specific card), answered with Google-searched sources.
 
 **Business**

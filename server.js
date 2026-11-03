@@ -309,6 +309,7 @@ app.get("/api/settings", async (req, res) => {
     priceApi: pricecharting.apiTokens(),
     ebay: ebay.hasKeys(),
     dailyBrief: process.env.CARD_BOT_DAILY_BRIEF === "1",
+    briefHour: parseInt(process.env.CARD_BOT_BRIEF_HOUR, 10) || 8,
     port: PORT,
     desktop: DESKTOP,
     dataFolder: HOME,
@@ -354,6 +355,7 @@ app.post("/api/settings", async (req, res) => {
       vars.CARD_BOT_MONTHLY_BUDGET = Number.isFinite(n) && n > 0 ? String(n) : null;
     }
     if (b.dailyBrief !== undefined) vars.CARD_BOT_DAILY_BRIEF = b.dailyBrief ? "1" : null;
+    if (b.briefHour !== undefined) { const h = parseInt(b.briefHour, 10); vars.CARD_BOT_BRIEF_HOUR = h >= 0 && h <= 23 ? String(h) : null; }
     if (b.share !== undefined) {
       if (b.share && !/^\d{4,8}$/.test(String(b.pin || process.env.ACCESS_PIN || ""))) throw new Error("Pick a 4–8 digit PIN for network sharing.");
       vars.SHARE_ON_NETWORK = b.share ? "1" : null;
@@ -740,22 +742,72 @@ const MOVER_DAYS = { daily: 1, weekly: 7, monthly: 30 };
 const hotKey = (name) => String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 async function runHotScan({ category, period, onEvent, signal }) {
-  const trackedMovers = store.movers(MOVER_DAYS[period]).filter((m) => category === "all" || m.category === category);
-  const result = await hotCards({ category, period, trackedMovers }, { onEvent, signal });
+  const days = MOVER_DAYS[period];
+  const trackedMovers = store.movers(days).filter((m) => category === "all" || m.category === category);
+  const inv = store.inventoryView();
+  const catOf = new Map(inv.map((r) => [r.id, r.category]));
+  const stockMovers = store.stockMovers(days, 10).up.map((m) => ({ ...m, category: catOf.get(m.id) || "other" }));
+  const result = await hotCards({ category, period, trackedMovers, stockMovers }, { onEvent, signal });
   const key = `${category}:${period}`;
   const all = store.load("hot", {});
+  const before = all[key];
   // Mark what's new or moving vs the previous scan of the same view.
-  const prev = new Map((all[key]?.cards || []).map((c) => [hotKey(c.name), c.rank]));
+  const prev = new Map((before?.cards || []).map((c) => [hotKey(c.name), c.rank]));
   for (const c of result.cards || []) {
     const was = prev.get(hotKey(c.name));
-    c.movement = all[key] ? (was == null ? "new" : was - c.rank) : null;
+    c.movement = before ? (was == null ? "new" : was - c.rank) : null;
   }
-  const hot = { at: new Date().toISOString(), category, period, ...result, trackedMovers };
+  // What you have of each: copies in stock, on the want list, on the watchlist — and a heads-up when one you own
+  // turns up (a moment to sell into).
+  const watch = store.watchlist();
+  const when = { daily: "today", weekly: "this week", monthly: "this month" }[period];
+  for (const c of result.cards || []) {
+    const url = c.price_check?.url;
+    const mine = url ? inv.filter((r) => r.status !== "sold" && r.priceUrl === url) : [];
+    c.yours = { owned: mine.reduce((n, r) => n + (r.qty || 1), 0), grades: [...new Set(mine.map((r) => r.grade))], wanted: Boolean(url) && wantMatches(url, "Raw", c.name).length > 0, watching: Boolean(url) && watch.some((w) => w.pricechartingUrl === url) };
+    if (c.yours.owned && !c.tracked && (c.movement === "new" || c.movement === null)) store.addAlert({ kind: "hot", name: c.name, text: `You own ${c.yours.owned} (${c.yours.grades.join(", ")}) — it's on the hottest list ${when}: ${c.why_hot}${c.sold?.confirmed ? " Sold prices back it up." : ""}` });
+  }
+  // The list's own track record: each scan is kept (30 of them), so a card's streak and first sighting show, and the
+  // cards flagged a week or more ago can be checked against what their sold prices did since.
+  const past = [...(before?.past || []), ...(before ? [{ at: before.at, cards: (before.cards || []).map((c) => ({ name: c.name, rank: c.rank, url: c.price_check?.url || null, raw: c.price_check?.ungraded ?? null, psa10: c.price_check?.psa10 ?? null })) }] : [])].slice(-30);
+  const idOf = (c) => c.url || c.price_check?.url || hotKey(c.name);
+  for (const c of result.cards || []) {
+    let streak = 1;
+    for (let i = past.length - 1; i >= 0 && past[i].cards.some((x) => idOf(x) === idOf(c)); i--) streak++;
+    c.history = { streak, firstSeen: past.find((p) => p.cards.some((x) => idOf(x) === idOf(c)))?.at || null };
+  }
+  const scoreboard = await hotScoreboard(past, signal).catch(() => null);
+  const hot = { at: new Date().toISOString(), category, period, ...result, trackedMovers, past, scoreboard };
   all[key] = hot;
   store.save("hot", all);
   return hot;
 }
 
+/**
+ * Did the list's calls pay? The cards it flagged 1-8 weeks ago (raw price then, from that scan's sold-price check)
+ * against their raw price now — at most 15 card pages, each cached 6 hours.
+ */
+async function hotScoreboard(past, signal) {
+  const now = Date.now(), seen = new Map();
+  for (const p of past) {
+    const age = (now - Date.parse(p.at)) / 86400000;
+    if (age < 7 || age > 56) continue;
+    for (const c of p.cards) if (c.url && c.raw > 0 && !seen.has(c.url)) seen.set(c.url, { name: c.name, then: c.raw, at: p.at, url: c.url });
+  }
+  const picks = [...seen.values()].slice(0, 15);
+  if (!picks.length) return null;
+  const rows = [];
+  for (const c of picks) {
+    if (signal?.aborted) break;
+    const gv = await gradeValues({ priceUrl: c.url, value: null }).catch(() => null);
+    if (gv?.raw > 0) rows.push({ ...c, now: gv.raw, pct: Math.round(((gv.raw - c.then) / c.then) * 1000) / 10 });
+  }
+  if (!rows.length) return null;
+  return { cards: rows.length, up: rows.filter((r) => r.pct > 0).length, avgPct: Math.round((rows.reduce((n, r) => n + r.pct, 0) / rows.length) * 10) / 10, rows: rows.sort((a, b) => b.pct - a.pct) };
+}
+
+// how old each view's last list is (the category buttons show it)
+app.get("/api/hot/ages", (_req, res) => res.json(Object.fromEntries(Object.entries(store.load("hot", {})).map(([k, v]) => [k, v?.at || null]))));
 app.get("/api/hot", (req, res) => {
   res.json(store.load("hot", {})[`${req.query.category}:${req.query.period}`] || null);
 });
@@ -789,7 +841,10 @@ app.post("/api/ask", (req, res) => {
   if (!question) return res.status(400).json({ error: "Ask a question." });
   const history = Array.isArray(req.body?.history) ? req.body.history.slice(-4) : [];
   const lookup = req.body?.lookupId ? store.getLookup(req.body.lookupId) : null;
-  const cardContext = lookup ? { card: lookup.card, pricing: lookup.pricing, market: lookup.market, grading: lookup.grading, buy_sell: lookup.buy_sell, summary: lookup.summary } : null;
+  // a question about a hottest-cards list: the list itself (each card, why, the sold-price check) is the context
+  const hot = !lookup && req.body?.hot ? store.load("hot", {})[String(req.body.hot)] : null;
+  const cardContext = lookup ? { card: lookup.card, pricing: lookup.pricing, market: lookup.market, grading: lookup.grading, buy_sell: lookup.buy_sell, summary: lookup.summary }
+    : hot ? { hottest_cards_list: { category: hot.category, period: hot.period, at: hot.at, summary: hot.market_summary, cards: (hot.cards || []).map((c) => ({ rank: c.rank, name: c.name, why: c.why_hot, sold_check: c.sold?.why || null, raw: c.price_check?.ungraded ?? null, psa10: c.price_check?.psa10 ?? null, you_own: c.yours?.owned || 0 })) } } : null;
   streamJob(req, res, async (send, signal) => ({ answer: await ask({ question, history, cardContext }, { onEvent: send, signal }) }));
 });
 

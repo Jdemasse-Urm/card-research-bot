@@ -9,6 +9,8 @@ import path from "node:path";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "cardbot-ai-"));
 let behave = () => [200]; // (model, search) → [status, body?] or "hang"
+let answer = null; // (model) → the text of a 200 answer; null = "answer from <model>"
+let grounding = null; // groundingMetadata a search answer carries (sources + which text they back)
 const seen = [];
 const server = http.createServer((req, res) => {
   let body = "";
@@ -21,8 +23,8 @@ const server = http.createServer((req, res) => {
     if (status === "hang") return; // never answers; the client's deadline has to end it
     res.writeHead(status, { "content-type": "application/json" });
     if (status === 200) {
-      const text = /responseJsonSchema/.test(body) ? JSON.stringify({ ok: true, n: 7 }) : `answer from ${model}`;
-      return res.end(JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 2 } }));
+      const text = answer ? answer(model, body) : /responseJsonSchema/.test(body) ? JSON.stringify({ ok: true, n: 7 }) : `answer from ${model}`;
+      return res.end(JSON.stringify({ candidates: [{ content: { role: "model", parts: [{ text }] }, finishReason: "STOP", ...(search && grounding ? { groundingMetadata: grounding } : {}) }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 2 } }));
     }
     res.end(JSON.stringify({ error: { code: status, ...err } }));
   });
@@ -46,6 +48,7 @@ after(() => {
 const fresh = () => {
   ai.resetClient();
   seen.length = 0;
+  answer = grounding = null;
 };
 const run = async (o) => {
   const steps = [];
@@ -121,4 +124,36 @@ test("both models overloaded: a plain-words error, not a raw 503", async () => {
   const r = await run({});
   assert.equal(r.err?.status, 503);
   assert.match(ai.explainError(r.err), /overloaded right now/);
+});
+
+test("a searched answer marks where each source backs it, and the same page keeps one number across searches", async () => {
+  fresh();
+  behave = () => [200];
+  answer = () => "Skubal threw a no-hitter. Prizm Wemby is up 40%.";
+  grounding = {
+    groundingChunks: [{ web: { uri: "https://a.example/skubal", title: "a.example" } }, { web: { uri: "https://b.example/wemby", title: "b.example" } }],
+    groundingSupports: [{ segment: { text: "Skubal threw a no-hitter." }, groundingChunkIndices: [0] }, { segment: { text: "Prizm Wemby is up 40%." }, groundingChunkIndices: [1, 0] }],
+  };
+  const job = new ai.Job({ kind: "test" });
+  const one = await job.generate({ system: "s", parts: [{ text: "q" }], search: true, cite: true });
+  assert.equal(one, "Skubal threw a no-hitter. [1] Prizm Wemby is up 40%. [2][1]");
+  grounding = { groundingChunks: [{ web: { uri: "https://b.example/wemby", title: "b.example" } }], groundingSupports: [{ segment: { text: "Prizm Wemby is up 40%." }, groundingChunkIndices: [0] }] };
+  const two = await job.generate({ system: "s", parts: [{ text: "q" }], search: true, cite: true });
+  assert.match(two, /up 40%\. \[2\]$/, "b.example is still [2] in the second search");
+  assert.deepEqual(job.sourceList.map((x) => x.url), ["https://a.example/skubal", "https://b.example/wemby"]);
+  const plain = await job.generate({ system: "s", parts: [{ text: "q" }], search: true });
+  assert.equal(plain, "Skubal threw a no-hitter. Prizm Wemby is up 40%.", "without cite the text is untouched (Ask, lookups)");
+});
+
+test("hottest cards without Google Search: the list comes from your own tracked cards, said plainly — not an error", async () => {
+  fresh();
+  behave = (m, search) => (search ? [429, NO_SEARCH] : [200]);
+  const jobs = await import("../lib/jobs.js");
+  const r = await jobs.hotCards({ category: "all", period: "weekly", trackedMovers: [{ name: "Wemby Prizm #136", category: "basketball", from: 100, to: 150, pct: 50 }, { name: "Down card", category: "baseball", from: 50, to: 40, pct: -20 }], stockMovers: [{ name: "Skubal Chrome RC", grade: "PSA 10", category: "baseball", from: 80, to: 100, pct: 0.25 }] }, { onEvent: () => {} });
+  assert.equal(r.tracked, true);
+  assert.deepEqual(r.cards.map((c) => [c.rank, c.name, c.price_change]), [[1, "Wemby Prizm #136", "+50%"], [2, "Skubal Chrome RC PSA 10", "+25%"]], "only the ones that rose, biggest first");
+  assert.match(r.market_summary, /your own tracked cards/);
+  assert.match(r.market_summary, /free tier/, "and why");
+  // two go out together and a third can leave as the first answer comes back, before the refusal is noted
+  assert.ok(seen.filter((x) => x.search).length <= 3, `the rest never reach Google (${seen.filter((x) => x.search).length} did)`);
 });

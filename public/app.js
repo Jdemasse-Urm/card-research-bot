@@ -200,6 +200,7 @@ async function openSettings() {
   $("#shareToggle").checked = s.share;
   $("#helperPinState").textContent = s.helperPinSet ? "set — leave blank and Save to remove it" : "not set";
   $("#briefToggle").checked = s.dailyBrief;
+  $("#briefHour").innerHTML = Array.from({ length: 12 }, (_, i) => i + 5).map((h) => `<option value="${h}"${h === s.briefHour ? " selected" : ""}>${h % 12 || 12} ${h < 12 ? "am" : "pm"}</option>`).join("");
   // "saved" isn't "working": show what PSA actually answered
   $("#psaState").innerHTML = !s.psa ? "" : (s.psaCheck?.ok ? `<span class="ok">✓ working</span>` : `<span class="warn">⚠ token saved, but PSA says no: ${esc(s.psaCheck?.error || "not checked yet")}</span>`) + ` <span class="muted">· ${s.psaCallsToday || 0} PSA call${s.psaCallsToday === 1 ? "" : "s"} today (PSA allows about 100 a day)</span>`;
   $("#priceApiState").innerHTML = [s.priceApi?.sportscardspro && "SportsCardsPro ✓", s.priceApi?.pricecharting && "PriceCharting ✓"].filter(Boolean).map((t) => `<span class="ok">${t}</span>`).join(" · ");
@@ -300,6 +301,7 @@ $("#savePriceApi").onclick = async () => {
 $("#saveEbay").onclick = async () => { if (await saveSettings({ ebayId: $("#ebayIdInput").value, ebaySecret: $("#ebaySecretInput").value }, $("#connMsg"))) { $("#ebayIdInput").value = $("#ebaySecretInput").value = ""; openSettings(); } };
 $("#saveBudget").onclick = () => saveSettings({ budget: $("#budgetInput").value }, $("#keyMsg"));
 $("#briefToggle").onchange = () => saveSettings({ dailyBrief: $("#briefToggle").checked }, $("#keyMsg"));
+$("#briefHour").onchange = () => saveSettings({ briefHour: $("#briefHour").value }, $("#keyMsg"));
 $("#saveShare").onclick = () => saveSettings({ share: $("#shareToggle").checked, pin: $("#pinInput").value || undefined }, $("#shareMsg"));
 $("#saveHelperPin").onclick = () => saveSettings({ helperPin: $("#helperPinInput").value.trim() }, $("#shareMsg")).then(openSettings);
 $("#restoreFile").onchange = async (e) => {
@@ -1038,6 +1040,7 @@ pillGroup("#hotCats", (v) => { hotCat = v; loadHotCached(); });
 pillGroup("#hotPeriods", (v) => { hotPeriod = v; loadHotCached(); });
 
 async function loadHotCached() {
+  hotAges();
   const hot = await getJSON(`/api/hot?category=${hotCat}&period=${hotPeriod}`);
   $("#hotRefresh").classList.toggle("hidden", !hot);
   $("#hotResult").innerHTML = hot ? "" : `<div class="empty"><h2>No report yet for this view</h2><p>Click <b>Find hottest cards</b>. The bot searches Google for news and market trackers, then checks real sold prices (takes 1–2 minutes).</p></div>`;
@@ -1067,44 +1070,91 @@ $("#hotCancel").onclick = () => hotCtrl?.abort();
 
 const signalLabel = { price_spike: "📈 Price spike", volume_spike: "🔊 Volume spike", news: "📰 News", new_release: "🆕 New release", tournament_meta: "🏆 Tournament meta", milestone: "🎯 Milestone", long_term_riser: "⏫ Long-term riser" };
 const movementChip = (m) => (m === "new" ? `<span class="chip good">NEW</span>` : m > 0 ? `<span class="chip good">↑${m}</span>` : m < 0 ? `<span class="chip warn">↓${-m}</span>` : "");
+const hotId = (name) => String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const hotHidden = () => new Set(store.get("hotHidden", []));
+/** How the card's own sold prices answer the claim. */
+const soldChip = (s) => !s ? "" : s.confirmed === true ? `<span class="chip good" title="${esc(s.why)}">✓ sold prices back it</span>` : s.confirmed === false ? `<span class="chip warn" title="${esc(s.why)}">sold prices don't show it yet</span>` : `<span class="chip" title="${esc(s.why || "")}">no sold data</span>`;
+const WINDOW_DAYS = { daily: 2, weekly: 7, monthly: 30 };
+
+/** Each category button says how old its last list is ("· 3h"). */
+async function hotAges() {
+  const ages = await getJSON("/api/hot/ages").catch(() => ({}));
+  $$("#hotCats button").forEach((b) => {
+    const at = ages[`${b.dataset.v}:${hotPeriod}`];
+    let tag = b.querySelector(".age");
+    if (!tag) { tag = document.createElement("span"); tag.className = "age muted small"; b.append(tag); }
+    const h = at ? (Date.now() - Date.parse(at)) / 3600000 : null;
+    tag.textContent = h == null ? "" : ` · ${h < 1 ? "now" : h < 48 ? Math.round(h) + "h" : Math.round(h / 24) + "d"}`;
+    b.title = at ? `Last list ${when(at)}` : "No list yet";
+  });
+}
+
+/** The list as plain text, to paste in a message. */
+function hotText(h) {
+  const period = { daily: "today", weekly: "this week", monthly: "this month" }[h.period];
+  return [`Hottest ${h.category === "all" ? "cards" : CAT_LABEL[h.category]} ${period} (${day(h.at)})`, "",
+    ...(h.cards || []).map((c) => `${c.rank}. ${c.name} — ${c.why_hot}${c.price_check?.ungraded != null ? ` · raw ${usd(c.price_check.ungraded)}` : ""}${c.price_check?.psa10 != null ? ` · PSA 10 ${usd(c.price_check.psa10)}` : ""}${c.sold?.confirmed ? " · ✓ sold prices back it" : ""}`)].join("\n");
+}
 
 function renderHot(h) {
   const periodLabel = { daily: "today", weekly: "this week", monthly: "this month" }[h.period];
+  const hidden = hotHidden();
+  const cards = (h.cards || []).filter((c) => !hidden.has(hotId(c.name)));
+  const hiddenHere = (h.cards || []).length - cards.length;
+  const sb = h.scoreboard;
+  const staleBefore = Date.parse(h.at) - (WINDOW_DAYS[h.period] || 7) * 2 * 86400000;
   $("#hotResult").innerHTML = `
     <div class="panel hot-summary">
       <div class="row space"><h2>Hottest ${esc(h.category === "all" ? "cards" : CAT_LABEL[h.category])} ${esc(periodLabel)}</h2><span class="muted small">Updated ${esc(when(h.at))}</span></div>
+      ${h.tracked ? `<p class="small warn">📋 From your own tracked cards only (no Google search this time).</p>` : ""}
       <p>${esc(h.market_summary)}</p>
+      ${sb ? `<p class="small"><b>How this list's past calls did:</b> of ${plural(sb.cards, "card")} it flagged 1–8 weeks ago, ${sb.up} are up since — average <b class="${sb.avgPct >= 0 ? "pos" : "neg"}">${sb.avgPct >= 0 ? "+" : ""}${sb.avgPct}%</b> in raw sold price. <details style="display:inline"><summary class="muted">which</summary><ul class="tight">${sb.rows.map((r) => `<li>${link(r.url, r.name)}: ${usd(r.then)} → ${usd(r.now)} (${r.pct >= 0 ? "+" : ""}${r.pct}%) · flagged ${esc(day(r.at))}</li>`).join("")}</ul></details></p>` : ""}
       ${(h.trackedMovers || []).length ? `<p class="small"><b>Your watchlist movers:</b> ${h.trackedMovers.slice(0, 6).map((m) => `${esc(m.name)} ${pct(m.pct)}`).join(" · ")}</p>` : ""}
-      <div class="small muted">${esc(costLine(h.usage))}</div>
+      <div class="row small" style="margin:.3rem 0 0"><button class="ghost small" data-hcopy>📋 Copy as text</button><button class="ghost small" data-hask>💬 Ask about this list</button>${hiddenHere ? `<button class="ghost small" data-hshow>Show ${hiddenHere} hidden</button>` : ""}</div>
+      <div class="small muted">${esc(costLine(h.usage))}${h.searches ? ` · ${h.searches} Google search${h.searches === 1 ? "" : "es"} for this list` : ""}</div>
     </div>
-    ${(h.cards || []).map((c, i) => {
-      const pc = c.price_check;
+    <div role="list" aria-label="Hottest cards">
+    ${cards.map((c) => {
+      const pc = c.price_check, i = h.cards.indexOf(c), y = c.yours || {};
+      const stale = c.evidence_date && Date.parse(c.evidence_date) < staleBefore;
+      // a flip's ceiling: the raw sold value less eBay's fees, less a 20% margin for the work and the risk
+      const maxBuy = pc?.ungraded > 0 ? Math.max(0, Math.round((pc.ungraded * (1 - 0.1325) - 0.4) * 0.8)) : null;
       return `
-      <div class="hot-card">
-        <div class="rank">${esc(c.rank)}</div>
+      <div class="hot-card" role="listitem">
+        <div class="rank" aria-label="Rank ${esc(c.rank)}">${esc(c.rank)}</div>
         <div>
           <div class="hot-name">${esc(c.name)}</div>
-          <div class="chips"><span class="chip">${esc(CAT_LABEL[c.category] || c.category)}</span><span class="chip warn">${esc(signalLabel[c.signal] || c.signal)}</span>${movementChip(c.movement)}</div>
+          <div class="chips"><span class="chip">${esc(CAT_LABEL[c.category] || c.category)}</span><span class="chip warn">${esc(signalLabel[c.signal] || c.signal)}</span>${movementChip(c.movement)}${soldChip(c.sold)}${c.history?.streak > 1 ? `<span class="chip good" title="On the list ${c.history.streak} scans in a row, first ${esc(day(c.history.firstSeen))}">🔥 ${c.history.streak} in a row</span>` : ""}${y.owned ? `<span class="chip good" title="${esc((y.grades || []).join(", "))}">you own ${y.owned}</span>` : ""}${y.wanted ? `<span class="chip">🎯 wanted</span>` : ""}${y.watching ? `<span class="chip">★ watching</span>` : ""}${stale ? `<span class="chip warn" title="The newest evidence is older than this list's window">evidence from ${esc(day(c.evidence_date))}</span>` : ""}</div>
           <p class="small" style="margin:.5rem 0 .3rem">${esc(c.why_hot)}</p>
-          <p class="small" style="margin:0"><b>Play:</b> ${esc(c.opportunity)}</p>
-          ${pc ? `<p class="small muted" style="margin:.35rem 0 0">Sold-price check (${link(pc.url, pc.matched)}): raw ${usd(pc.ungraded)} · PSA 10 ${usd(pc.psa10)} · 1-mo ${pct(pc.trend_1mo)}${pc.last_sale ? ` · last sale ${usd(pc.last_sale.price)} ${esc(pc.last_sale.grade)} on ${esc(pc.last_sale.date)}` : ""}</p>` : ""}
+          <p class="small" style="margin:0"><b>Play:</b> ${esc(c.opportunity)}${y.owned && pc?.ungraded ? ` <span class="muted">— yours: recent raw sales ~${usd(pc.ungraded)}${pc.last_sale ? `, last ${usd(pc.last_sale.price)} (${esc(pc.last_sale.grade)})` : ""}</span>` : maxBuy ? ` <span class="muted" title="Raw sold value ${usd(pc.ungraded)} less eBay's ~13% + $0.40, less a 20% margin">— to flip a raw one, pay up to ~${usd(maxBuy)}</span>` : ""}</p>
+          ${c.sold?.why ? `<p class="small muted" style="margin:.35rem 0 0">${esc(c.sold.why)}${c.sold.spark?.length > 2 ? " " + sparkline(c.sold.spark) : ""}</p>` : ""}
+          ${pc ? `<p class="small muted" style="margin:.2rem 0 0">Sold-price check (${link(pc.url, pc.matched)}): raw ${usd(pc.ungraded)} · PSA 10 ${usd(pc.psa10)} · 1-mo ${pct(pc.trend_1mo)}${pc.last_sale ? ` · last sale ${usd(pc.last_sale.price)} ${esc(pc.last_sale.grade)} on ${esc(pc.last_sale.date)}` : ""}</p>` : ""}
+          ${(c.sources || []).length ? `<div class="small sources" style="margin-top:.3rem">${c.sources.map((s) => link(s.url, s.title)).join("")}</div>` : ""}
         </div>
         <div class="hot-right">
           <div class="price">${esc(c.recent_price)}</div>
           <div class="small">${esc(c.price_change)}</div>
           <div class="actions" style="justify-content:flex-end;margin-top:.5rem">
-            ${pc ? `<button class="small" data-hwatch="${i}">★ Watch</button>` : ""}
+            ${pc ? `<button class="small" data-hwatch="${i}">★ Watch</button><button class="small" data-hdeals="${i}" title="Live eBay listings under its sold value">🔎 Deals</button>` : ""}
+            <button class="small" data-hquick="${i}" title="Free sold-price lookup, no AI">⚡ Price</button>
             <button class="small research-this" data-q="${esc(c.search_query)}">Research →</button>
+            <button class="ghost small" data-hhide="${i}" title="Not interested — hide it from these lists" aria-label="Hide ${esc(c.name)}">✕</button>
           </div>
         </div>
       </div>`;
-    }).join("")}
+    }).join("")}</div>
     ${(h.watch_out || []).length ? `<div class="panel"><h3 style="margin-top:0">Cooling off / watch out</h3><ul class="tight small">${h.watch_out.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
-    ${(h.sources || []).length ? `<div class="panel"><h3 style="margin-top:0">Sources</h3><div class="sources">${h.sources.map((s) => link(s.url, s.title)).join("")}</div></div>` : ""}`;
+    ${(h.sources || []).length ? `<div class="panel"><h3 style="margin-top:0">All sources</h3><div class="sources">${h.sources.map((s) => link(s.url, s.title)).join("")}</div></div>` : ""}`;
   $$(".research-this").forEach((b) => (b.onclick = () => {
     photos = []; renderThumbs();
     $("#lookupText").value = b.dataset.q;
     goTab("lookup");
+  }));
+  $$("[data-hquick]").forEach((b) => (b.onclick = () => {
+    photos = []; renderThumbs();
+    $("#lookupText").value = h.cards[+b.dataset.hquick].search_query;
+    goTab("lookup");
+    $("#quickBtn").click();
   }));
   $$("[data-hwatch]").forEach((b) => (b.onclick = async () => {
     const c = h.cards[+b.dataset.hwatch];
@@ -1112,6 +1162,28 @@ function renderHot(h) {
     b.textContent = r.ok ? "★ Watching" : "Couldn't add";
     b.disabled = true;
   }));
+  $$("[data-hdeals]").forEach((b) => (b.onclick = () => { const c = h.cards[+b.dataset.hdeals]; openDeals({ url: c.price_check.url, grade: "Raw", name: c.price_check.matched }); }));
+  $$("[data-hhide]").forEach((b) => (b.onclick = () => {
+    const set = hotHidden();
+    set.add(hotId(h.cards[+b.dataset.hhide].name));
+    store.set("hotHidden", [...set].slice(-300));
+    renderHot(h);
+  }));
+  const show = $("[data-hshow]");
+  if (show) show.onclick = () => { const set = hotHidden(); for (const c of h.cards || []) set.delete(hotId(c.name)); store.set("hotHidden", [...set]); renderHot(h); };
+  $("[data-hcopy]").onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(hotText(h));
+      toast("Copied — paste it in a message");
+    } catch {
+      toast("Couldn't copy here.", { error: true });
+    }
+  };
+  $("[data-hask]").onclick = () => {
+    setAskContext({ hot: `${h.category}:${h.period}`, label: `the hottest ${h.category === "all" ? "cards" : CAT_LABEL[h.category]} list (${periodLabel})` });
+    goTab("ask");
+    $("#askInput")?.focus();
+  };
 }
 
 // ------------------------------------------------------------------ watchlist + alerts
@@ -1120,7 +1192,7 @@ async function loadWatch() {
   const [{ items, movers }, alerts] = await Promise.all([getJSON("/api/watchlist"), getJSON("/api/alerts")]);
   const unseen = alerts.filter((a) => !a.seen);
   const alertText = (a) => (a.kind === "brief" ? `☀️ <b>${esc(a.name)}</b>: ${esc(a.text)} <a href="#" data-gohot>Open</a>`
-    : a.text ? `${a.kind === "order" ? "🛒" : a.kind === "ticket" ? "✉" : a.kind === "pricing" ? "📈" : a.kind === "grading" ? "🏷" : "🔔"} <b>${esc(a.name)}</b>: ${esc(a.text)}` // website orders, messages, pricing-engine notices
+    : a.text ? `${a.kind === "order" ? "🛒" : a.kind === "ticket" ? "✉" : a.kind === "pricing" ? "📈" : a.kind === "grading" ? "🏷" : a.kind === "hot" ? "🔥" : "🔔"} <b>${esc(a.name)}</b>: ${esc(a.text)}` // website orders, messages, pricing-engine notices
     : `🔔 <b>${esc(a.name)}</b> is ${a.kind === "above" ? "up to" : "down to"} <b>${usd(a.value)}</b> (your ${a.kind === "above" ? "sell" : "buy"} target ${usd(a.target)})`);
   $("#alertList").innerHTML = unseen.length
     ? unseen.map((a) => `<div class="alert-item" role="status"><span>${alertText(a)} · ${esc(when(a.at))}</span></div>`).join("") +
@@ -1179,7 +1251,7 @@ function setAskContext(r) {
   const box = $("#askContext");
   box.classList.toggle("hidden", !r);
   if (r) {
-    box.innerHTML = `<div class="row space" style="margin:0"><span>Asking about: <b>${esc(r.card?.name)}</b> (${usd(r.pricing?.estimated_value_usd)})</span><button class="ghost small" id="askClear">✕ Clear</button></div>`;
+    box.innerHTML = `<div class="row space" style="margin:0"><span>Asking about: <b>${esc(r.hot ? r.label : r.card?.name)}</b>${r.hot ? "" : ` (${usd(r.pricing?.estimated_value_usd)})`}</span><button class="ghost small" id="askClear">✕ Clear</button></div>`;
     $("#askClear").onclick = () => setAskContext(null);
   }
 }
@@ -1261,7 +1333,7 @@ async function doAsk(question) {
   $("#askCancel").classList.remove("hidden");
   askCtrl = new AbortController();
   try {
-    const { answer } = await streamPost("/api/ask", { question, history: askHistory, lookupId: askLookup?.id }, $("#askProgress"), askCtrl);
+    const { answer } = await streamPost("/api/ask", { question, history: askHistory, lookupId: askLookup?.id, hot: askLookup?.hot }, $("#askProgress"), askCtrl);
     askHistory.push({ q: question, a: answer.answer_markdown.slice(0, 1500) });
     chat.insertAdjacentHTML("beforeend", `<div class="msg a">${md(answer.answer_markdown)}
       ${(answer.sources || []).length ? `<h3>Sources</h3><div class="sources">${answer.sources.map((s) => link(s.url, s.title)).join("")}</div>` : ""}

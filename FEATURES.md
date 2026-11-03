@@ -17,7 +17,7 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Quick price (no AI) | Free sold-price lookup from SportsCardsPro / PriceCharting | 3.0 |
 | Price search through the sites' API | Since the price sites put a robot check on their search pages (late Oct 2026), search goes through their official API ($6/month each) with a token in Settings; card pages, sales and set pages are read as before | 3.14.2 |
 | Set browser | Every card in a set sorted by value, rookies filter | 3.0 |
-| Hottest cards | Today / week / month per category, double-checked against real sold prices, NEW/↑↓ vs the last scan, one-click watch | 1.0 / 3.0 |
+| Hottest cards | Today / week / month per category; one targeted Google search per category; each card checked against its own sold prices (✓ backed / no data / not backed, ranked in that order, with the numbers + chart); sources per card; you own / wanted / watching; flip or sell-into prices; alert when a card you own shows up; streaks + a scoreboard of past calls; without search a list from your own tracked moves; Deals / Price / Research / hide; Ask about the list; copy as text | 1.0 / 3.0 / 3.17 |
 | Ask | Any market question with Google-searched sources; follow-ups about a specific card | 1.0 |
 | Ask about my business | Questions about your own sales, stock, expenses and customers — the AI picks what to count, the app counts your records | 3.12 |
 | Lot / binder-page evaluator | One photo of many cards → each priced, total value, offer verdict for an asking price; fix a misread card and re-price without AI | 3.0 / 3.2 |

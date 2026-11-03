@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.14.1 — when Google, PSA or the price sites say no, the app says why
+
+- **Gemini busy no longer looks like a hang.** When Google says the main model (gemini-3.8-flash) is overloaded — it
+  was for most of Nov 3 — the app tries once more, then the backup model answers within seconds, and the main one is
+  skipped for 5 minutes. A call that hangs moves to the backup after one 90 s wait instead of two. After 25 s of
+  silence the progress line says what it is waiting on. The self-test shows each retry and switch as it happens.
+- **Google Search needs billing on Gemini 3 models.** Google's free tier has no Google Search on Gemini 3 and newer
+  models ("Not available" on Google's pricing page), so hottest cards, Ask, news in a lookup and the market check
+  could never search on a free key — the app waited out a "speed limit" six times and then failed. Now it says at once
+  what to do (turn on billing in Google AI Studio; the first 5,000 searches a month are free), and doesn't ask Google
+  again for 30 minutes. Saving a new key in Settings clears that.
+- **A card lookup finishes without search.** Identification, sold prices, the grade math and the reseller call come
+  from the photo and the price sites; when search isn't possible the report is written from those and says news is
+  unknown, instead of the whole lookup failing. The inventory market check does the same.
+- **PSA:** when PSA turns the token away, the app shows PSA's own reason. "Access to this API is limited to approved
+  customers" means the token is right but PSA hasn't switched API access on for the account yet.
+- **Price sites:** SportsCardsPro and PriceCharting now put a robot check ("Just a moment…") on their search pages;
+  the app says so plainly instead of "HTTP 403". Card pages themselves still load, so cards already in inventory keep
+  re-pricing.
+
 ## 3.14.0 — updates install by themselves
 
 - **Automatic updates** (Settings → Desktop app → Update automatically, on by default). Every 6 hours the app looks

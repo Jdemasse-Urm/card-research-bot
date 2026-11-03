@@ -1,7 +1,8 @@
 # Card Research Bot
 
 An AI research assistant for a trading card business. Runs on **Windows and Mac** in your web browser, powered by
-**Google Gemini** (free tier works — no credit card).
+**Google Gemini**. The free tier reads photos, scans and prices cards; the features that search Google (hottest cards,
+Ask, news) need billing turned on, because Google’s free tier has no Google Search on Gemini 3 models.
 
 **Research**
 - **Drag & drop a card photo** (front + back works best), or take one with your phone's camera. The bot identifies
@@ -98,6 +99,9 @@ Windows and the Mac `.dmg` on macOS, smoke-tests both packaged apps, and attache
 
 - **Free tier:** $0. Google limits how many requests per minute/day you can make; if you hit the limit the bot waits
   and retries, or tells you to try again later. On the free tier Google may use your prompts to improve its products.
+  Google Search is not part of the free tier on Gemini 3 models, so hottest cards, Ask and the news in a lookup need
+  billing on (a lookup still works without it, from the sold prices). When Google is overloaded the bot switches to
+  the backup model (`gemini-3.5-flash-lite`) for 5 minutes.
 - **If you turn on billing** in Google AI Studio (higher limits, private data): a card lookup is roughly a cent or two.
   The first 5,000 Google-searched requests each month are free. Settings shows this month's estimated spend and lets
   you set a monthly cap.

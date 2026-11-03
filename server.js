@@ -306,6 +306,7 @@ app.get("/api/settings", async (req, res) => {
     psa: psa.hasToken(),
     psaCheck: await psa.check(), // does PSA actually answer (checked at most hourly)
     psaCallsToday: psa.callsToday(),
+    psaContact: psa.PSA_API_CONTACT,
     priceApi: pricecharting.apiTokens(),
     ebay: ebay.hasKeys(),
     dailyBrief: process.env.CARD_BOT_DAILY_BRIEF === "1",

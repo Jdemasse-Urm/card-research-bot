@@ -82,6 +82,9 @@ for Yu-Gi-Oh, One Piece and Pokémon — optional, those also have free sources)
 site's Subscription page → API/Download in **Settings → Optional connections**; Save tries it once. Cards already priced
 keep re-pricing without it.
 
+*(PSA, Nov 2026: PSA now switches its API on account by account — a new account's token gets "Access to this API is
+limited to approved customers" until PSA approves it. Settings → ✉ Ask PSA for access writes the email.)*
+
 *(Optional)* **PSA token** — free at <https://www.psacard.com/publicapi/documentation> — for slab checks, population
 and grading progress. **eBay keys** — free at <https://developer.ebay.com/my/keys> (Production keyset: App ID +
 Cert ID) — for the deal finder. Paste them in **Settings → Optional connections**.
@@ -107,8 +110,9 @@ Windows and the Mac `.dmg` on macOS, smoke-tests both packaged apps, and attache
 
 - **Free tier:** $0. Google limits how many requests per minute/day you can make; if you hit the limit the bot waits
   and retries, or tells you to try again later. On the free tier Google may use your prompts to improve its products.
-  Google Search is not part of the free tier on Gemini 3 models, so hottest cards, Ask and the news in a lookup need
-  billing on (a lookup still works without it, from the sold prices). When Google is overloaded the bot switches to
+  Google Search is not part of the free tier on Gemini 3 models; until Google retires it on Dec 1, 2026 the bot
+  searches with the older gemini-2.5-flash instead (free, 500 searches a day). After that, hottest cards, Ask and the
+  news in a lookup need billing on (a lookup still works without it, from the sold prices). When Google is overloaded the bot switches to
   the backup model (`gemini-3.5-flash-lite`) for 5 minutes.
 - **If you turn on billing** in Google AI Studio (higher limits, private data): a card lookup is roughly a cent or two.
   The first 5,000 Google-searched requests each month are free. Settings shows this month's estimated spend and lets

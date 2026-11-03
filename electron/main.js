@@ -82,13 +82,13 @@ function createWindow() {
     if (!url || url === "about:blank") {
       return { action: "allow", overrideBrowserWindowOptions: { width: 900, height: 700, autoHideMenuBar: true, title: "Print labels" } };
     }
-    if (/^https?:\/\//i.test(url) && !url.startsWith(origin)) shell.openExternal(url);
+    if ((/^https?:\/\//i.test(url) && !url.startsWith(origin)) || /^mailto:/i.test(url)) shell.openExternal(url);
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (e, url) => {
     if (!url.startsWith(origin)) {
       e.preventDefault();
-      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+      if (/^(https?:\/\/|mailto:)/i.test(url)) shell.openExternal(url); // a web page in the browser, an email in the mail app
     }
   });
   // Allow the camera/microphone prompts the page may ask for (photo capture); deny everything else.

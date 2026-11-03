@@ -37,7 +37,7 @@ const PER_MINUTE = { message: "Quota exceeded for metric generate_content_free_t
 let ai;
 before(async () => {
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  Object.assign(process.env, { CARD_BOT_HOME: home, GEMINI_API_KEY: "AQ.test-key-for-the-stand-in-server-0000000", CARD_BOT_GEMINI_URL: `http://127.0.0.1:${server.address().port}`, CARD_BOT_MODEL: "main-model", CARD_BOT_FALLBACK_MODEL: "backup-model" });
+  Object.assign(process.env, { CARD_BOT_HOME: home, GEMINI_API_KEY: "AQ.test-key-for-the-stand-in-server-0000000", CARD_BOT_GEMINI_URL: `http://127.0.0.1:${server.address().port}`, CARD_BOT_MODEL: "main-model", CARD_BOT_FALLBACK_MODEL: "backup-model", CARD_BOT_FREE_SEARCH_MODEL: "free-model" });
   ai = await import("../lib/ai.js");
   Object.assign(ai.WAITS, { slowNotice: 150, retryStep: 20 });
 });
@@ -90,17 +90,30 @@ test("a hung main model goes to the backup after one deadline, not two, and says
   }
 });
 
-test("Google Search refused on a free-tier key: fails at once with the fix, and later searches don't ask again", async () => {
+test("a free-tier key: searches go to Google's free-search model, straight there from then on", async () => {
+  fresh();
+  behave = (m, search) => (search && m !== "free-model" ? [429, NO_SEARCH] : [200]);
+  const r = await run({ search: true });
+  assert.equal(r.out, "answer from free-model");
+  assert.ok(r.steps.some((x) => /free tier has no search on main-model — searching with free-model/.test(x)), r.steps.join(" | "));
+  assert.deepEqual(seen.map((x) => x.model), ["main-model", "free-model"]);
+  seen.length = 0;
+  assert.equal((await run({ search: true })).out, "answer from free-model");
+  assert.deepEqual(seen.map((x) => x.model), ["free-model"], "no refused call first");
+  assert.equal((await run({})).out, "answer from main-model", "everything else stays on the main model");
+});
+
+test("Google Search refused on a free-tier key (the free-search model too): fails at once with the fix, and later searches don't ask again", async () => {
   fresh();
   behave = (m, search) => (search ? [429, NO_SEARCH] : [200]);
   const r = await run({ search: true });
   assert.equal(r.err?.message, ai.SEARCH_NEEDS_BILLING);
   assert.ok(r.ms < 2000, `no 20-second "speed limit" waits (took ${r.ms} ms)`);
-  assert.equal(seen.length, 1);
+  assert.deepEqual(seen.map((x) => x.model), ["main-model", "free-model"]);
   assert.match(ai.SEARCH_NEEDS_BILLING, /Set up billing/);
   const again = await run({ search: true });
   assert.equal(again.err?.message, ai.SEARCH_NEEDS_BILLING);
-  assert.equal(seen.length, 1, "the second search never reached Google");
+  assert.equal(seen.length, 2, "the second search never reached Google");
   const plain = await run({});
   assert.equal(plain.out, "answer from main-model", "everything without search still works");
   ai.resetClient(); // a new key (Settings → Save) tries search again
@@ -154,6 +167,6 @@ test("hottest cards without Google Search: the list comes from your own tracked 
   assert.deepEqual(r.cards.map((c) => [c.rank, c.name, c.price_change]), [[1, "Wemby Prizm #136", "+50%"], [2, "Skubal Chrome RC PSA 10", "+25%"]], "only the ones that rose, biggest first");
   assert.match(r.market_summary, /your own tracked cards/);
   assert.match(r.market_summary, /free tier/, "and why");
-  // two go out together and a third can leave as the first answer comes back, before the refusal is noted
-  assert.ok(seen.filter((x) => x.search).length <= 3, `the rest never reach Google (${seen.filter((x) => x.search).length} did)`);
+  // five searches start together; each asks at most twice (its model, then the free-search one) and is refused at once
+  assert.ok(seen.filter((x) => x.search).length <= 10, `at most two asks per search (${seen.filter((x) => x.search).length})`);
 });

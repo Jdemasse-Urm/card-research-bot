@@ -202,7 +202,8 @@ async function openSettings() {
   $("#briefToggle").checked = s.dailyBrief;
   $("#briefHour").innerHTML = Array.from({ length: 12 }, (_, i) => i + 5).map((h) => `<option value="${h}"${h === s.briefHour ? " selected" : ""}>${h % 12 || 12} ${h < 12 ? "am" : "pm"}</option>`).join("");
   // "saved" isn't "working": show what PSA actually answered
-  $("#psaState").innerHTML = !s.psa ? "" : (s.psaCheck?.ok ? `<span class="ok">✓ working</span>` : `<span class="warn">⚠ token saved, but PSA says no: ${esc(s.psaCheck?.error || "not checked yet")}</span>`) + ` <span class="muted">· ${s.psaCallsToday || 0} PSA call${s.psaCallsToday === 1 ? "" : "s"} today (PSA allows about 100 a day)</span>`;
+  $("#psaState").innerHTML = !s.psa ? "" : (s.psaCheck?.ok ? `<span class="ok">✓ working</span>` : `<span class="warn">⚠ token saved, but PSA says no: ${esc(s.psaCheck?.error || "not checked yet")}</span>`) + ` <span class="muted">· ${s.psaCallsToday || 0} PSA call${s.psaCallsToday === 1 ? "" : "s"} today (PSA allows about 100 a day)</span>`
+    + (s.psaContact && /approves its/.test(s.psaCheck?.error || "") ? `<br><a class="button small" href="${esc(psaAccessMail(s.psaContact))}">✉ Ask PSA for access</a> <span class="small muted">opens an email to PSA's API team, written for you — add your PSA account's email and send it from your own mail</span>` : "");
   $("#priceApiState").innerHTML = [s.priceApi?.sportscardspro && "SportsCardsPro ✓", s.priceApi?.pricecharting && "PriceCharting ✓"].filter(Boolean).map((t) => `<span class="ok">${t}</span>`).join(" · ");
   $("#ebayState").innerHTML = s.ebay ? `<span class="ok">✓ connected</span>` : "";
   $("#usageBox").innerHTML = `Estimated AI cost this month: <b>${usd(s.spendThisMonth)}</b> <span class="muted">(only charged if you turned on billing in Google AI Studio; the free tier is $0)</span><br>
@@ -276,6 +277,20 @@ async function loadHealth() {
   } catch {
     $("#healthBox").textContent = "Couldn't check.";
   }
+}
+/** The email asking PSA to switch API access on (the person sends it from their own mail app). */
+function psaAccessMail(to) {
+  const body = `Hello PSA API team,
+
+I created a PSA Public API token for my PSA account ([the email on your PSA account]) to use in our small card shop's own inventory app: verifying the certs of slabs we buy and sell, the population at grade, and the progress of our own grading submissions — well within 100 calls a day.
+
+Every request (for example GET /publicapi/cert/GetByCertNumber/{certNumber}) returns 403 "Access to this API is limited to approved customers."
+
+Could you please approve Public API access for this account?
+
+Thank you,
+`;
+  return `mailto:${to}?subject=${encodeURIComponent("PSA Public API access for my account")}&body=${encodeURIComponent(body)}`;
 }
 $("#settingsBtn").onclick = openSettings;
 $("#keyBannerBtn").onclick = openSettings;

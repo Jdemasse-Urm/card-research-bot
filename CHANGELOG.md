@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.17.1 — Google searches on a free key again (until Dec 1); PSA says what to do
+
+- **Searching works on Google's free tier.** Google's free tier has no Google Search on the Gemini 3 models, but its
+  older model, gemini-2.5-flash, still searches for free (500 searches a day) — until Google retires it on
+  **December 1, 2026**. When Google refuses a search on the main model, the app now searches with that one instead
+  (hottest cards, Ask, the news in a lookup, the market check), and tries the main model again each hour (billing may
+  be on by then). The self-test says which model searched. After Dec 1 Google refuses that too, and the app says
+  billing is the way to keep searching.
+- **PSA:** PSA now switches its "public" API on account by account (since late Oct 2026): every request from an
+  account it hasn't approved gets "Access to this API is limited to approved customers", whatever the token. Settings
+  says so in plain words and has **✉ Ask PSA for access** — an email to PSA's API team, written for you, that you send
+  from your own mail. After that answer the app stops asking PSA for 6 hours instead of spending your ~100 calls a
+  day on the same refusal (Save in Settings asks again). Until PSA approves it, every cert in the app links to its page
+  on psacard.com so a slab can be checked by eye — stock rows ("verify"), scanned slabs and Cards are back.
+- The desktop app opens email links in your mail program.
+
 ## 3.17.0 — hottest cards you can check, act on, and hold to account
 
 The Google-searched part needs Gemini billing on (Google's free tier has no search on Gemini 3 models); everything

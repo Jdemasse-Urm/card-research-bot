@@ -119,3 +119,23 @@ test("routes: the prep sheet picks the cheapest open level that covers every car
     srv.stop();
   }
 });
+
+test("PSA refusing the account: the app says what to do, then stops asking for a while (each ask is one of ~100 a day)", async () => {
+  const psa = await import("../lib/sources/psa.js");
+  const was = globalThis.fetch;
+  let asked = 0;
+  globalThis.fetch = async () => { asked++; return new Response(JSON.stringify({ Message: "Access to this API is limited to approved customers." }), { status: 403, headers: { "content-type": "application/json" } }); };
+  process.env.PSA_API_TOKEN = "t".repeat(40);
+  try {
+    await assert.rejects(psa.cert("81234567"), (err) => err.message === psa.NOT_APPROVED);
+    assert.match(psa.NOT_APPROVED, /collectors-apis@collectors\.com/);
+    assert.match(psa.NOT_APPROVED, /token itself is fine/);
+    await assert.rejects(psa.cert("81234568"), /hasn't switched API access on/);
+    assert.equal(asked, 1, "the second lookup never asked PSA");
+    assert.equal((await psa.check({ fresh: true })).ok, false);
+    assert.equal(asked, 2, "Settings → Save asks PSA again even while it's been refusing");
+  } finally {
+    globalThis.fetch = was;
+    delete process.env.PSA_API_TOKEN;
+  }
+});

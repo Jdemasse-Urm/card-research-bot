@@ -47,6 +47,32 @@ test("checklist: a parallel the set never had is flagged with what is listed", (
   assert.match(v.note, /Silver/);
 });
 
+test("checklist: a read that fits several look-alike versions is flagged (11/5: a Red Ice read as plain Red — $1,665 vs far less)", () => {
+  const withRed = [...PRIZM_136, { name: "Victor Wembanyama [Red] #136", set: "2023 Panini Prizm (Basketball)" }];
+  const v = jobs.checklistCheck(wemby({ parallel: "Red Prizm" }), withRed);
+  assert.match(v.note, /"Red Prizm" fits 2 versions of #136 .*Red Ice.*Red|"Red Prizm" fits 2 versions of #136 .*Red.*Red Ice/);
+  assert.equal(v.ambiguous, true, "the second look gets the list to pick from");
+  assert.ok(jobs.needsSecondLook({ checklist: v }));
+  assert.equal(jobs.checklistCheck(wemby({ parallel: "Red Ice" }), withRed).note, null, "the exact version is one fit");
+  assert.equal(jobs.checklistCheck(wemby({ parallel: "Silver Prizm" }), withRed).note, null);
+});
+
+test("checklist: a front-only scan (no number read) gets the number from the set's list — only when there's one", () => {
+  // what the price site's search returned for "2023 Panini Prizm Victor Wembanyama" (trimmed): inserts are sets of their own
+  const player = [
+    ["Victor Wembanyama #136", "2023 Panini Prizm (Basketball)"],
+    ["Victor Wembanyama [Silver] #136", "2023 Panini Prizm (Basketball)"],
+    ["Victor Wembanyama #81", "2023 Panini Prizm Monopoly (Basketball)"],
+    ["Victor Wembanyama #3", "2023 Panini Prizm Instant Impact (Basketball)"],
+    ["Victor Wembanyama [Red Ice] #136", "2023 Panini Prizm (Basketball)"],
+    ["Victor Wembanyama [Blue Prizm] #87", "2023 Panini Select (Basketball)"],
+  ].map(([name, set]) => ({ name, set }));
+  assert.equal(jobs.numberFromChecklist(wemby({ number: "" }), player), "136");
+  assert.equal(jobs.numberFromChecklist(wemby({ number: "" }), [...player, { name: "Victor Wembanyama [Variation] #300", set: "2023 Panini Prizm (Basketball)" }]), null, "two numbers in the set — can't tell from the front");
+  assert.equal(jobs.numberFromChecklist(wemby({ number: "", player: "Chet Holmgren" }), player), null, "not this player's list");
+  assert.equal(jobs.numberFromChecklist(wemby({ number: "136" }), player), null, "a read number is never replaced");
+});
+
 test("checklist: a misread number is caught — that number is someone else", () => {
   const entries = [{ name: "Seth Lundy #138", set: "2023 Panini Prizm (Basketball)" }];
   const v = jobs.checklistCheck(wemby({ number: "138" }), entries);
@@ -63,7 +89,22 @@ test("checklist: One Piece codes and zero-padded numbers match", () => {
   const op = [{ name: "Monkey.D.Luffy [Alternate Art] OP05-119", set: "One Piece Awakening of the New Era" }, { name: "Monkey.D.Luffy OP05-119", set: "One Piece Awakening of the New Era" }];
   const v = jobs.checklistCheck({ category: "onepiece", details: { set: "OP05 Awakening of the New Era", player: "Monkey D. Luffy", number: "OP05-119", parallel: "Alternate Art" } }, op);
   assert.equal(v.note, null);
-  assert.equal(jobs.checklistCheck(wemby({ number: "0136" }), PRIZM_136).note, null);
+  assert.equal(jobs.checklistCheck(wemby({ number: "0136", parallel: "Red Ice" }), PRIZM_136).note, null);
+});
+
+test("checklist: a card read as the base gets a by-eye check when the set has a Silver of it (they look alike flat)", () => {
+  const v = jobs.checklistCheck(wemby({}), PRIZM_136);
+  assert.match(v.note, /also comes as Silver, which looks like the base in a photo — tilt the card/);
+  assert.equal(v.lookalike, true);
+  assert.equal(jobs.needsSecondLook({ checklist: v }), false, "a person's check — another look at the same flat photo can't settle it (a backup reader 'settled' it the wrong way round)");
+  const priced = PRIZM_136.map((e) => ({ ...e, ungraded: /\[Silver\]/.test(e.name) ? "$897.21" : e.name === "Victor Wembanyama #136" ? "$67.00" : null }));
+  assert.match(jobs.checklistCheck(wemby({}), priced).note, /Silver \(~\$897 raw vs ~\$67 for the base\)/);
+  const commons = PRIZM_136.map((e) => ({ ...e, ungraded: /\[Silver\]/.test(e.name) ? "$3.00" : e.name === "Victor Wembanyama #136" ? "$0.50" : null }));
+  assert.equal(jobs.checklistCheck(wemby({}), commons).note, null, "a $3 Silver isn't worth stopping for");
+  const noTwin = PRIZM_136.filter((e) => !/\[Silver\]/.test(e.name));
+  assert.equal(jobs.checklistCheck(wemby({}), noTwin).note, null, "no look-alike listed → nothing to check");
+  const chrome = [{ name: "Shohei Ohtani [Refractor] #150", set: "2018 Topps Chrome" }, { name: "Shohei Ohtani #150", set: "2018 Topps Chrome" }];
+  assert.match(jobs.checklistCheck({ category: "baseball", details: { year: "2018", set: "Topps Chrome", player: "Shohei Ohtani", number: "150", parallel: "" } }, chrome).note, /also comes as Refractor/);
 });
 
 test("phone scans: each found card gets its place on the page, what it's in, and what spoiled its photo", () => {
@@ -233,6 +274,15 @@ test("settings: Google's new AQ. Gemini keys are accepted (older AIza keys too);
   } finally {
     srv.stop();
   }
+});
+
+test("price sites: a season year is searched as its first year (the sites' search turns '2023-24' into junk)", async () => {
+  const { searchWords } = await import("../lib/sources/pricecharting.js");
+  assert.equal(searchWords("2023-24 Panini Prizm Victor Wembanyama 136"), "2023 Panini Prizm Victor Wembanyama 136");
+  assert.equal(searchWords("1986-87 Fleer Michael Jordan #57"), "1986 Fleer Michael Jordan #57");
+  assert.equal(searchWords("2023/2024 Upper Deck Bedard 201"), "2023 Upper Deck Bedard 201");
+  assert.equal(searchWords("Monkey.D.Luffy OP05-119"), "Monkey.D.Luffy OP05-119", "set codes are left alone");
+  assert.equal(searchWords("2018 Prizm Luka 280"), "2018 Prizm Luka 280");
 });
 
 test("price sites: a card's page address is built the way both sites build theirs", async () => {

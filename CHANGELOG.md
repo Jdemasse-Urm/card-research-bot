@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.17.2 — scanned cards get the right price page, and a wrong read can't slip through
+
+Found by scanning real card photos end to end (scan → sales page → website price) on Nov 5, with Google's main
+reader overloaded all morning.
+
+- **Season years.** A card read as "2023-24 Panini Prizm" found no sales page at all — both price sites read
+  "2023-24" as junk (it matched one /24 card). Searches now use the first year, the way the sites name sets.
+- **Google overloaded: a third reader.** When the main model and the backup were both overloaded, a scan failed.
+  Now it moves on to Google's older free model (gemini-2.5-flash). A model that keeps saying "overloaded" is skipped
+  longer each time (5, 10, 20, then 30 minutes) instead of costing every scan ~100 s of waiting.
+- **Backup readers are checked by eye.** On the test cards the backup readers swapped a base and a Silver Prizm and
+  called a Red Ice "Red" — each "sure", worth $64 vs $897 vs $1,665. A card read by a backup model is now marked
+  "⚠ backup read" (on the phone too); its "second look" never changes or clears a card; and a single-card lookup by a
+  backup isn't remembered for that photo. Open the card, check the version, Save — saving marks it checked.
+- **Look-alike versions.** A read that fits several versions ("Red" = Red, Red Ice, Red White Blue…) is flagged and
+  gets a second look with the set's real list of versions. A card read as the base when the set has a Silver /
+  Refractor / Holo of it worth more (~$897 vs ~$67 for the Wembanyama) says so — tilt it under a light; no photo
+  can settle that one.
+- **Front-only scans** get the card number from the set's checklist when the player has only one number in that set.
+
 ## 3.17.1 — Google searches on a free key again (until Dec 1); PSA says what to do
 
 - **Searching works on Google's free tier.** Google's free tier has no Google Search on the Gemini 3 models, but its

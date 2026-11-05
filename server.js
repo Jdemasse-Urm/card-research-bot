@@ -514,7 +514,7 @@ app.post("/api/scan/read", (req, res) => {
     // the phone sees each card it sent: name, value, and whether to look again
     for (const key of new Set(slots.map((x) => x.key))) {
       const mine = read.cards.filter((_, i) => slots[i].key === key);
-      setPhone(key, { stage: "read", readUsd: ((read.usage?.usd || 0) * mine.length) / Math.max(1, read.cards.length), cards: mine.map((c) => ({ name: c.name, grade: c.grade, value: c.value, position: c.position, problem: c.problem, check: c.checklist?.note || c.parallel_check || (c.confidence === "low" ? "The reader isn't sure — look at it on the computer" : "") || "" })) });
+      setPhone(key, { stage: "read", readUsd: ((read.usage?.usd || 0) * mine.length) / Math.max(1, read.cards.length), cards: mine.map((c) => ({ name: c.name, grade: c.grade, value: c.value, position: c.position, problem: c.problem, check: c.checklist?.note || c.parallel_check || (c.readBy ? "Read by Google's backup reader (the main one is overloaded) — check the version on the computer" : "") || (c.confidence === "low" ? "The reader isn't sure — look at it on the computer" : "") || "" })) });
       const back = slots.find((x) => x.key === key && x.backKey)?.backKey;
       if (back) setPhone(back, { stage: "read", backOf: phoneName(key) });
     }

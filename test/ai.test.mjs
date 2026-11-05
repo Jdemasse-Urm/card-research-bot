@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "cardbot-ai-"));
-let behave = () => [200]; // (model, search) → [status, body?] or "hang"
+let behave = () => [200]; // (model, search, request body) → [status, body?] or "hang"
 let answer = null; // (model) → the text of a 200 answer; null = "answer from <model>"
 let grounding = null; // groundingMetadata a search answer carries (sources + which text they back)
 const seen = [];
@@ -19,7 +19,7 @@ const server = http.createServer((req, res) => {
     const model = req.url.match(/models\/([^:]+):/)?.[1];
     const search = /googleSearch/.test(body);
     seen.push({ model, search });
-    const [status, err] = [].concat(behave(model, search));
+    const [status, err] = [].concat(behave(model, search, body));
     if (status === "hang") return; // never answers; the client's deadline has to end it
     res.writeHead(status, { "content-type": "application/json" });
     if (status === 200) {
@@ -131,12 +131,70 @@ test("a real per-minute speed limit on a search still waits and retries (it's no
   assert.ok(r.steps.some((s) => /speed limit hit — waiting 2 s/.test(s)), r.steps.join(" | "));
 });
 
-test("both models overloaded: a plain-words error, not a raw 503", async () => {
+test("main AND backup overloaded (11/5, a bulk scan): the photo read moves on to Google's older free model instead of failing", async () => {
+  fresh();
+  behave = (m, search) => (m === "free-model" ? [200] : [503, BUSY]);
+  const r = await run({ schema: { type: "object" }, detail: true, effort: "low" });
+  assert.deepEqual(r.out, { ok: true, n: 7 });
+  assert.deepEqual(seen.map((x) => x.model), ["main-model", "main-model", "backup-model", "backup-model", "free-model"]);
+  assert.ok(r.steps.some((s) => /backup-model is overloaded at Google right now — switching to free-model/.test(s)), r.steps.join(" | "));
+  seen.length = 0;
+  await run({});
+  assert.deepEqual(seen.map((x) => x.model), ["free-model"], "both busy ones are skipped for a while — no wasted round trips");
+});
+
+test("a main model that stays overloaded is skipped longer each time and dropped after one 503 — and forgiven once it answers", async () => {
+  fresh();
+  const real = Date.now;
+  let skew = 0;
+  Date.now = () => real() + skew;
+  try {
+    behave = (m) => (m === "main-model" ? [503, BUSY] : [200]);
+    await run({});
+    assert.deepEqual(seen.map((x) => x.model), ["main-model", "main-model", "backup-model"], "first time: one retry");
+    seen.length = 0;
+    skew += 6 * 60000; // the 5-minute skip is over
+    await run({});
+    assert.deepEqual(seen.map((x) => x.model), ["main-model", "backup-model"], "still overloaded: no second wait on it");
+    seen.length = 0;
+    skew += 6 * 60000; // the second skip is 10 minutes
+    await run({});
+    assert.deepEqual(seen.map((x) => x.model), ["backup-model"]);
+    seen.length = 0;
+    skew += 5 * 60000;
+    behave = () => [200]; // Google has capacity again
+    assert.equal((await run({})).out, "answer from main-model");
+    behave = (m) => (m === "main-model" ? [503, BUSY] : [200]);
+    seen.length = 0;
+    await run({});
+    assert.deepEqual(seen.map((x) => x.model), ["main-model", "main-model", "backup-model"], "a fresh overload after it answered starts over");
+  } finally {
+    Date.now = real;
+  }
+});
+
+test("a model that has no fast lane (older models refuse thinkingLevel) loses it alone — the others keep it", async () => {
+  fresh();
+  const bodies = [];
+  const NO_LEVEL = { message: "thinking_level is not supported by this model", status: "INVALID_ARGUMENT" };
+  behave = (m, search, body) => (m === "main-model" ? [503, BUSY] : m === "backup-model" && /thinkingLevel/.test(body) ? [400, NO_LEVEL] : [200]);
+  answer = (m, body) => (bodies.push([m, /thinkingLevel/.test(body)]), JSON.stringify({ ok: true }));
+  const r = await run({ schema: { type: "object" }, effort: "low" });
+  assert.deepEqual(r.out, { ok: true });
+  assert.deepEqual(bodies, [["backup-model", false]], "the same call again without it");
+  ai.resetClient(); // main answers again
+  behave = () => [200];
+  bodies.length = 0;
+  await run({ schema: { type: "object" }, effort: "low" });
+  assert.deepEqual(bodies, [["main-model", true]], "the main model still gets the fast lane");
+});
+
+test("every model overloaded: a plain-words error, not a raw 503", async () => {
   fresh();
   behave = () => [503, BUSY];
   const r = await run({});
   assert.equal(r.err?.status, 503);
-  assert.match(ai.explainError(r.err), /overloaded right now/);
+  assert.match(ai.explainError(r.err), /overloaded right now \(all 3 models/);
 });
 
 test("a searched answer marks where each source backs it, and the same page keeps one number across searches", async () => {

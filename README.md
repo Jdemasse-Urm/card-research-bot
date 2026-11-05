@@ -56,7 +56,7 @@ store backend (see the `mcj` repo, `api/deploy.mjs`), then paste its address and
 | Recent sold prices (eBay completed sales), value per grade, volume, 1/3/6/12-month trends, history | SportsCardsPro.com (sports) and PriceCharting.com (Yu-Gi-Oh, One Piece) |
 | Yu-Gi-Oh printings, rarities, TCGplayer/Cardmarket prices, banlist | YGOPRODeck API |
 | One Piece variants (alt art, manga, SP) with TCGplayer market price | optcgapi.com |
-| Reading the card photo, news, hot cards, answers, listings | Google Gemini (`gemini-3.8-flash`, backup `gemini-3.5-flash-lite`) with Google Search |
+| Reading the card photo, news, hot cards, answers, listings | Google Gemini (`gemini-3.8-flash`, backups `gemini-3.5-flash-lite` and `gemini-2.5-flash`) with Google Search |
 | Slab verification, population, grading progress (optional) | PSA Public API |
 | Live listings for the deal finder (optional) | eBay Browse API |
 | Every card in a set | SportsCardsPro.com / PriceCharting.com set pages |
@@ -113,7 +113,9 @@ Windows and the Mac `.dmg` on macOS, smoke-tests both packaged apps, and attache
   Google Search is not part of the free tier on Gemini 3 models; until Google retires it on Dec 1, 2026 the bot
   searches with the older gemini-2.5-flash instead (free, 500 searches a day). After that, hottest cards, Ask and the
   news in a lookup need billing on (a lookup still works without it, from the sold prices). When Google is overloaded the bot switches to
-  the backup model (`gemini-3.5-flash-lite`) for 5 minutes.
+  the backup model (`gemini-3.5-flash-lite`), then to `gemini-2.5-flash`, and skips the overloaded one for 5 minutes (longer
+  if it stays overloaded). Backup models get parallels wrong more often, so a card a backup read is marked
+  "⚠ backup read" for a check by eye.
 - **If you turn on billing** in Google AI Studio (higher limits, private data): a card lookup is roughly a cent or two.
   The first 5,000 Google-searched requests each month are free. Settings shows this month's estimated spend and lets
   you set a monthly cap.

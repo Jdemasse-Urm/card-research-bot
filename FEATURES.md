@@ -38,7 +38,7 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 
 | Feature | What it does | Since |
 |---|---|---|
-| Gemini, free tier | The app's AI; one key in Settings; backup model used automatically when the main one is out of quota | 2.0 / 3.0 |
+| Gemini, free tier | The app's AI; one key in Settings; backup models used automatically when the main one is out of quota or overloaded; a backup's card read is marked for a check by eye | 2.0 / 3.0 / 3.17.2 |
 | Monthly spending cap | Stops AI calls at a dollar amount you set | 2.0 |
 | Self-test | Proves prices, the key, Google Search and a full lookup work (~1 min) | 3.0 |
 | AI inventory advisor | Sell / hold / list / drop price / grade / buy-more plan from what you actually own | 3.2 |

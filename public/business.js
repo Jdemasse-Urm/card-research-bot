@@ -983,7 +983,7 @@ const fileKey = (f) => `${f.webkitRelativePath || f.name}|${f.size}|${f.lastModi
 const scanCards = () => scan.pages.flatMap((p) => p.cards);
 const normName = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 /** A card a person should look at before it's added. */
-const needsCheck = (c) => c.confidence === "low" || Boolean(c.parallel_check) || Boolean(c.checklist?.note) || /says|no record/.test(c.certNote || "") || (Boolean(c.problem) && c.confidence !== "high");
+const needsCheck = (c) => c.confidence === "low" || Boolean(c.readBy) || Boolean(c.parallel_check) || Boolean(c.checklist?.note) || /says|no record/.test(c.certNote || "") || (Boolean(c.problem) && c.confidence !== "high");
 /** What spoiled a card's photo, in words (the finder's note; the phone shows the same). */
 const PROBLEM_LABEL = { glare: "glare", blurry: "blurry", cut_off: "cut off by the edge", too_small: "too small in the picture", covered: "something covers it" };
 /** "phone-mhx1a-0003-a.jpg" → "📱 picture 3" (the phone's own numbering) */
@@ -1433,14 +1433,14 @@ async function openScanZoom(c) {
   const field = (k, label, v = d[k]) => `<label>${label}<input name="${k}" value="${esc(v || "")}"></label>`;
   const body = openModal(c.name, `
     <div class="row" style="align-items:flex-start;flex-wrap:wrap">${pics.map(([k, src]) => `<figure style="margin:0;flex:1 1 300px"><img src="${src}" alt="${k} of ${esc(c.name)}" style="width:100%;border-radius:8px"><figcaption class="small muted">${k}</figcaption></figure>`).join("") || `<p class="muted">No picture.</p>`}</div>
-    ${ck?.note ? `<p class="small warn">⚠ ${esc(ck.note)}</p>` : ""}${c.parallel_check ? `<p class="small warn">⚠ Check by eye: ${esc(c.parallel_check)}</p>` : ""}${c.id_notes ? `<p class="small muted">${esc(c.id_notes)}</p>` : ""}${c.certNote ? `<p class="small">${esc(c.certNote)}</p>` : ""}
+    ${c.readBy ? `<p class="small warn">⚠ Read by ${esc(c.readBy)} while Google’s main reader was overloaded — backup readers get parallels wrong. Check the version against the card, then Save.</p>` : ""}${ck?.note ? `<p class="small warn">⚠ ${esc(ck.note)}</p>` : ""}${c.parallel_check ? `<p class="small warn">⚠ Check by eye: ${esc(c.parallel_check)}</p>` : ""}${c.id_notes ? `<p class="small muted">${esc(c.id_notes)}</p>` : ""}${c.certNote ? `<p class="small">${esc(c.certNote)}</p>` : ""}
     <form class="form-grid small" data-fixform style="margin-top:.5rem">
       ${field("year", "Year")}${field("set", "Set")}${field("player", "Player / character")}${field("number", "Card #")}
       <label>Parallel / variant <span class="muted">(blank = base)</span><input name="parallel" value="${esc(d.parallel || "")}"></label>
       ${field("serial", "Serial")}${field("grade", "Grade", c.grade)}
       <div class="row" style="margin:0">${[["rookie", "Rookie"], ["autograph", "Autograph"], ["relic", "Relic / patch"]].map(([k, l]) => `<label class="check"><input type="checkbox" name="${k}"${d[k] ? " checked" : ""}> ${l}</label>`).join("")}</div>
       ${ck?.parallels?.length ? `<div class="span2">Versions of #${esc(ck.number)} in ${esc(ck.set)} (click one): ${ck.parallels.map((p) => `<button type="button" class="small ghost" data-par="${esc(p)}">${esc(p)}</button>`).join(" ")}</div>` : ""}
-      <div class="span2 row"><button class="primary">Save and re-price</button><span class="muted">Fixes are remembered: the reader is told to look twice at the same thing next time.</span></div>
+      <div class="span2 row"><button class="primary">Save and re-price</button><span class="muted">Saving marks the card checked. Fixes are remembered: the reader is told to look twice at the same thing next time.</span></div>
     </form>`, { wide: true });
   const form = $("[data-fixform]", body);
   $$("[data-par]", form).forEach((b) => (b.onclick = () => { form.parallel.value = b.dataset.par === "Base" ? "" : b.dataset.par; form.parallel.focus(); }));
@@ -1450,8 +1450,10 @@ async function openScanZoom(c) {
     const nd = { ...d, year: v.year.trim(), set: v.set.trim(), player: v.player.trim(), number: v.number.trim().replace(/^#/, ""), parallel: v.parallel.trim(), serial: v.serial.trim(), rookie: Boolean(v.rookie), autograph: Boolean(v.autograph), relic: Boolean(v.relic) };
     const changedId = ["number", "player", "parallel", "set", "year"].some((k) => String(nd[k] || "") !== String(d[k] || ""));
     Object.assign(c, { details: nd, grade: v.grade.trim() || "Raw", name: nameFromDetails(nd) || c.name, tags: tagsFromDetails(nd), structured: true, edited: true });
-    if (changedId && c.checklist) c.checklist = { ...c.checklist, note: null };
-    if (changedId) c.parallel_check = null;
+    // a person looked at the card with its warnings in front of them: what they saved is the card
+    if (c.checklist) c.checklist = { ...c.checklist, note: null };
+    c.parallel_check = null;
+    c.readBy = null;
     modal.close();
     const tr = $(`#scanReview tr[data-uid="${CSS.escape(c.uid)}"]`);
     const r = await (await fetch("/api/lot/reprice", json("POST", { name: c.name, grade: c.grade, category: c.category || "other" }))).json().catch(() => ({}));
@@ -1496,7 +1498,7 @@ function scanRowHtml(c) {
     <td><input type="checkbox" data-inc${c.include ? " checked" : ""} aria-label="Add ${esc(c.name)}"></td>
     <td>${c.thumb ? `<button class="ghost bare" data-zoom title="Look at it big (front and back)"><img class="scan-thumb" src="${c.thumb}" alt="Card picture"></button>` : `<span class="muted small">slab</span>`}</td>
     <td><input data-name value="${esc(c.name)}" aria-label="Card name" class="scan-name">
-      <div class="small">${(c.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ")}${c.backBox ? ` <span class="chip" title="The back was read too">+ back</span>` : ""}${c.problem ? ` <span class="chip warn" title="The picture of this card: ${esc(PROBLEM_LABEL[c.problem] || c.problem)} — a retake reads better">📷 ${esc(PROBLEM_LABEL[c.problem] || c.problem)}</span>` : ""}${c.lookedTwice ? ` <span class="chip${c.lookedTwice.sure ? " good" : ""}" title="${esc(c.lookedTwice.note || "")}">👀 looked twice${c.lookedTwice.changed ? " — changed" : ""}</span>` : ""}${c.certVerified ? ` <span class="chip good" title="${esc(c.certNote || "")}">✓ PSA</span>` : ""}${c.checklist && !c.checklist.note ? ` <span class="chip good" title="${esc(`#${c.checklist.number} in ${c.checklist.set}`)}">✓ checklist</span>` : ""} <button class="ghost small" data-fix title="Fix what was read, field by field (the reader learns from it)">✎ fix</button></div>
+      <div class="small">${(c.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ")}${c.backBox ? ` <span class="chip" title="The back was read too">+ back</span>` : ""}${c.problem ? ` <span class="chip warn" title="The picture of this card: ${esc(PROBLEM_LABEL[c.problem] || c.problem)} — a retake reads better">📷 ${esc(PROBLEM_LABEL[c.problem] || c.problem)}</span>` : ""}${c.lookedTwice ? ` <span class="chip${c.lookedTwice.sure ? " good" : ""}" title="${esc(c.lookedTwice.note || "")}">👀 looked twice${c.lookedTwice.changed ? " — changed" : ""}</span>` : ""}${c.certVerified ? ` <span class="chip good" title="${esc(c.certNote || "")}">✓ PSA</span>` : ""}${c.readBy ? ` <span class="chip warn" title="Read by ${esc(c.readBy)} while Google’s main reader was overloaded — backup readers get parallels wrong. Check the version (✎ fix → Save once it’s right), or scan it again later.">⚠ backup read</span>` : ""}${c.checklist && !c.checklist.note ? ` <span class="chip good" title="${esc(`#${c.checklist.number} in ${c.checklist.set}`)}">✓ checklist</span>` : ""} <button class="ghost small" data-fix title="Fix what was read, field by field (the reader learns from it)">✎ fix</button></div>
       ${c.checklist?.note ? `<div class="small warn">⚠ ${esc(c.checklist.note)}</div>` : ""}
       ${c.parallel_check ? `<div class="small warn">⚠ Check: ${esc(c.parallel_check)}</div>` : ""}
       ${c.certNote && !c.certVerified ? `<div class="small bad">${esc(c.certNote)}</div>` : c.certNote && /says/.test(c.certNote) ? `<div class="small warn">${esc(c.certNote)}</div>` : ""}

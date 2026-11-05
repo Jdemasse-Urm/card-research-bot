@@ -4,8 +4,8 @@ The desktop app for the card business (Windows + Mac). Everything below is in th
 say when it arrived; `CHANGELOG.md` has the details per version. The website it feeds is the MJC site
 (repo `UR-MORTGAGE/mcj`, whose own list is in that repo's `FEATURES.md`).
 
-**Live site:** https://main.d2p7srpg832hvo.amplifyapp.com (the demo build; the live store goes to the MJC AWS
-account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-research-bot/releases
+**Live store:** https://main.dsq06359z2wce.amplifyapp.com (since Nov 5, 2026, in the UR Mortgage AWS account until the MJC
+account exists) · **Investor demo:** https://main.d2p7srpg832hvo.amplifyapp.com · **Downloads:** https://github.com/Jdemasse-Urm/card-research-bot/releases
 
 ## Researching cards
 
@@ -75,7 +75,7 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 | Big inventories | Stock draws 150 rows at a time; at 10,000 cards a list opens in milliseconds and an edit takes ~30 ms (histories kept in their own files) | 3.6 / 3.8 |
 | Bulk scan | A folder of scans, files, a webcam/document camera, or your phone (QR code) → every card found, then each cut out at full resolution and read up close (year, set, player, number, parallel/refractor, serial, RC, auto, relic, grade, cert), checked against the set's checklist, priced; backs paired by position and read too; review with "check by eye" flags, a big front/back view and field-by-field fixes; set box + lot cost (or the box it came out of), add all with front + back photos and card facts; resumes without paying twice | 3.8 / 3.9 / 3.10 |
 | Reader accuracy + learning | Every fix you make is remembered: accuracy per field (number, parallel, player, grade) and the most repeated mistakes told to the reader before each scan | 3.10 |
-| Phone as scanner | 📱 Phone shows a QR code; the phone's pictures (front + back mode too) land in Bulk scan on the computer — needs Share on home network | 3.10 |
+| Phone as scanner | 📱 Phone shows a QR code; the phone's pictures (front + back mode, on by default) land in Bulk scan on the computer — needs Share on home network; ⏭ No back (a slab) reads a front right away | 3.10 / 3.18 |
 | iPhone multi-card scanning | Full-resolution pictures (up to 4096 px) through a send queue that survives a Wi-Fi drop; read on the computer whatever screen is open (each picture claimed once); the phone shows per picture how many cards were found, which need a retake (glare, blurry, cut off — by "row 2, card 3") and each card's name and value; front/back card-count check; session totals, "same page twice?", undo the last picture, too-dark/blurry check before sending, optional sound | 3.15 |
 | Second look + full details | Unsure or checklist-flagged cards are read again, choosing from the set's real list of versions; every raw card gets condition (NM–DMG, corners, edges, surface), centering and PSA 10/9 odds as a photo estimate, saved on the row ("What to grade next" uses it); finding and reading run side by side | 3.15 |
 | Card facts | Year, set, player, team, number, parallel, serial, rookie/auto/relic, cert on every card — filled by bulk scan, editable, shown on the website | 3.10 |
@@ -114,7 +114,7 @@ account when it exists) · **Downloads:** https://github.com/Jdemasse-Urm/card-r
 
 | Feature | What it does | Since |
 |---|---|---|
-| Sell on MJC | A switch per card (and bulk) puts it on the website with photos and an optional AI description; off = taken down | 3.3 |
+| Sell on MJC | A switch per card (and bulk) puts it on the website with photos and an optional AI description; off = taken down; says the price the engine set and that it's up — or why it can't go up; Bulk scan can add + sell in one step (⚠ cards wait until checked); WNBA cards go to the website's WNBA section | 3.3 / 3.18 |
 | Photos | Up to 8 per card, ★ front, resized on upload, a small copy for the shop grid | 3.3 / 3.5 |
 | Daily pricing engine | Price from that exact grade's recent sold comps, your cost, liquidity and days listed; guardrails (never under cost + margin, ±5%/day, no churn); every change logged with its reason | 3.3 |
 | Learns from your sales | After 10 site sales a model learns your buyers' price sensitivity; health-checked daily (holdout vs the simple rules, calibration) and only steers prices when it passes | 3.3 / 3.4 |

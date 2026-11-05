@@ -85,6 +85,31 @@ test("a set code's price page names the set (11/5: a PSA 10 OP04-019 read as 'Ki
   assert.deepEqual([back.details.player, back.details.team], ["", ""], "the word 'null' from the reader is blank, not a name");
 });
 
+test("WNBA: the league from the set, the sales page or the team; the checklist picks the WNBA set, never the NBA one", () => {
+  assert.equal(jobs.leagueOf({ set: "Panini Prizm WNBA" }), "WNBA");
+  assert.equal(jobs.leagueOf({ set: "Panini Prizm", team: "Indiana Fever" }), "WNBA");
+  assert.equal(jobs.leagueOf({ set: "Panini Prizm", team: "Phoenix Suns" }), "", "Suns ≠ Sun");
+  assert.equal(jobs.leagueOf({ set: "Panini Prizm" }, "basketball", "https://www.sportscardspro.com/game/basketball-cards-2024-panini-prizm-wnba/caitlin-clark-22"), "WNBA");
+  assert.equal(jobs.leagueOf({ team: "Chicago Fire" }, "soccer"), "", "only basketball has a WNBA");
+  // what the price site returned for "2024 Panini Prizm 22" (trimmed), plus the NBA set's #22
+  const entries = [
+    ["Caitlin Clark #22", "2024 Panini Prizm WNBA (Basketball)"],
+    ["Caitlin Clark [Silver] #22", "2024 Panini Prizm WNBA (Basketball)"],
+    ["Caitlin Clark [Ice] #22", "2024 Panini Prizm WNBA (Basketball)"],
+    ["Ryan Dunn #22", "2024 Panini Prizm Emergent (Basketball)"],
+    ["Drake Maye #22", "2024 Panini Prizm Fireworks (Football)"],
+    ["Devin Booker #22", "2024 Panini Prizm (Basketball)"],
+    ["Devin Booker [Silver] #22", "2024 Panini Prizm (Basketball)"],
+  ].map(([name, set]) => ({ name, set }));
+  const clark = { category: "basketball", details: { year: "2024", set: "Panini Prizm", player: "Caitlin Clark", team: "Indiana Fever", number: "22", parallel: "Silver" } };
+  const v = jobs.checklistCheck(clark, entries);
+  assert.equal(v.set, "2024 Panini Prizm WNBA (Basketball)", "read as plain 'Panini Prizm' — the WNBA set, not the NBA one of the same name");
+  assert.equal(v.note, null, "no false 'that number is Devin Booker' alarm");
+  const booker = { category: "basketball", details: { year: "2024", set: "Panini Prizm", player: "Devin Booker", team: "Phoenix Suns", number: "22", parallel: "Silver" } };
+  assert.equal(jobs.checklistCheck(booker, entries).set, "2024 Panini Prizm (Basketball)");
+  assert.deepEqual(jobs.normalizeRead({ category: "basketball", player_or_character: "Caitlin Clark", team: "Indiana Fever", brand_set: "Panini Prizm", year: "2024" }, 1).tags, ["wnba"]);
+});
+
 test("checklist: a misread number is caught — that number is someone else", () => {
   const entries = [{ name: "Seth Lundy #138", set: "2023 Panini Prizm (Basketball)" }];
   const v = jobs.checklistCheck(wemby({ number: "138" }), entries);

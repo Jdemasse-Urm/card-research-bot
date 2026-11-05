@@ -194,6 +194,7 @@ const QUICK = {
   uncounted: ["🔢 Never counted", (r) => r.status !== "sold" && !r.countedAt],
   nophoto: ["📷 No photo", (r) => r.status !== "sold" && !(r.photos || []).length],
   sealed: ["📦 Sealed", (r) => r.status !== "sold" && r.kind === "sealed"],
+  wnba: ["🏀 WNBA", (r) => r.status !== "sold" && r.category === "basketball" && /\bwnba\b/i.test([r.name, (r.tags || []).join(" "), r.facts?.set, r.priceUrl].join(" "))],
   nocond: ["🔍 Raw, no condition", (r) => r.status !== "sold" && r.kind !== "sealed" && /^raw$/i.test(r.grade) && !r.condition?.scale],
 };
 const GROUPS = { "": "No grouping", location: "Group by location", category: "Group by category", status: "Group by status", grade: "Group by grade" };
@@ -465,6 +466,30 @@ async function bulkPatch(ids, patch, what) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) return toast(j.error || "Couldn't save", { error: true });
   toast(`${what} — ${plural(j.updated, "card")}`, { ms: 12000, undo: j.token ? () => undoBulk(j.token) : null });
+  loadStock();
+  if (patch.web === true) webReport(ids);
+}
+
+/**
+ * After "Sell on MJC": what happened — the price the engine set and whether the card is on the website, or why it
+ * can't go up (no sales page, no sold data, out of stock, the website not connected). The engine first reads each
+ * card's sales page, so this waits for it (a few seconds).
+ */
+async function webReport(ids) {
+  let m = null;
+  for (let i = 0; i < 8; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    m = await getJSON("/api/mjc").catch(() => null);
+    if (!m || !(m.needsPrice || []).some((x) => ids.includes(x.id) && /first price/i.test(x.note))) break;
+  }
+  if (!m) return;
+  const stuck = (m.needsPrice || []).filter((x) => ids.includes(x.id));
+  const ok = ids.length - stuck.length;
+  const one = ids.length === 1 && ok ? await getJSON("/api/inventory/" + ids[0]).catch(() => null) : null;
+  const what = one ? `${one.name}${webPrice(one) ? " at " + usd(webPrice(one)) : ""}` : plural(ok, "card");
+  const where = !m.configured ? " — priced, but the website isn't connected yet (Inventory → MJC store → Setup)" : " — on the website within seconds";
+  const why = stuck.length ? `${ok ? " · " : ""}${plural(stuck.length, "card")} can't go up yet: ${stuck[0].note}` : "";
+  toast(`🌐 ${ok ? what + where : ""}${why}`, { ms: 12000, error: !ok || !m.configured });
   loadStock();
 }
 async function undoBulk(token) {
@@ -843,6 +868,8 @@ async function openItemEditor(row = null) {
     if (!res.ok) return toast((await res.json()).error || "Couldn't save", { error: true });
     modal.close();
     toast(row ? "Saved" : "Added to inventory");
+    const saved = await res.json().catch(() => null);
+    if (f.web && !row?.web && saved?.id) webReport([saved.id]); // just put on the website: say where it stands
     if ($("#tab-inventory").classList.contains("active") && invView === "stock") loadStock();
   };
 }
@@ -1525,6 +1552,7 @@ function scanReviewHtml() {
       <label>Status<select name="status">${["in_stock", "listed", "grading"].map((v) => `<option value="${v}">${STATUS_LABEL[v]}</option>`).join("")}</select></label>
       ${(scan.people || []).length ? `<label>Consigned by <span class="muted small">(someone else's cards: no cost; they're paid when each sells)</span><select name="consignorId"><option value="">— our own cards —</option>${scan.people.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")}</select></label>` : ""}
       <label class="check"><input type="checkbox" name="combine" checked> Copies of the same card go on one row (qty)</label>
+      <label class="check" title="The pricing engine prices each one from its sales page. A card still marked ⚠ is added but kept off the website until it's checked (✎ fix → Save), so an unchecked parallel never goes up at the wrong price."><input type="checkbox" name="sell"${store.get("scanSell", false) ? " checked" : ""}> 🌐 Also sell them on the MJC website <span class="muted small">(⚠ cards wait until checked)</span></label>
       <div class="span2 row"><button class="primary" data-addscan>＋ Add to inventory</button><span class="small muted" data-addprog></span></div>
     </form></div>`;
 }
@@ -1591,6 +1619,8 @@ function wireScanReview() {
 
 async function addScanned(btn) {
   const f = Object.fromEntries(new FormData($("#scanReview [data-scanadd]")));
+  store.set("scanSell", Boolean(f.sell));
+  let held = 0;
   const chosen = scanCards().filter((c) => c.include && c.name);
   if (!chosen.length) return toast("Tick the cards to add.", { error: true });
   if (scan.running) return toast("Wait for the scan to finish (or pause it) first.", { error: true });
@@ -1632,6 +1662,7 @@ async function addScanned(btn) {
           cost: f.consignorId ? 0 : Math.round((g.reduce((n, x) => n + costEach(x), 0) / g.length) * 100) / 100,
           ...(f.consignorId ? { consignorId: f.consignorId } : {}),
           value: c.value ?? null, priceUrl: c.url || null, location: f.location || "", status: f.status, purchased: today(),
+          ...(f.sell && f.status !== "grading" ? (g.some(needsCheck) ? ((held += 1), {}) : { web: true }) : {}),
           tags: c.tags || [],
           facts: factsOf(c),
           // the reader's condition estimate (scale, corners, edges, surface, centering) — raw cards only
@@ -1669,7 +1700,8 @@ async function addScanned(btn) {
     else toast(j.error || "Couldn't record the box opening", { error: true });
     scan.box = null;
   }
-  if (added) toast(`Added ${plural(added, "row")} (${plural(doneCards.size, "card")}) to inventory${f.location ? " in " + f.location : ""} ✓`);
+  if (added) toast(`Added ${plural(added, "row")} (${plural(doneCards.size, "card")}) to inventory${f.location ? " in " + f.location : ""} ✓${f.sell ? ` · 🌐 going on the website${held ? ` — ${plural(held, "row")} marked ⚠ kept off until checked` : ""}` : ""}`, { ms: 8000 });
+  if (added && f.sell && newIds.length) webReport(newIds);
   scan.inv = await getJSON("/api/inventory").catch(() => scan.inv);
   drawScan();
 }
@@ -2170,7 +2202,8 @@ async function loadMjc() {
   const m = await getJSON("/api/mjc");
   const head = `<div class="panel mjc-head">
     ${m.configured ? `<div class="row space" style="margin:0"><span>${m.remote ? `<span class="ok">● Connected</span>` : `<span class="bad">● Can't reach the store</span>`} · <b>${m.onSite}</b> card${m.onSite === 1 ? "" : "s"} on the website${m.needsPrice.length ? ` · <span class="warn">${m.needsPrice.length} waiting for a price</span>` : ""}${m.remote ? ` · checkout ${m.remote.checkoutEnabled && m.remote.payments ? `<span class="ok">open</span>` : `<span class="warn">closed</span>`}` : ""}${m.remote?.pip?.today ? ` · Pip today: <b>${m.remote.pip.today.chats || 0}</b> chat${m.remote.pip.today.chats === 1 ? "" : "s"}${m.remote.pip.today.handoffs ? `, ${m.remote.pip.today.handoffs} to the team` : ""}${m.remote.pip.today.degraded ? `, <span class="warn">${m.remote.pip.today.degraded} without AI</span>` : ""}${m.remote.pip.today.chats && m.remote.pip.today.ms ? `, avg ${(m.remote.pip.today.ms / m.remote.pip.today.chats / 1000).toFixed(1)} s` : ""}${m.remote.pip.capped ? ` · <span class="bad">daily chat limit reached</span>` : ""}` : ""}${m.remote?.visits?.week ? ` · this week: <b>${m.remote.visits.week.sessions || 0}</b> visit${m.remote.visits.week.sessions === 1 ? "" : "s"}, ${m.remote.visits.week.card || 0} card view${m.remote.visits.week.card === 1 ? "" : "s"}` : ""}${m.remote?.subscribers != null ? ` · <b>${m.remote.subscribers}</b> on the email list` : ""}${m.remote?.version ? ` · <span class="muted">store v${esc(m.remote.version)}${m.remote.builtAt ? ` (${esc(when(m.remote.builtAt))})` : ""}</span>` : ""}</span>
-      <span class="small muted">last sync ${esc(when(m.state.lastSync) || "never")}${m.state.lastSyncError ? ` · <span class="bad">${esc(m.state.lastSyncError)}</span>` : ""} <button class="small" id="mjcSync">↻ Sync now</button></span></div>`
+      <span class="small muted">last sync ${esc(when(m.state.lastSync) || "never")}${m.state.lastSyncCount != null ? ` (${plural(m.state.lastSyncCount, "card")})` : ""}${m.state.lastSyncError ? ` · <span class="bad">${esc(m.state.lastSyncError)}${m.state.syncFailures > 1 ? ` — ${m.state.syncFailures} tries in a row` : ""}</span>` : ""} <button class="small" id="mjcSync">↻ Sync now</button></span></div>
+      ${(() => { const s = m.store || {}; const miss = [s.shippingFlat == null && "your shipping charge", !s.returns && "returns", !s.supportEmail && "a support email"].filter(Boolean); return miss.length ? `<p class="small warn" style="margin:.4rem 0 0">⚠ Still to fill in ⚙ Setup: ${esc(miss.join(", "))}${s.shippingFlat == null ? " — the site shows no shipping price, and checkout can't open, until the shipping charge is set (0 = free shipping)" : ""}.</p>` : ""; })()}`
       : `<b>The MJC website isn't connected yet.</b> <span class="small muted">Go to <b>⚙ Setup</b> below — you'll need the store's address and sync key (shown once when the store backend is deployed).</span>`}
   </div>`;
   let bodyHtml = "";

@@ -603,6 +603,19 @@ app.post("/api/scan/inbox/:name/claim", (req, res) => {
   res.setHeader("Content-Type", "image/jpeg");
   res.send(buf);
 });
+// The phone says a front has no back (a slab): it's read on its own now instead of waiting 2 minutes for one.
+app.post("/api/scan/inbox/:name/single", (req, res) => {
+  const name = inboxName(req.params.name);
+  if (!/-a\.jpg$/.test(name)) return res.status(400).json({ error: "Only a front can go without its back." });
+  const to = name.replace(/-a\.jpg$/, "-s.jpg");
+  try {
+    fs.renameSync(path.join(INBOX, name), path.join(INBOX, to));
+  } catch {
+    return res.status(409).json({ error: "The computer is already reading it." });
+  }
+  if (phoneStatus.has(name)) phoneStatus.set(to, phoneStatus.get(name)), phoneStatus.delete(name);
+  res.json({ ok: true, name: to });
+});
 // The phone takes back a picture the computer hasn't started on (Undo).
 app.delete("/api/scan/inbox/:name", (req, res) => {
   const name = inboxName(req.params.name);
@@ -1062,7 +1075,7 @@ app.post("/api/inventory", (req, res) => {
   });
   log(req, `added ${row.qty}× ${row.name} to inventory (paid $${row.cost} each)`);
   tellCustomers([row]);
-  if (row.web) pricingJob.run({ ids: [row.id] }).then(() => mjc.scheduleSync()).catch(() => {});
+  if (row.web) pricingJob.run({ ids: [row.id] }).then(() => mjc.scheduleSync(2000)).catch(() => {});
   res.json(row);
 });
 
@@ -1075,8 +1088,8 @@ app.patch("/api/inventory/:id", (req, res) => {
   if (row.web && !before?.web) log(req, `put ${row.name} on the MJC website`);
   if (before?.web && !row.web) log(req, `took ${row.name} off the MJC website`);
   if (row.web && (!before?.web || before.webMode !== row.webMode || before.grade !== row.grade || before.cost !== row.cost)) {
-    pricingJob.run({ ids: [row.id] }).then(() => mjc.scheduleSync()).catch(() => {});
-  } else if (row.web || before?.web) mjc.scheduleSync();
+    pricingJob.run({ ids: [row.id] }).then(() => mjc.scheduleSync(2000)).catch(() => {});
+  } else if (row.web || before?.web) mjc.scheduleSync(2000);
   res.json(row);
 });
 
@@ -1095,7 +1108,7 @@ app.post("/api/inventory/:id/sell", (req, res) => {
   if (!r) return res.status(404).json({ error: "That card isn't in stock anymore." });
   if (b.payment === "Store credit") store.addCredit(customerId, -(r.soldRow.soldPrice * r.soldRow.qty), `Bought ${r.soldRow.name}`, who(req));
   log(req, `sold ${r.soldRow.qty}× ${r.soldRow.name} for $${r.soldRow.soldPrice ?? "?"} each${r.soldRow.soldOn ? " on " + r.soldRow.soldOn : ""}${r.split ? ` (${r.row.qty} left)` : ""}`);
-  if (r.row.web) mjc.scheduleSync();
+  if (r.row.web) mjc.scheduleSync(2000); // a card sold in person comes off the website in seconds, not 8+
   res.json(r);
 });
 
@@ -1666,7 +1679,7 @@ app.post("/api/live/sold", (req, res) => {
   st.now = st.queue[i] || st.queue[0] || null;
   store.saveLive(st);
   log(req, `sold ${r.soldRow.name} on a Whatnot stream for $${price}${buyer ? " to @" + buyer : ""}`);
-  if (r.row.web) mjc.scheduleSync();
+  if (r.row.web) mjc.scheduleSync(2000);
   res.json({ ok: true, sale: st.sales.at(-1) });
 });
 app.post("/api/live/skip", (_req, res) => {
@@ -1734,6 +1747,8 @@ app.post("/api/inventory/many", (req, res) => {
   });
   store.setEngineFieldsMany(patches);
   log(req, `added ${rows.length} scanned card${rows.length === 1 ? "" : "s"} to inventory`);
+  const webIds = rows.filter((r) => r.web).map((r) => r.id);
+  if (webIds.length) pricingJob.run({ ids: webIds }).then(() => mjc.scheduleSync(2000)).catch(() => {});
   tellCustomers(rows);
   res.json({ added: rows.length, rows: rows.map((r) => ({ id: r.id, sku: r.sku, name: r.name })) });
 });
@@ -1864,7 +1879,8 @@ app.put("/api/mjc/store", async (req, res) => {
   const s = {
     name: store.clean.str(b.name, 120) || "MJC Sports Cards & Collectibles",
     supportEmail: store.clean.str(b.supportEmail, 254),
-    shippingFlat: store.clean.money(b.shippingFlat) ?? 0,
+    // blank = not set yet: the site makes no shipping claim (11/5 it said "Free shipping on every order"); 0 = free, on purpose
+    shippingFlat: b.shippingFlat == null || b.shippingFlat === "" ? null : store.clean.money(b.shippingFlat),
     freeShippingOver: store.clean.money(b.freeShippingOver),
     about: store.clean.text(b.about, 1500),
     shipping: store.clean.text(b.shipping, 1000),

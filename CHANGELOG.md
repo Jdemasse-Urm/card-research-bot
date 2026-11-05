@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.18.0 — scan to the MJC website in one go, WNBA, and a sync that keeps up
+
+The MJC store went live on Nov 5 (https://main.dsq06359z2wce.amplifyapp.com). This release is the bot's half of the
+day's 10-10 — the website's half is store 1.1.0.
+
+- **WNBA.** A basketball card is WNBA when its set or name says so, its sales page is a WNBA set, or its team is one of
+  the 15 WNBA teams. Scans tag it `wnba`, Inventory has a **🏀 WNBA** filter, and the website gets it in its own WNBA
+  section. The set-checklist check picks the WNBA set ("2024 Panini Prizm WNBA"), never the NBA set of the same name, so
+  there are no false "that number is someone else" alarms; price searches add "WNBA" when the read set leaves it out.
+- **Bulk scan → 🌐 Also sell them on the MJC website.** The checked cards go up in the same step, priced by the engine.
+  A card still marked ⚠ (backup read, checklist doubt, a parallel to check) is added but kept off the website until it's
+  checked, so an unchecked parallel never goes up at the wrong price.
+- **Sell on MJC says what happened**: the price the engine set and that it's on the website — or why it can't go up
+  (no sales page, no sold data, the website not connected).
+- **Faster, safer sync to the website**: photos upload 4 cards at a time; a catalog over 250 cards goes up in chunks
+  (one request went past the store's 6 MB limit around 2,000 cards) when the store takes them (1.1.0+); a change made
+  during a sync gets a sync of its own; one card's change or a sale reaches the website in ~2 s (was 8 s+); two failed
+  syncs in a row raise an alert, and the MJC store panel shows the error and the card count.
+- **Shipping not set isn't "free".** A blank shipping charge stays blank (the website said "Free shipping on every
+  order"); the MJC store panel lists what Setup still needs (shipping charge, returns, support email).
+- **Phone:** Front + back is on by default (the back has the number, year and set); **⏭ No back (a slab)** sends a front
+  to be read right away instead of waiting 2 minutes for a back; after a read the phone says the next step on the
+  computer.
+
 ## 3.17.3 — the set name from a set code, and no "null" names
 
 From Joseph's first real scan (a PSA 10 Doflamingo OP04-019 Alternate Art):

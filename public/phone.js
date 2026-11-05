@@ -23,7 +23,7 @@ function newSession() {
 const save = () => { ls.set("phonePics", pics.slice(-120)); ls.set("phoneCard", card); ls.set("phoneWaitingBack", waitingBack); };
 
 const both = $("#both"), sound = $("#sound");
-both.checked = ls.get("phoneBoth", false);
+both.checked = ls.get("phoneBoth", true); // the back has the number, year and set — on unless this phone turned it off
 sound.checked = ls.get("phoneSound", false);
 both.onchange = () => {
   ls.set("phoneBoth", both.checked);
@@ -37,6 +37,7 @@ $("#pickBtn").onclick = () => $("#pick").click();
 $("#cam").onchange = (e) => takeAll(e.target);
 $("#pick").onchange = (e) => takeAll(e.target);
 $("#undoBtn").onclick = undoLast;
+$("#noBackBtn").onclick = noBack;
 $("#newBtn").onclick = () => {
   if (queueCount() && !confirmSoft()) return;
   session = newSession();
@@ -200,8 +201,9 @@ async function pump() {
       const next = (await queued()).sort((a, b) => (a.name < b.name ? -1 : 1))[0];
       if (!next) break;
       const pic = pics.find((p) => p.name === next.name + ".jpg");
+      const send = pic?.single ? { ...next, name: next.name.replace(/-a$/, "-s") } : next; // "no back": goes as a single
       try {
-        const r = await fetch("/api/scan/inbox", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });
+        const r = await fetch("/api/scan/inbox", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(send) });
         const j = await r.json().catch(() => ({}));
         if (r.status === 400) { // the computer will never take this one (not a photo): drop it, say why
           await dequeue(next.name);
@@ -210,6 +212,7 @@ async function pump() {
         }
         if (!r.ok) throw new Error(j.error || `The computer said ${r.status}`);
         await dequeue(next.name);
+        if (pic?.single) Object.assign(pic, { name: send.name + ".jpg", side: "s", single: false });
         if (pic && pic.stage === "queued") pic.stage = "sent";
         backoff = 0;
       } catch (err) {
@@ -228,6 +231,27 @@ async function pump() {
   }
 }
 window.addEventListener("online", pump);
+
+/**
+ * The front just taken has no back worth shooting (a slab — its label says it all): it's read on its own now. Still on
+ * the phone → it goes as a single picture; already at the computer → the computer renames it, instead of holding it
+ * 2 minutes for a back.
+ */
+async function noBack() {
+  if (waitingBack == null) return;
+  const n = waitingBack;
+  waitingBack = null;
+  const p = pics.find((x) => x.n === n && x.side === "a");
+  if (p?.stage === "queued") p.single = true;
+  else if (p) {
+    const r = await fetch("/api/scan/inbox/" + encodeURIComponent(p.name) + "/single", { method: "POST" }).catch(() => null);
+    if (r?.ok) Object.assign(p, { name: p.name.replace(/-a\.jpg$/, "-s.jpg"), side: "s" });
+  }
+  save();
+  draw();
+  pump();
+  say(`Picture ${n}: no back — it's read on its own. Take the next card's front.`, "good");
+}
 
 async function undoLast() {
   const p = [...pics].reverse().find((x) => ["queued", "sent"].includes(x.stage));
@@ -328,7 +352,7 @@ function draw() {
   const check = cards.filter((c) => c.check || c.problem).length;
   const waiting = queueCount();
   $("#totals").innerHTML = pics.length
-    ? [`<span><b>${cards.length}</b> card${cards.length === 1 ? "" : "s"} read</span>`, cards.some((c) => c.value != null) ? `<span>worth <b>${usd(value)}</b></span>` : cards.length ? `<span class="muted">not priced yet</span>` : "", check ? `<span class="warnText"><b>${check}</b> to check</span>` : "", waiting ? `<span class="badText"><b>${waiting}</b> waiting to send</span>` : "", spent(pics)].join("")
+    ? [cards.length ? `<div class="muted" style="flex-basis:100%">Next, on the computer: Inventory → Bulk scan → check each ⚠ card → ＋ Add to inventory (tick 🌐 to sell them on the website).</div>` : "", `<span><b>${cards.length}</b> card${cards.length === 1 ? "" : "s"} read</span>`, cards.some((c) => c.value != null) ? `<span>worth <b>${usd(value)}</b></span>` : cards.length ? `<span class="muted">not priced yet</span>` : "", check ? `<span class="warnText"><b>${check}</b> to check</span>` : "", waiting ? `<span class="badText"><b>${waiting}</b> waiting to send</span>` : "", spent(pics)].join("")
     : "";
   // banners: the computer isn't picking up, a back with a different count, a page shot twice
   const notes = [];
@@ -341,6 +365,7 @@ function draw() {
   for (const p of read) { const s = sameAs(p); if (s) notes.push(`Picture ${p.n} looks like picture ${s} again — the same page twice?`); }
   $("#banner").innerHTML = notes.slice(-3).map((t) => `<div class="banner">${esc(t)}</div>`).join("");
   $("#undoBtn").hidden = !pics.some((x) => ["queued", "sent"].includes(x.stage));
+  $("#noBackBtn").hidden = !(both.checked && waitingBack != null);
 }
 
 /** What the AI cost for this session — only on the paid tier; Google's free tier is $0. */

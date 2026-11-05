@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.17.3 — the set name from a set code, and no "null" names
+
+From Joseph's first real scan (a PSA 10 Doflamingo OP04-019 Alternate Art):
+
+- A One Piece / Yu-Gi-Oh / Pokémon card's set code (OP04-019, LOB-EN001) names exactly one set, so when the price page
+  is that code, the card takes the page's set name. The reader had called OP04 "Kingdom of Ruin"; it's Kingdoms of
+  Intrigue. (The price was already right — $140 for a PSA 10, recent sales $127.50–$150.)
+- When the reader answers the word "null" for a player or team (the back of a slab), it's left blank instead of
+  becoming the card's name.
+
 ## 3.17.2 — scanned cards get the right price page, and a wrong read can't slip through
 
 Found by scanning real card photos end to end (scan → sales page → website price) on Nov 5, with Google's main

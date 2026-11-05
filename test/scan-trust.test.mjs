@@ -73,6 +73,18 @@ test("checklist: a front-only scan (no number read) gets the number from the set
   assert.equal(jobs.numberFromChecklist(wemby({ number: "136" }), player), null, "a read number is never replaced");
 });
 
+test("a set code's price page names the set (11/5: a PSA 10 OP04-019 read as 'Kingdom of Ruin'); a sports number never does", () => {
+  const page = { title: "Donquixote Doflamingo [Alternate Art] OP04-019", set: "One Piece Kingdoms of Intrigue" };
+  const read = { year: "2023", set: "One Piece Kingdom of Ruin", player: "Donquixote Doflamingo", number: "OP04-019", parallel: "Alternate Art" };
+  assert.equal(jobs.pageSet(read, page).set, "One Piece Kingdoms of Intrigue");
+  assert.equal(jobs.pageSet({ ...read, number: "OP04-020" }, page), null, "a different code — not this page's set");
+  assert.equal(jobs.pageSet({ ...read, set: "One Piece Kingdoms of Intrigue" }, page), null, "already right");
+  assert.equal(jobs.pageSet({ set: "LOB", number: "LOB-EN001" }, { title: "Blue-Eyes White Dragon LOB-001", set: "YuGiOh Legend of Blue Eyes White Dragon" }).set, "YuGiOh Legend of Blue Eyes White Dragon");
+  assert.equal(jobs.pageSet({ set: "Panini Prizm", number: "136" }, { title: "Victor Wembanyama #136", set: "2023 Panini Prizm" }), null);
+  const back = jobs.normalizeRead({ player_or_character: "null", team: "null", brand_set: "One Piece Card Game", grading_company: "PSA" }, 2);
+  assert.deepEqual([back.details.player, back.details.team], ["", ""], "the word 'null' from the reader is blank, not a name");
+});
+
 test("checklist: a misread number is caught — that number is someone else", () => {
   const entries = [{ name: "Seth Lundy #138", set: "2023 Panini Prizm (Basketball)" }];
   const v = jobs.checklistCheck(wemby({ number: "138" }), entries);

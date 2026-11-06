@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.18.1 — Google's prepaid billing, and the Jan 1 price rise
+
+- **Out of prepaid credit says so.** New Google AI accounts prepay (since Mar 2026): at $0 Google stops every key at
+  once. The app now says the credit ran out and where to add it (AI Studio → Billing; auto-reload stops it happening
+  mid-scan), instead of "Gemini API error 402", and doesn't try the backup models (they're stopped too).
+- **The spend estimate follows Google's price.** gemini-3.8-flash doubles on Jan 1, 2027 ($1.50 in / $7.50 out per
+  million tokens); from that day the estimate (Settings) and the monthly budget count the new price, so a budget isn't
+  quietly worth half.
+
 ## 3.18.0 — scan to the MJC website in one go, WNBA, and a sync that keeps up
 
 The MJC store went live on Nov 5 (https://main.dsq06359z2wce.amplifyapp.com). This release is the bot's half of the

@@ -197,6 +197,21 @@ test("every model overloaded: a plain-words error, not a raw 503", async () => {
   assert.match(ai.explainError(r.err), /overloaded right now \(all 3 models/);
 });
 
+test("prepaid Google credit at $0 (402): one ask, no backups tried (every key is stopped), and how to fix it", async () => {
+  fresh();
+  behave = () => [402, { message: "Your prepayment credits are depleted.", status: "FAILED_PRECONDITION" }];
+  const r = await run({});
+  assert.equal(r.err?.status, 402);
+  assert.deepEqual(seen.map((x) => x.model), ["main-model"]);
+  assert.match(ai.explainError(r.err), /credit has run out.*AI Studio → Billing.*auto-reload/);
+});
+
+test("spend estimate: today's price, and Google's doubled price from Jan 1, 2027", () => {
+  const u = { input: 1e6, output: 1e6 };
+  assert.equal(ai.usageCost(u, Date.UTC(2026, 10, 6)), 4.5);
+  assert.equal(ai.usageCost(u, Date.UTC(2027, 0, 1)), 9);
+});
+
 test("a searched answer marks where each source backs it, and the same page keeps one number across searches", async () => {
   fresh();
   behave = () => [200];

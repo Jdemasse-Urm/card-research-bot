@@ -116,9 +116,11 @@ Windows and the Mac `.dmg` on macOS, smoke-tests both packaged apps, and attache
   the backup model (`gemini-3.5-flash-lite`), then to `gemini-2.5-flash`, and skips the overloaded one for 5 minutes (longer
   if it stays overloaded). Backup models get parallels wrong more often, so a card a backup read is marked
   "⚠ backup read" for a check by eye.
-- **If you turn on billing** in Google AI Studio (higher limits, private data): a card lookup is roughly a cent or two.
-  The first 5,000 Google-searched requests each month are free. Settings shows this month's estimated spend and lets
-  you set a monthly cap.
+- **If you turn on billing** in Google AI Studio (higher limits, private data): a card lookup is roughly a cent or two
+  (about 3¢ from Jan 1, 2027, when Google doubles gemini-3.8-flash's price). The first 5,000 Google-searched requests
+  each month are free. New Google accounts **prepay** (from $5; credit expires after 12 months): turn on **auto-reload**
+  in AI Studio → Billing, because at $0 Google stops the key until credit is added. Settings shows this month's
+  estimated spend and lets you set a monthly cap.
 - Quick price, watchlist re-checks and inventory re-valuing never use AI — always free.
 
 ## Using it from both computers (one shared inventory)

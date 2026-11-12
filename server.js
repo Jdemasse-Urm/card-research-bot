@@ -1868,15 +1868,36 @@ app.post("/api/mjc/connect", async (req, res) => {
   const token = String(req.body?.token || "").trim();
   if (!/^https?:\/\/[\w.-]+(:\d+)?(\/[\w./-]*)?$/.test(url)) return res.status(400).json({ error: "That isn't a web address." });
   if (!/^https:\/\//.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/.test(url)) return res.status(400).json({ error: "The store address must start with https:// (http only for localhost testing)." });
-  setEnv({ MJC_API_URL: url, ...(token ? { MJC_SYNC_TOKEN: token } : {}) });
   try {
-    const remote = await mjc.status();
+    const remote = await connectStore(req, url, token);
     log(req, "connected the bot to the MJC website");
     res.json({ ok: true, remote });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
+
+/**
+ * Points the bot at a store: Setup's Connect, or the other computer's invite code. If the store doesn't answer, the
+ * connection that worked before stays. A different store than before means it moved, so its photos go up again
+ * (mjc.storeMoved).
+ */
+async function connectStore(req, url, token) {
+  const before = { MJC_API_URL: process.env.MJC_API_URL || "", MJC_SYNC_TOKEN: process.env.MJC_SYNC_TOKEN || "" };
+  setEnv({ MJC_API_URL: url, ...(token ? { MJC_SYNC_TOKEN: token } : {}) });
+  let remote;
+  try {
+    remote = await mjc.status();
+  } catch (err) {
+    if (before.MJC_API_URL && before.MJC_SYNC_TOKEN) setEnv(before);
+    throw err;
+  }
+  if (before.MJC_API_URL && before.MJC_API_URL.replace(/\/+$/, "") !== url) {
+    const n = await mjc.storeMoved();
+    log(req, `moved the bot to a new MJC store: ${n === 1 ? "1 card's photos go" : `${n} cards' photos go`} up again`);
+  }
+  return remote;
+}
 
 // ---- Shared inventory: Joseph's PC and Dad's Mac on one set of business data (lib/team.js)
 const onlyHere = (req, res) => (isLoopback(req.socket.remoteAddress) ? false : (res.status(403).json({ error: "Only on the computer running the bot." }), true));
@@ -1887,8 +1908,7 @@ app.get("/api/team/preview", async (req, res) => {
       // an invite code from the other computer: connect to its store first (the address + sync key it carries)
       if (onlyHere(req, res)) return;
       const { apiUrl, token } = team.readInvite(req.query.invite);
-      setEnv({ MJC_API_URL: apiUrl, MJC_SYNC_TOKEN: token });
-      await mjc.status();
+      await connectStore(req, String(apiUrl).replace(/\/+$/, ""), token);
     }
     res.json(await team.preview());
   } catch (err) {

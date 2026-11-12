@@ -27,6 +27,11 @@ Joseph's PC and his dad's Mac each had their own inventory; a card scanned on on
   the other computer's new cards off the site. Once the inventory is shared, the store refuses a whole-catalog sync
   from a bot that isn't on it (an old version, or one never joined).
 - **The activity feed says which computer** ("Dad's Mac added …").
+- **Moving to a new store** (11/12: the store left the UR Mortgage AWS account for MJC's own). When the bot is connected
+  to a different store, through Setup's Connect or an invite code, it forgets the old store's photo addresses for every
+  photo whose file is on this computer. The next sync puts those photos in the new store, and the store details
+  (shipping, returns, shows) go up right away. A store that doesn't answer leaves the old connection in place, and
+  nothing is forgotten.
 - Kept per computer: Google AI spend (the monthly budget counts on each computer), the phone's scan list, Undo.
 
 ## 3.18.1 — Google's prepaid billing, and the Jan 1 price rise

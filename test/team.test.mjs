@@ -298,3 +298,56 @@ test("stop sharing on one computer: it keeps its copy and stops sending", { time
   assert.equal(files.get("inventory"), before, "nothing went up");
   assert.equal((await rows(B)).length, 7, "the Mac kept everything");
 });
+
+test("the store moves to another AWS account: the bot puts its photos and store details in the new one", { timeout: 30000 }, async () => {
+  // the new store (a second stand-in): it records the photos and store details it's given
+  const got = { photos: [], store: null, items: [] };
+  const fresh = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const j = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+      const send = (status, body) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+      const url = new URL(req.url, "http://x");
+      if (url.pathname.startsWith("/img/")) return res.end(JPEG);
+      if (req.headers.authorization !== `Bearer ${TOKEN}`) return send(401, { error: "Not authorized." });
+      const p = url.pathname.match(/^\/admin\/photos\/([\w-]+)\/(\d+)$/);
+      if (p) return got.photos.push(p[1]), send(200, { url: `http://127.0.0.1:${fresh.address().port}/img/${p[1]}-${p[2]}${j.variant === "thumb" ? "-t" : ""}.jpg` });
+      if (url.pathname === "/admin/store") return (got.store = j), send(200, { ok: true });
+      if (url.pathname === "/admin/items") return got.items.push(j), send(200, { ok: true, upserted: j.items.length, unchanged: 0, removed: 0 });
+      if (url.pathname === "/admin/team") return send(200, { collections: {} });
+      if (url.pathname === "/admin/orders") return send(200, { orders: [] });
+      if (url.pathname === "/admin/tickets") return send(200, { tickets: [] });
+      if (url.pathname === "/admin/credits") return send(200, { credits: [] });
+      send(200, { ok: true });
+    });
+  });
+  await new Promise((r) => fresh.listen(0, "127.0.0.1", r));
+  after(() => fresh.close());
+  const NEW_STORE = `http://127.0.0.1:${fresh.address().port}`;
+
+  // the Mac (not sharing any more) has the photo file, and its address is the old store's
+  const old = (await B.call("GET", `/api/inventory/${PHOTO_ROW}`)).data;
+  assert.match(old.photoUrls?.["front.jpg"] || "", new RegExp("^" + STORE));
+  await B.call("PATCH", `/api/inventory/${PHOTO_ROW}`, { web: true, webMode: "fixed", webFixedPrice: 139.99 });
+  const details = { name: "MJC Sports Cards", shipping: "Ships in 2 days", returns: "30 days" };
+  assert.equal((await B.call("PUT", "/api/mjc/store", details)).status, 200);
+
+  // a wrong address leaves the store that works connected
+  const bad = await B.call("POST", "/api/mjc/connect", { apiUrl: "http://127.0.0.1:1", token: TOKEN });
+  assert.equal(bad.status, 400);
+  assert.equal((await B.call("GET", `/api/inventory/${PHOTO_ROW}`)).data.photoUrls["front.jpg"], old.photoUrls["front.jpg"], "nothing forgotten on a failed connect");
+
+  const moved = await B.call("POST", "/api/mjc/connect", { apiUrl: NEW_STORE, token: TOKEN });
+  assert.equal(moved.status, 200, JSON.stringify(moved.data));
+  assert.equal(got.store?.shipping, "Ships in 2 days", "the store details went to the new store");
+  assert.equal((await B.call("GET", `/api/inventory/${PHOTO_ROW}`)).data.photoUrls?.["front.jpg"], undefined, "the old store's address is forgotten (the file is here)");
+
+  const synced = await B.call("POST", "/api/mjc/sync");
+  assert.equal(synced.status, 200, JSON.stringify(synced.data));
+  assert.ok(got.photos.includes(PHOTO_ROW), "the photo went up to the new store");
+  const now = (await B.call("GET", `/api/inventory/${PHOTO_ROW}`)).data;
+  assert.match(now.photoUrls["front.jpg"], new RegExp("^" + NEW_STORE));
+  const sent = got.items.flatMap((x) => x.items || []).find((x) => x.id === PHOTO_ROW);
+  assert.ok(sent?.photos?.[0]?.startsWith(NEW_STORE), "the website gets the new store's photo address: " + JSON.stringify(sent?.photos));
+});

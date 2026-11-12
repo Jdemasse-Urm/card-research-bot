@@ -18,6 +18,7 @@ import * as onepiece from "./lib/sources/onepiece.js";
 import * as psa from "./lib/sources/psa.js";
 import * as ebay from "./lib/sources/ebay.js";
 import * as mjc from "./lib/mjc.js";
+import * as team from "./lib/team.js";
 import * as pricingJob from "./lib/pricing-job.js";
 import { DEFAULTS as PRICING_DEFAULTS } from "./lib/pricing.js";
 import QRCode from "qrcode";
@@ -151,7 +152,8 @@ app.use(express.static(path.join(here, "public")));
 // ---------------- helpers ----------------
 
 // Who is using the app (picked once per browser, sent on every request) — for the activity feed.
-const who = (req) => store.clean.str(req.get("x-user"), 40) || (isLoopback(req.socket.remoteAddress) ? "This computer" : "Other device");
+// With Shared inventory on, "This computer" is the computer's name ("Dad's Mac"): both computers write one feed.
+const who = (req) => store.clean.str(req.get("x-user"), 40) || (isLoopback(req.socket.remoteAddress) ? team.deviceName() : "Other device");
 const log = (req, text) => store.logActivity(who(req), text);
 
 // Streams progress lines (NDJSON) while a job runs, then one {type:"done"} or {type:"error"} line.
@@ -269,6 +271,8 @@ app.get("/api/status", (req, res) => {
     periods: Object.keys(PERIODS),
     canEditSettings: isLoopback(req.socket.remoteAddress),
     unseenAlerts: store.alerts().filter((a) => !a.seen).length,
+    // shared inventory: the Stock list reloads itself when the other computer's changes arrive
+    team: { on: team.on(), pulledAt: teamPulledAt },
     psa: psa.hasToken(),
     ebay: ebay.hasKeys(),
     busy: busyJobs,
@@ -1874,6 +1878,71 @@ app.post("/api/mjc/connect", async (req, res) => {
   }
 });
 
+// ---- Shared inventory: Joseph's PC and Dad's Mac on one set of business data (lib/team.js)
+const onlyHere = (req, res) => (isLoopback(req.socket.remoteAddress) ? false : (res.status(403).json({ error: "Only on the computer running the bot." }), true));
+app.get("/api/team", (_req, res) => res.json(team.status()));
+app.get("/api/team/preview", async (req, res) => {
+  try {
+    if (req.query.invite) {
+      // an invite code from the other computer: connect to its store first (the address + sync key it carries)
+      if (onlyHere(req, res)) return;
+      const { apiUrl, token } = team.readInvite(req.query.invite);
+      setEnv({ MJC_API_URL: apiUrl, MJC_SYNC_TOKEN: token });
+      await mjc.status();
+    }
+    res.json(await team.preview());
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post("/api/team/join", async (req, res) => {
+  if (onlyHere(req, res)) return;
+  try {
+    const r = await team.join({ mode: req.body?.mode === "replace" ? "replace" : "merge", name: req.body?.name });
+    mjc.scheduleSync(4000);
+    res.json(r);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+app.post("/api/team/leave", (req, res) => {
+  if (onlyHere(req, res)) return;
+  res.json(team.leave());
+});
+app.post("/api/team/sync", async (_req, res) => {
+  try {
+    await team.syncNow();
+    res.json(team.status());
+  } catch (err) {
+    res.status(502).json({ error: err.message, ...team.status() });
+  }
+});
+app.post("/api/team/jobs", async (req, res) => {
+  if (onlyHere(req, res)) return;
+  try {
+    res.json(await team.takeJobs());
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+app.put("/api/team/device", (req, res) => {
+  if (onlyHere(req, res)) return;
+  try {
+    res.json(team.rename(req.body?.name));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+// The code that connects the other computer (it carries the sync key: shown only on this computer, on request)
+app.get("/api/team/invite", (req, res) => {
+  if (onlyHere(req, res)) return;
+  try {
+    res.json({ code: team.invite() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.put("/api/mjc/store", async (req, res) => {
   const b = req.body || {};
   const s = {
@@ -2071,8 +2140,12 @@ async function announceDrops() {
 async function pullMjc() {
   if (!mjc.configured() || mjcPulling) return { orders: [], tickets: 0 };
   mjcPulling = true;
+  // Shared inventory: website orders come in on ONE computer (the one running the daily jobs) — two pulling them could
+  // record a sale twice. The other still sees messages and the site's numbers, without a second alert for each.
   try {
-    const orders = await mjc.pullOrders({
+    await team.checkShared();
+    const jobs = team.runsJobs();
+    const orders = !jobs ? [] : await mjc.pullOrders({
       onOrder: (o) => {
         store.addAlert({ kind: "order", name: `MJC order ${o.id}`, text: o.hold ? `⚠ ${o.name || o.email} bought ${o.items.map((i) => i.title).join(", ")} — $${o.total}. ${o.hold.reason} (Inventory → MJC store → Orders → Checked, OK to ship).` : o.gift ? `${o.name || o.email} bought a $${o.gift.amount} gift card (code ${o.gift.code}).` : `${o.name || o.email} bought ${o.items.map((i) => i.title).join(", ")} — $${o.total}. Ship it from Inventory → MJC store.` });
         store.logActivity("MJC website", `new order ${o.id}: ${o.items.map((i) => i.title).join(", ")} ($${o.total})`);
@@ -2081,9 +2154,9 @@ async function pullMjc() {
     });
     if (orders.length) mjc.scheduleSync();
     mjc.refreshStatus().catch(() => {}); // Home's website numbers; a miss just keeps the last copy
-    await announceDrops().catch((err) => console.warn("drop announcement failed:", err.message));
+    if (jobs) await announceDrops().catch((err) => console.warn("drop announcement failed:", err.message));
     let tickets = 0;
-    await mjc.pullTickets({
+    await mjc.pullTickets(!jobs ? {} : {
       onActivity: (t, what) => store.addAlert({ kind: "ticket", name: `${what === "answer" ? "Answer to your offer" : "Reply"} from ${t.name || t.email}`, text: what === "answer" ? `They chose: ${{ cash: "cash", credit: "store credit", decline: "no thanks" }[t.offer.answer.choice] || t.offer.answer.choice}.` : String((t.replies || []).filter((r) => r.from === "customer").at(-1)?.text || "").slice(0, 140) }),
       onTicket: (t) => {
         tickets++;
@@ -2766,12 +2839,29 @@ async function watchPops() {
   store.savePopWatch(w);
 }
 
+let hourlyRunning = false;
 async function hourly() {
+  if (hourlyRunning) return;
+  hourlyRunning = true;
   try {
-    store.dailyBackup();
+    await hourlyWork();
+  } finally {
+    hourlyRunning = false;
+  }
+}
+async function hourlyWork() {
+  try {
+    store.dailyBackup(); // every computer keeps its own backups of the (shared) data
   } catch (err) {
     console.warn("daily backup failed:", err.message);
   }
+  // Shared inventory: the daily jobs run on ONE computer (Inventory → MJC store → Setup shows which), on the newest copy.
+  if (team.on()) await team.syncNow().catch(() => {});
+  else await team.checkShared().catch(() => {});
+  if (team.runsJobs()) await dailyJobs();
+  await morningBrief();
+}
+async function dailyJobs() {
   for (const w of store.watchlist()) {
     const last = w.snapshots[w.snapshots.length - 1];
     if (last && Date.now() - Date.parse(last.at) < 20 * 3600000) continue;
@@ -2830,8 +2920,10 @@ async function hourly() {
       console.warn("MJC sync failed:", err.message);
     }
   }
+}
 
-  // Morning brief (opt-in): one fresh "hottest cards today" scan per day after the chosen hour.
+async function morningBrief() {
+  // Morning brief (opt-in, per computer): one fresh "hottest cards today" scan per day after the chosen hour.
   const hour = parseInt(process.env.CARD_BOT_BRIEF_HOUR, 10) || 8;
   const today = new Date().toISOString().slice(0, 10);
   const daily = store.load("hot", {})["all:daily"];
@@ -2849,6 +2941,16 @@ async function hourly() {
 }
 setTimeout(hourly, 10000);
 setInterval(hourly, 3600000);
+
+// Shared inventory (lib/team.js): pushes follow saves, the cloud is checked every 20 s. This computer just took over the
+// daily jobs → they run now, not at the next hour.
+let teamPulledAt = null;
+team.start({
+  onJobs: () => hourly().catch((err) => console.warn("daily jobs failed:", err.message)),
+  onPulled: (names) => {
+    if (names.includes("inventory")) teamPulledAt = new Date().toISOString();
+  },
+});
 
 // ---------------- start (tries the next port if 3737 is busy) ----------------
 

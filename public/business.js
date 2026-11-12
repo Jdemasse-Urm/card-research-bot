@@ -210,7 +210,9 @@ async function loadStock() {
     <button data-a="findprices" title="Link unpriced cards to their sales pages so they get valued">💲 Find prices</button>
     <button data-a="labels" title="Labels for the selected cards, or every unsold card in this view">🏷 Print labels</button>
     <button data-a="check" title="Duplicate SKUs, the same card on two rows, sold cards still on the website…">🩺 Data check <span data-checkn></span></button>
-    <button data-a="csv" title="The selected cards, or the cards in this view, as a spreadsheet">⬇ CSV</button>`;
+    <button data-a="csv" title="The selected cards, or the cards in this view, as a spreadsheet">⬇ CSV</button>
+    <span class="small muted" data-teamline></span>`;
+  teamLine();
   $("#invActions [data-a=add]").onclick = () => openItemEditor();
   $("#invActions [data-a=scan]").onclick = () => { invView = "scan"; loadInventory(); };
   $("#invActions [data-a=import]").onclick = openImport;
@@ -2283,8 +2285,8 @@ async function loadMjc() {
       <div class="panel table-wrap"><h3 style="margin-top:0">Recent price changes</h3>${p.changes.length ? `<table><tr><th>When</th><th>Card</th><th class="num">From</th><th class="num">To</th><th>Why</th></tr>${p.changes.map((c) => `<tr><td class="small nowrap">${esc(when(c.at))}</td><td>${esc(c.name)} <span class="muted small">${esc(c.grade)}</span></td><td class="num">${usd(c.from)}</td><td class="num"><b>${usd(c.to)}</b></td><td class="small">${esc(c.reason)}</td></tr>`).join("")}</table>` : `<p class="muted small">No changes yet.</p>`}</div>`;
   } else {
     const st = m.store || {};
-    bodyHtml = `<div class="panel"><h3 style="margin-top:0">1. Connect to the store</h3>
-        <p class="small">The store's address and sync key are printed when the MJC backend is deployed (ask Claude to deploy it). The key lets this bot — and only this bot — update the website.</p>
+    bodyHtml = (await teamPanelHtml()) + `<div class="panel"><h3 style="margin-top:0">1. Connect to the store</h3>
+        <p class="small">The store's address and sync key are printed when the MJC backend is deployed (ask Claude to deploy it). The key lets your bots — and only your bots — update the website. (The second computer can skip this: the invite code above connects it.)</p>
         <form class="form-grid" data-connect>
           <label class="span2">Store API address<input name="apiUrl" value="${esc(m.apiUrl || "")}" placeholder="https://xxxx.lambda-url.us-east-2.on.aws"></label>
           <label class="span2">Sync key <span class="muted">${m.configured ? "(saved — leave blank to keep it)" : ""}</span><input name="token" type="password" autocomplete="off"></label>
@@ -2424,6 +2426,7 @@ async function loadMjc() {
     pf.onsubmit = async (e) => { e.preventDefault(); const f = Object.fromEntries(new FormData(pf)); f.enabled = pf.elements.enabled.checked; await fetch("/api/pricing/settings", json("PUT", f)); toast("Pricing settings saved"); loadMjc(); };
     $("#runPricing").onclick = async (e) => { e.target.disabled = true; e.target.textContent = "Re-pricing…"; const r = await fetch("/api/pricing/run", { method: "POST" }); const j = await r.json(); toast(r.ok ? `${j.changes.length} price${j.changes.length === 1 ? "" : "s"} changed` : j.error, { error: !r.ok }); loadMjc(); };
   }
+  wireTeam();
   const cf = $("#invBody [data-connect]");
   if (cf) cf.onsubmit = async (e) => {
     e.preventDefault();
@@ -2455,6 +2458,153 @@ async function loadMjc() {
     $("[data-msg]", sf).innerHTML = r.ok ? `<span class="ok">Saved ✓ — Pip and checkout use this now</span>` : `<span class="bad">${esc(j.error)}</span>`;
   };
 }
+
+// ------------------------------------------------------------------ SHARED INVENTORY (both computers, one set of cards)
+
+const ago = (iso) => (iso ? (Date.now() - Date.parse(iso) < 60000 ? "just now" : when(iso)) : "never");
+async function teamPanelHtml() {
+  const t = await getJSON("/api/team").catch(() => null);
+  if (!t) return "";
+  if (t.on) {
+    return `<div class="panel" data-team><h3 style="margin-top:0">⇄ Shared inventory — <span class="ok">on</span></h3>
+      <p class="small">Cards, sales, customers, expenses, shows and research are one shared set on ${t.devices.map((d) => `<b>${esc(d.name)}</b>${d.me ? " (this computer)" : ` <span class="muted">(seen ${esc(ago(d.seenAt))}${d.version ? `, v${esc(d.version)}` : ""})</span>`}`).join(" and ") || "this computer"}. A change on one shows up on the other within about 20 seconds; a computer that was off catches up when it's back.</p>
+      <p class="small">In step ${esc(ago(t.lastSyncAt))}${t.pending.length ? ` · <span class="warn">${plural(t.pending.length, "change")} waiting to go up</span>` : ""}${t.lastError ? ` · <span class="bad">${esc(t.lastError)}</span>` : ""} <button class="small" data-tsync>↻ Sync now</button></p>
+      <p class="small">The daily jobs (re-pricing, website orders, PSA checks, value history) run on <b>${esc(t.jobs?.name || "—")}</b>${t.runsJobs ? " — this computer" : ""}, so nothing runs twice. If it's off for 20 minutes, the other computer takes over by itself. ${t.jobs?.device !== t.device.id ? `<button class="small" data-tjobs>Run them on this computer</button>` : ""}</p>
+      <form class="row" data-tname style="margin:.4rem 0"><label class="small">This computer's name <input name="name" value="${esc(t.device.name)}" maxlength="40" style="width:12rem"></label><button class="small">Save</button></form>
+      ${status.canEditSettings ? `<div class="row" style="margin:.4rem 0"><button class="small" data-tinvite>🔑 Invite code for the other computer</button><span class="small muted">paste it there in MJC store → ⚙ Setup. It holds the store's sync key — send it only to your dad.</span></div><div data-tcode></div>` : ""}
+      <p class="small muted">Kept per computer, not shared: Google AI spend (the monthly budget counts on each computer), the phone's scan list, Undo. <button class="small" data-tleave>Stop sharing on this computer</button></p>
+    </div>`;
+  }
+  return `<div class="panel" data-team><h3 style="margin-top:0">⇄ Shared inventory — one set of cards for both computers</h3>
+    <p class="small">Turn this on on <b>both</b> computers (yours and your dad's) and they work on the same cards, sales, customers, expenses, shows and research: a card scanned on one is on the other within seconds. Each computer keeps a full copy (it works offline and keeps its own backups); the shared copy is kept privately with your MJC store — the website never shows it.</p>
+    ${t.configured ? "" : `<p class="small"><b>The second computer:</b> paste the invite code from the first one (there: MJC store → ⚙ Setup → 🔑 Invite code).</p>`}
+    <form class="form-grid" data-tjoin>
+      ${t.configured ? "" : `<label class="span2">Invite code<input name="invite" autocomplete="off" placeholder="MJC1-…" required></label>`}
+      <label>This computer's name<input name="name" value="${esc(t.device.name)}" maxlength="40" placeholder="e.g. Dad's Mac" required></label>
+      <div class="span2 row"><button class="primary"${status.canEditSettings ? "" : " disabled"}>Next</button><span data-msg class="small"></span></div>
+    </form><div data-tchoice></div></div>`;
+}
+
+function wireTeam() {
+  const box = $("#invBody [data-team]");
+  if (!box) return;
+  const post = async (url, body, method = "POST") => {
+    const r = await fetch(url, body ? json(method, body) : { method });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `Error ${r.status}`);
+    return j;
+  };
+  const joinForm = $("[data-tjoin]", box);
+  if (joinForm) joinForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(joinForm));
+    const msg = $("[data-msg]", joinForm);
+    msg.textContent = "Checking the shared copy…";
+    let p;
+    try {
+      p = await getJSON("/api/team/preview" + (f.invite ? "?invite=" + encodeURIComponent(f.invite.trim()) : ""));
+    } catch (err) {
+      msg.innerHTML = `<span class="bad">${esc(err.message)}</span>`;
+      return;
+    }
+    msg.textContent = "";
+    const choice = $("[data-tchoice]", box);
+    const join = async (mode) => {
+      choice.innerHTML = `<p class="small">Joining…</p>`;
+      try {
+        await post("/api/team/join", { mode, name: f.name });
+        toast(mode === "replace" ? "This computer now has the shared inventory" : p.cloud.started ? "This computer's cards are in the shared inventory" : "Shared inventory started — now join it on the other computer");
+        loadMjc();
+      } catch (err) {
+        choice.innerHTML = `<p class="small bad">${esc(err.message)}</p>`;
+      }
+    };
+    if (!p.cloud.started) {
+      choice.innerHTML = `<div class="panel" style="margin:.5rem 0 0"><p class="small">No shared copy yet — this computer starts it with its <b>${plural(p.here.cards, "card")}</b> in stock (${plural(p.here.rows, "row")} with the sold ones). Then turn it on on the other computer with the invite code.</p><button class="primary" data-mode="merge">Start sharing</button></div>`;
+    } else {
+      choice.innerHTML = `<div class="panel" style="margin:.5rem 0 0"><p class="small">The shared copy has <b>${plural(p.cloud.cards, "card")}</b> in stock${p.cloud.devices.length ? ` (from ${esc(p.cloud.devices.join(" and "))})` : ""}. This computer has <b>${plural(p.here.cards, "card")}</b>.</p>
+        ${p.here.rows ? `<div class="row"><button class="primary" data-mode="merge">Add this computer's ${plural(p.here.rows, "row")} to it</button><button data-mode="replace">Use the shared copy — set this computer's aside</button></div><p class="small muted">"Set aside" = this computer takes the shared copy as it is; what's here now stays in today's backup file (Settings → Backups). Pick that if this computer only has test cards.</p>` : `<button class="primary" data-mode="merge">Join</button>`}</div>`;
+    }
+    $$("[data-mode]", choice).forEach((b) => (b.onclick = () => join(b.dataset.mode)));
+  };
+  const act = (sel, fn) => {
+    const el = $(sel, box);
+    if (el) el.onclick = async (e) => {
+      e.preventDefault();
+      e.target.disabled = true;
+      try {
+        await fn(e);
+      } catch (err) {
+        toast(err.message, { error: true });
+      }
+      loadMjc();
+    };
+  };
+  act("[data-tsync]", () => post("/api/team/sync"));
+  act("[data-tjobs]", async () => (await post("/api/team/jobs"), toast("The daily jobs run on this computer now")));
+  const nf = $("[data-tname]", box);
+  if (nf) nf.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await post("/api/team/device", { name: nf.elements.name.value }, "PUT");
+      toast("Saved — the other computer sees the new name in a minute");
+    } catch (err) {
+      toast(err.message, { error: true });
+    }
+  };
+  const inv = $("[data-tinvite]", box);
+  if (inv) inv.onclick = async () => {
+    try {
+      const { code } = await getJSON("/api/team/invite");
+      $("[data-tcode]", box).innerHTML = `<div class="row"><input readonly value="${esc(code)}" style="flex:1;font-family:monospace;font-size:.8rem" data-code><button class="small" data-copy>Copy</button></div>`;
+      $("[data-copy]", box).onclick = async () => {
+        $("[data-code]", box).select();
+        try {
+          await navigator.clipboard.writeText(code);
+        } catch {
+          document.execCommand("copy");
+        }
+        toast("Copied — paste it on the other computer");
+      };
+    } catch (err) {
+      toast(err.message, { error: true });
+    }
+  };
+  const leave = $("[data-tleave]", box);
+  if (leave) leave.onclick = () => {
+    const body = openModal("Stop sharing on this computer?", `<p>This computer keeps its copy of everything, but stops getting the other computer's changes (and stops sending its own). Nothing is deleted anywhere. You can turn it back on any time.</p><div class="row"><button class="primary" data-yes>Stop sharing here</button></div>`);
+    $("[data-yes]", body).onclick = async () => {
+      modal.close();
+      await post("/api/team/leave").catch((err) => toast(err.message, { error: true }));
+      loadMjc();
+    };
+  };
+}
+
+/** The Stock bar: "⇄ Shared with Dad's Mac · in step just now". */
+async function teamLine() {
+  const el = $("#invActions [data-teamline]");
+  if (!el) return;
+  const t = await getJSON("/api/team").catch(() => null);
+  if (!t?.on) return;
+  const others = t.devices.filter((d) => !d.me).map((d) => d.name);
+  el.innerHTML = `⇄ Shared${others.length ? ` with ${esc(others.join(", "))}` : ""} · ${t.lastError ? `<span class="bad">not syncing</span>` : `in step ${esc(ago(t.lastSyncAt))}`}`;
+}
+
+// The other computer's changes appear by themselves: the Stock list redraws when they arrive — never while a card is open
+// or you're typing in a box.
+let teamSeen = null;
+setInterval(async () => {
+  if (document.hidden || !$("#tab-inventory")?.classList.contains("active") || invView !== "stock") return;
+  try {
+    const s = await getJSON("/api/status");
+    if (!s.team?.on) return;
+    const busy = modal.open || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "");
+    if (teamSeen && s.team.pulledAt && s.team.pulledAt !== teamSeen && !busy) loadStock();
+    else teamLine();
+    if (!busy) teamSeen = s.team.pulledAt || teamSeen || "-";
+  } catch {}
+}, 20000);
 
 // ------------------------------------------------------------------ SHOW MODE (a quick register for card shows)
 

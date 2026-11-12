@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.19.0 — one inventory for both computers
+
+Joseph's PC and his dad's Mac each had their own inventory; a card scanned on one never showed up on the other.
+
+- **Shared inventory** (Inventory → MJC store → ⚙ Setup): both computers work on ONE set of cards, sales, customers,
+  expenses, shows, grading, want list, research reports, alerts and the activity feed. Start it on one computer, send
+  the **🔑 invite code** to the other, paste it there — done. Changes reach the other computer within ~20 s (pushed ~2 s
+  after a save, the cloud checked every 20 s); a computer that was off catches up when it's back. The Stock list
+  redraws itself when the other computer's changes arrive (never while a card is open or you're typing), and its bar
+  says "⇄ Shared with Dad's Mac · in step".
+- **Nothing is lost when both edit at once.** Three-way merge: cards added on each computer both stay; different fields
+  of one card edited on each both stay; the same field → the later save; a card deleted on one but edited on the
+  other is kept. A save lands only on the cloud version it was merged with (the store checks), so two computers saving
+  at the same second can't overwrite each other — the second merges again. Two cards numbered CRB-0005 at once: the
+  newer gets the next free SKU.
+- **Each computer keeps a full copy**: fast, works offline, its own daily backups. The shared copy lives privately in
+  the MJC store's own storage (store 1.2.0) — the website never shows it. Card photos go up to the store's photo folder
+  and come down on the other computer, so both see every card's pictures.
+- **The daily jobs run on one computer** (re-pricing, website orders, PSA checks, value history, the weekly report), so
+  nothing runs twice and no website order is recorded twice; if that computer is off for 20 minutes the other takes
+  over by itself, or **Run them on this computer**. A computer connected to the store but not sharing doesn't pull
+  website orders while another one shares.
+- **The website can't go backwards.** A website sync names the shared copy it was built from; if the other computer
+  saved a newer one a moment before, the store refuses it and the bot pulls and builds again — a stale copy can't take
+  the other computer's new cards off the site. Once the inventory is shared, the store refuses a whole-catalog sync
+  from a bot that isn't on it (an old version, or one never joined).
+- **The activity feed says which computer** ("Dad's Mac added …").
+- Kept per computer: Google AI spend (the monthly budget counts on each computer), the phone's scan list, Undo.
+
 ## 3.18.1 — Google's prepaid billing, and the Jan 1 price rise
 
 - **Out of prepaid credit says so.** New Google AI accounts prepay (since Mar 2026): at $0 Google stops every key at

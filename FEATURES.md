@@ -145,7 +145,8 @@ account exists) · **Investor demo:** https://main.d2p7srpg832hvo.amplifyapp.com
 | Pop-up notifications | Website orders, offers/messages, price targets, pricing problems — click to open; choose which kinds; Mac Dock badge, Windows taskbar flash | 3.6 |
 | Tray menu | Open, Show mode, Website orders & messages, Check for updates, Quit | 3.6 |
 | Backups | Automatic daily (14 kept) + a copy to OneDrive / iCloud Drive / Dropbox / Google Drive; Back up now; download/restore everything in one file | 3.0 / 3.6 |
-| Share on the home network | The other computer or a phone uses the same inventory (PIN-protected) | 2.0 |
+| Share on the home network | A phone or another screen on the same Wi-Fi opens this computer's bot (PIN-protected) | 2.0 |
+| Shared inventory | Both computers (Joseph's PC, Dad's Mac), each running its own bot, work on ONE set of cards, sales, customers, expenses, shows and research — from anywhere; invite code to join; three-way merge (nothing lost when both edit); each keeps a full copy + backups; photos both ways; daily jobs on one computer with automatic takeover; the shared copy is private in the MJC store's storage (store 1.2.0) | 3.19 |
 | Phone mode | Camera button, add-to-home-screen layout | 3.0 |
 | Keyboard shortcuts | `/` search · Ctrl/⌘+Enter research · Esc cancel · 1–8 tabs · `?` list | 3.0 |
 | Light / dark mode, who-is-using-this name, activity feed | — | 3.0 |

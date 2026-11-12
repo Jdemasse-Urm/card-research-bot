@@ -36,8 +36,8 @@ Covers baseball, basketball, football, Yu-Gi-Oh and One Piece — plus Pokémon,
 
 ## The MJC website connection
 
-**The site:** https://main.d2p7srpg832hvo.amplifyapp.com (the demo build on AWS Amplify; the live store deploys to
-the MJC AWS account — see the `mcj` repo). **Every feature of both apps:** [FEATURES.md](FEATURES.md) here and
+**The site:** https://main.dsq06359z2wce.amplifyapp.com (live since Nov 5, 2026; main.d2p7srpg832hvo is the old Oct 26
+demo — see the `mcj` repo). **Every feature of both apps:** [FEATURES.md](FEATURES.md) here and
 [mcj/FEATURES.md](https://github.com/UR-MORTGAGE/mcj/blob/main/FEATURES.md).
 
 Cards you mark **Sell on MJC** appear on the MJC store website with their photos. A daily pricing engine sets
@@ -125,10 +125,24 @@ Windows and the Mac `.dmg` on macOS, smoke-tests both packaged apps, and attache
 
 ## Using it from both computers (one shared inventory)
 
-On the computer that will run the bot: **Settings → Share on home network** → tick **Share**, pick a 4–8 digit PIN,
-**Save**, then close and restart the bot. Settings shows the address to open on the other computer (e.g.
-`http://192.168.1.20:3737`). Open it in Safari/Chrome there and enter the PIN. Both of you now see the same inventory,
-watchlist and history. Only the computer running the bot can change settings.
+**Shared inventory (3.19, recommended — works anywhere):** each computer runs its own bot, and both work on ONE set of
+cards, sales, customers, expenses, shows and research. On the first computer: **Inventory → MJC store → ⚙ Setup →
+Shared inventory**, name the computer, **Next → Start sharing**, then **🔑 Invite code for the other computer** → send
+the code to the other person (it holds the store's sync key — only to them). On the second computer: the same panel,
+paste the code, name it, **Next**, then **Add this computer's cards** (or **Use the shared copy** if it only had test
+cards). A change on one shows up on the other within ~20 s; a computer that was off catches up when it's back; each
+keeps a full working copy and its own backups. The shared copy lives privately in the MJC store's own storage (never on
+the website). The daily jobs (re-pricing, website orders, PSA checks, value history) run on one computer — the panel
+says which — and move to the other by themselves if it's off for 20 minutes. Per computer, not shared: Google AI spend
+(the monthly budget counts on each), the phone's scan list, Undo. How it merges: a card added or edited on each
+computer both survive; the same field changed on both → the later save wins; a card deleted on one but edited on the
+other is kept. Code: `lib/team.js`.
+
+**Home network share (one bot, opened from another screen on the same Wi-Fi):** on the computer that will run the bot:
+**Settings → Share on home network** → tick **Share**, pick a 4–8 digit PIN, **Save**, then close and restart the bot.
+Settings shows the address to open on the other device (e.g. `http://192.168.1.20:3737`). Open it in Safari/Chrome
+there and enter the PIN. Handy for a phone or tablet at a show; it needs that computer on and on the same network.
+Only the computer running the bot can change settings.
 
 ## Using it on a phone at a card show
 
@@ -186,5 +200,8 @@ notification says it updated. The banner's **Update now** does the same thing st
 tests both installs (the Windows silent install, the Mac swap from the real .dmg) before anything ships.
 
 Everything stays on your computer in your data folder (**Settings → Open data folder**): `data/` holds your
-inventory, lookups, watchlist and backups, `.env` holds your keys. Your inventory and keys never leave your computer;
-card searches go to the price sites (and PSA/eBay if connected), and photos/questions go to Google Gemini for research.
+inventory, lookups, watchlist and backups, `.env` holds your keys. Your keys never leave your computer. Your inventory
+stays here too — unless you turn on **Shared inventory**, which keeps the shared copy privately in your MJC store's own
+storage (with card photos in its photo folder) so both computers work on one set; the website shows only cards you put
+on it. Card searches go to the price sites (and PSA/eBay if connected), and photos/questions go to Google Gemini for
+research.

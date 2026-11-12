@@ -41,6 +41,8 @@
     dialog li { margin: .25rem 0; }
     .warnText { color: var(--warn); }
     .badText { color: var(--bad); }
+    .goodText { color: var(--good); }
+    #sessionLine { margin: .8rem 0 0; }
     @media (orientation: landscape) and (max-height: 500px) { .shoot { padding: .8rem; margin: .5rem 0; } }
   </style>
 </head>
@@ -60,9 +62,11 @@
     <button class="more" id="undoBtn" hidden>↩ Undo last</button>
   </div>
   <div class="row" style="margin-top:.5rem">
-    <label class="check" style="flex:1"><input type="checkbox" id="sound" /> <span>🔔 A short sound when a picture is read</span></label>
-    <button class="more" id="newBtn" style="flex:0 0 auto">Start over</button>
+    <label class="check" style="flex:1"><input type="checkbox" id="sound" /> <span>🔔 A sound when a picture is read (a low one if it can't be)</span></label>
+    <button class="more" id="newBtn" style="flex:0 0 auto" title="Clears this phone's list only — inventory, the website and the computer's list don't change">🆕 New session</button>
   </div>
+  <p class="muted" id="sessionLine" aria-live="polite"></p>
+  <p class="muted" style="margin:0">New session clears this phone's list only. Your inventory and the website change only when you press ＋ Add to inventory on the computer.</p>
   <div class="gallery" id="gallery" aria-label="Pictures sent"></div>
   <dialog id="detail" aria-labelledby="detailTitle"><h2 id="detailTitle" style="margin:0 0 .4rem;font-size:1.1rem"></h2><div id="detailBody"></div><div class="row" style="margin-top:.6rem"><button class="more" id="detailClose">Close</button></div></dialog>
   <script src="phone.js"></script>

@@ -34,6 +34,44 @@ Joseph's PC and his dad's Mac each had their own inventory; a card scanned on on
   nothing is forgotten.
 - Kept per computer: Google AI spend (the monthly budget counts on each computer), the phone's scan list, Undo.
 
+### The phone scanner, 10-10 (11/12)
+
+Joseph opened the phone camera page on 11/12 and found last week's pictures, including the Doflamingo already in stock.
+He couldn't tell whether "Start over" would delete them, or whether sending more would add a second Doflamingo. His new
+picture said "waiting to send" while it was actually stuck because Google's credit was out.
+
+- **Sessions end by themselves.** Opening the page, or taking a picture, after 4 hours without one starts a new
+  session and says where the last one's cards are. A line shows "This session: started 2:45 PM · 3 pictures".
+- **"Start over" is now 🆕 New session**, and it says what it does: it clears this phone's list only; inventory and the
+  website change only on the computer's ＋ Add. Pictures not done yet stay. Before, the button warned it would "drop"
+  unsent pictures, but they were still sent with nothing on the phone to show for them.
+- **The reader being down isn't a dead end.** When Google's credit runs out, a limit is hit or Google is overloaded:
+  - the phone shows one banner saying why;
+  - pictures read "⏸ waiting for the reader" instead of ✗;
+  - Bulk scan tries again every minute by itself, so adding credit or a new key is all it takes. Before, you had to
+    find ▶ Resume.
+  - A wrong key or the bot's own budget still stops and says so.
+- **A picture is never lost through a restart.** A phone picture the computer took but never finished goes back in the
+  inbox at the next start. Finished ones are filed in `scan-inbox/read/` for a week. On the first start of 3.19, the
+  pictures 3.18 already read are filed as finished, so they're never re-read into the list.
+- **The same slab is never added twice.** A read card whose PSA cert is already in stock is the same slab:
+  - it's unticked, and **＋ Add refuses it** even when ticked by hand (checked against inventory as it is at that
+    moment);
+  - the phone shows "already in inventory (CRB-0001)";
+  - a slab shot twice in one scan is unticked the second time;
+  - ☑ Tick all never re-ticks either.
+  - Raw cards still show "have N": more copies are real.
+- **A picture of only a card's back** (11/5: a slab's back shot on its own was read as a card named "One Piece Card
+  Game") is unticked with a note.
+- **The phone shows "✓ in inventory CRB-0007"** once the computer adds a picture's cards, so it's clear what's done and
+  what still waits in Bulk scan. The phone's view of every picture is kept a week and survives a restart of the bot.
+- **Faster sending:**
+  - the camera's own JPEG goes as it is: no 4096-px re-encode on the phone, and no base64. Measured on a 12 MP picture
+    in the same window: 353 → 132 ms of phone work, and 12.9 → 10.2 MB sent.
+  - Sending and the status check restart the moment the page is back from the camera; the retry wait is at most 8 s.
+- Plain captions ("#3 front · on the computer", "✓ read · 1 to check"), "↩ Undo picture 3", the time on each picture,
+  and a low tone when a picture can't be read (with 🔔 on).
+
 ## 3.18.1 — Google's prepaid billing, and the Jan 1 price rise
 
 - **Out of prepaid credit says so.** New Google AI accounts prepay (since Mar 2026): at $0 Google stops every key at

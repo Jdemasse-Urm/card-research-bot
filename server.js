@@ -8,7 +8,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { exec, execFile } from "node:child_process";
 
-import { hasKey, resetClient, explainError, MODEL, FALLBACK_MODEL, monthlyBudget, FREE_GROUNDED_PER_MONTH, aiQueue } from "./lib/ai.js";
+import { hasKey, resetClient, explainError, canRetryLater, MODEL, FALLBACK_MODEL, monthlyBudget, FREE_GROUNDED_PER_MONTH, aiQueue } from "./lib/ai.js";
 import { cardLookup, hotCards, ask, askBusiness, lotLookup, locateCards, readCards, precheckCards, writeListing, slabCheck, adviseInventory, readReceipt, CATEGORIES, PERIODS, kindOf } from "./lib/jobs.js";
 import { runSelfTest } from "./lib/selftest.js";
 import * as store from "./lib/store.js";
@@ -179,7 +179,7 @@ function streamJob(req, res, work) {
     .catch((err) => {
       // Expected situations (no key yet, budget reached, cancelled) aren't errors worth logging.
       if (!ctrl.signal.aborted && !/No Gemini API key|Monthly AI budget|Cancelled/.test(err?.message || "")) console.error(err);
-      send({ type: "error", message: explainError(err) });
+      send({ type: "error", message: explainError(err), retry: canRetryLater(err) });
     })
     .finally(() => {
       busyJobs--;
@@ -485,10 +485,13 @@ app.post("/api/scan/locate", (req, res) => {
     try {
       const r = await locateCards({ images }, { onEvent: send, signal });
       const each = (r.usage?.usd || 0) / Math.max(1, images.length); // what finding cost, per picture (paid tier)
-      r.photos.forEach((p, i) => setPhone(keys[i], { stage: "found", found: p.boxes.length, findUsd: each, problems: p.notes.filter((n) => n.problem !== "none").map(({ position, problem }) => ({ position, problem })) }));
+      r.photos.forEach((p, i) => {
+        setPhone(keys[i], { stage: "found", found: p.boxes.length, findUsd: each, problems: p.notes.filter((n) => n.problem !== "none").map(({ position, problem }) => ({ position, problem })) });
+        if (!p.boxes.length) finishPhone(keys[i]); // no card in it: nothing more to read
+      });
       return r;
     } catch (err) {
-      keys.forEach((k) => setPhone(k, { stage: "error", error: explainError(err) }));
+      keys.forEach((k) => setPhone(k, readFailed(err)));
       throw err;
     }
   });
@@ -511,16 +514,17 @@ app.post("/api/scan/read", (req, res) => {
     try {
       read = await readCards({ cards, hints: store.scanHints() }, { onEvent: send, signal });
     } catch (err) {
-      for (const s of slots) setPhone(s.key, { stage: "error", error: explainError(err) });
+      for (const s of slots) setPhone(s.key, readFailed(err));
       throw err;
     }
-    read.cards.forEach((c, i) => Object.assign(c, { wanted: wantMatches(c.url, c.grade, c.name), box: slots[i]?.box ?? null, backBox: slots[i]?.backBox ?? null, position: slots[i]?.position || c.position || "", holder: slots[i]?.holder || "", problem: slots[i]?.problem && slots[i].problem !== "none" ? slots[i].problem : "" }));
+    read.cards.forEach((c, i) => Object.assign(c, { have: haveIt(c), wanted: wantMatches(c.url, c.grade, c.name), box: slots[i]?.box ?? null, backBox: slots[i]?.backBox ?? null, position: slots[i]?.position || c.position || "", holder: slots[i]?.holder || "", problem: slots[i]?.problem && slots[i].problem !== "none" ? slots[i].problem : "" }));
     // the phone sees each card it sent: name, value, and whether to look again
     for (const key of new Set(slots.map((x) => x.key))) {
       const mine = read.cards.filter((_, i) => slots[i].key === key);
-      setPhone(key, { stage: "read", readUsd: ((read.usage?.usd || 0) * mine.length) / Math.max(1, read.cards.length), cards: mine.map((c) => ({ name: c.name, grade: c.grade, value: c.value, position: c.position, problem: c.problem, check: c.checklist?.note || c.parallel_check || (c.readBy ? "Read by Google's backup reader (the main one is overloaded) — check the version on the computer" : "") || (c.confidence === "low" ? "The reader isn't sure — look at it on the computer" : "") || "" })) });
+      setPhone(key, { stage: "read", readUsd: ((read.usage?.usd || 0) * mine.length) / Math.max(1, read.cards.length), cards: mine.map((c) => ({ name: c.name, grade: c.grade, value: c.value, position: c.position, problem: c.problem, have: c.have, check: c.checklist?.note || c.parallel_check || (c.readBy ? "Read by Google's backup reader (the main one is overloaded) — check the version on the computer" : "") || (c.confidence === "low" ? "The reader isn't sure — look at it on the computer" : "") || "" })) });
+      finishPhone(key);
       const back = slots.find((x) => x.key === key && x.backKey)?.backKey;
-      if (back) setPhone(back, { stage: "read", backOf: phoneName(key) });
+      if (back) setPhone(back, { stage: "read", backOf: phoneName(key) }), finishPhone(back);
     }
     if (slots.length === cards.length && slots.every((x) => x.key)) {
       const q = store.load("scan-queue", {});
@@ -540,23 +544,84 @@ app.post("/api/scan/feedback", (req, res) => res.json({ cards: store.addScanFeed
 app.get("/api/scan/accuracy", (_req, res) => res.json({ ...store.scanAccuracy(), hints: store.scanHints() }));
 
 // Phone → computer: photos taken on the phone land in an inbox the computer's Bulk scan picks up.
+// Folders: scan-inbox/ = waiting · done/ = taken by Bulk scan, being read · read/ = finished (kept a week).
 const INBOX = path.join(store.DATA_DIR, "scan-inbox");
+const TAKEN = path.join(INBOX, "done");
+const FINISHED = path.join(INBOX, "read");
 const inboxName = (n) => String(n || "").replace(/[^\w.-]/g, "").slice(0, 80);
+// A picture taken but never finished (the app closed or crashed mid-read, or the reader was down when it closed) goes
+// back in the inbox at start and is read again. Before 3.19, done/ also held every picture already READ (and maybe
+// added to inventory), so the first start on 3.19 files those as finished instead: re-reading them would put cards
+// already in stock back in the list.
+try {
+  fs.mkdirSync(TAKEN, { recursive: true });
+  const marker = path.join(INBOX, ".finished-folder");
+  const first = !fs.existsSync(marker);
+  for (const f of fs.readdirSync(TAKEN)) {
+    if (!f.endsWith(".jpg")) continue;
+    if (first) fs.mkdirSync(FINISHED, { recursive: true }), fs.renameSync(path.join(TAKEN, f), path.join(FINISHED, f));
+    else if (!fs.existsSync(path.join(INBOX, f))) fs.renameSync(path.join(TAKEN, f), path.join(INBOX, f));
+  }
+  if (first) fs.writeFileSync(marker, "done/ = being read; read/ = finished (3.19)\n");
+} catch {
+  /* no inbox yet */
+}
 
 // What the phone sees after each picture: sent → being read → found (and which cards need a retake) → read (each
-// card and its value), or the error. In memory for the session, by picture name (phone-<session>-<n>-<side>.jpg).
+// card, its value, whether it's already in inventory) → added (its inventory number), or held (the reader is down:
+// it waits) or the error. By picture name (phone-<session>-<n>-<side>.jpg); kept a week on disk, so a restart of the
+// bot doesn't blank the phone's view.
+const PHONE_FILE = path.join(INBOX, "phone-status.json");
 const phoneStatus = new Map();
+try {
+  for (const [n, v] of Object.entries(JSON.parse(fs.readFileSync(PHONE_FILE, "utf8")))) if (Date.now() - v.at < 7 * 86400000) phoneStatus.set(n, v);
+} catch {
+  /* none yet */
+}
+let phoneSaveTimer = null;
 const phoneName = (key) => String(key || "").split("|")[0].split("/").pop().match(/^phone-[\w-]+\.jpg$/)?.[0] || null;
 function setPhone(key, patch) {
   const n = phoneName(key);
   if (!n) return;
   phoneStatus.set(n, { ...(phoneStatus.get(n) || {}), ...patch, at: Date.now() });
   if (phoneStatus.size > 3000) for (const k of [...phoneStatus.keys()].slice(0, 1000)) phoneStatus.delete(k);
+  phoneSaveTimer ||= setTimeout(() => {
+    phoneSaveTimer = null;
+    try {
+      fs.mkdirSync(INBOX, { recursive: true });
+      fs.writeFileSync(PHONE_FILE, JSON.stringify(Object.fromEntries(phoneStatus)));
+    } catch {
+      /* the next change tries again */
+    }
+  }, 2000);
+}
+/** The reader failed: waiting for it (credit, a limit, an overload — it's read once that passes) or a real error. */
+const readFailed = (err) => (canRetryLater(err) ? { stage: "held", error: explainError(err) } : { stage: "error", error: explainError(err) });
+/** A phone picture is read (or had no card): out of done/, so a restart doesn't read it again. */
+function finishPhone(key) {
+  const n = phoneName(key);
+  if (!n) return;
+  try {
+    fs.mkdirSync(FINISHED, { recursive: true });
+    fs.renameSync(path.join(TAKEN, n), path.join(FINISHED, n));
+  } catch {
+    /* not a claimed phone picture */
+  }
+}
+/** Is this card already in stock? The same PSA cert is the same slab; the same sales page and grade is another copy. */
+function haveIt(c) {
+  const rows = store.inventoryView().filter((r) => r.status !== "sold");
+  const cert = String(c.cert || "").replace(/\D/g, "");
+  const same = cert ? rows.find((r) => r.facts?.cert === cert) : null;
+  if (same) return { sku: same.sku, cert: true };
+  const copies = c.url ? rows.filter((r) => r.priceUrl === c.url && String(r.grade || "").toLowerCase() === String(c.grade || "").toLowerCase()) : [];
+  return copies.length ? { sku: copies.map((r) => r.sku).join(", "), cert: false } : null;
 }
 app.get("/api/scan/phone-status", (req, res) => {
-  const s = String(req.query.session || "").replace(/\W/g, "");
+  // several sessions: pictures a phone carried into a new session keep their own session's name
+  const sessions = String(req.query.session || "").split(",").map((s) => s.replace(/\W/g, "")).filter(Boolean).slice(0, 5);
   const out = {};
-  if (s) for (const [n, v] of phoneStatus) if (n.startsWith(`phone-${s}-`)) out[n] = v;
+  for (const [n, v] of phoneStatus) if (sessions.some((s) => n.startsWith(`phone-${s}-`))) out[n] = v;
   res.json({ pictures: out, computer: inboxSeenAt ? Math.round((Date.now() - inboxSeenAt) / 1000) : null });
 });
 let inboxSeenAt = 0; // when the computer's Bulk scan last looked for phone pictures (the phone says if nobody is)
@@ -568,15 +633,22 @@ app.get("/api/scan/phone-link", async (req, res) => {
   const url = `${lanUrls()[0]}/phone?k=${k}`;
   res.json({ share: true, url, svg: await QRCode.toString(url, { type: "svg", margin: 1, errorCorrectionLevel: "M" }), expires: Date.now() + 15 * 60000 });
 });
-app.post("/api/scan/inbox", (req, res) => {
-  const m = String(req.body?.image || "").match(/^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/);
-  const buf = m ? Buffer.from(m[1], "base64") : null;
+// The phone sends the camera's own JPEG as it is (Content-Type image/jpeg, ?name=) — no re-encoding on the phone and
+// a quarter less to send than base64. A page from before 3.19 still sends JSON { name, image: data URL }.
+app.post("/api/scan/inbox", express.raw({ type: "image/jpeg", limit: "16mb" }), (req, res) => {
+  let buf = null, given = req.query.name;
+  if (Buffer.isBuffer(req.body)) buf = req.body;
+  else {
+    const m = String(req.body?.image || "").match(/^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/);
+    buf = m ? Buffer.from(m[1], "base64") : null;
+    given = req.body?.name;
+  }
   if (!buf || buf.length < 1000 || buf.length > 15e6 || buf[0] !== 0xff || buf[1] !== 0xd8) return res.status(400).json({ error: "Send a JPEG photo." });
   fs.mkdirSync(INBOX, { recursive: true });
   if (fs.readdirSync(INBOX).filter((f) => f.endsWith(".jpg")).length >= 500) return res.status(429).json({ error: "500 photos are waiting — is Card Research Bot open on the computer? It reads them as they come in." });
-  const name = `${inboxName(req.body?.name) || "phone-" + Date.now()}.jpg`;
+  const name = `${inboxName(given) || "phone-" + Date.now()}.jpg`;
   // the same name again (a retry after a dropped answer) replaces the picture — never a second copy
-  if (fs.existsSync(path.join(INBOX, "done", name))) return res.json({ ok: true, name, already: true });
+  if (fs.existsSync(path.join(TAKEN, name)) || fs.existsSync(path.join(FINISHED, name))) return res.json({ ok: true, name, already: true });
   fs.writeFileSync(path.join(INBOX, name), buf);
   setPhone(name, { stage: "sent", error: null });
   res.json({ ok: true, name });
@@ -586,20 +658,20 @@ app.get("/api/scan/inbox", (_req, res) => {
   let files = [];
   try {
     files = fs.readdirSync(INBOX).filter((f) => f.endsWith(".jpg")).map((f) => ({ name: f, at: fs.statSync(path.join(INBOX, f)).mtimeMs }));
-    const done = path.join(INBOX, "done");
-    if (fs.existsSync(done)) for (const f of fs.readdirSync(done)) if (Date.now() - fs.statSync(path.join(done, f)).mtimeMs > 7 * 86400000) fs.unlinkSync(path.join(done, f));
+    // finished pictures are kept a week (a dropped answer re-sent by the phone is recognised), then deleted
+    for (const dir of [FINISHED, TAKEN]) if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir)) if (Date.now() - fs.statSync(path.join(dir, f)).mtimeMs > 7 * 86400000) fs.unlinkSync(path.join(dir, f));
   } catch {}
   res.json(files.sort((a, b) => a.at - b.at));
 });
-// The computer takes a picture: the first to ask gets it (moved to done/, kept a week in case the scan never finishes);
-// anyone else gets 404 — two open screens never read the same picture twice.
+// The computer takes a picture: the first to ask gets it (moved to done/ until it's read: back in the inbox at the next
+// start if it never is); anyone else gets 404 — two open screens never read the same picture twice.
 app.post("/api/scan/inbox/:name/claim", (req, res) => {
   const name = inboxName(req.params.name), f = path.join(INBOX, name);
   let buf;
   try {
     buf = fs.readFileSync(f);
-    fs.mkdirSync(path.join(INBOX, "done"), { recursive: true });
-    fs.renameSync(f, path.join(INBOX, "done", name));
+    fs.mkdirSync(TAKEN, { recursive: true });
+    fs.renameSync(f, path.join(TAKEN, name));
   } catch {
     return res.status(404).json({ error: "Already taken." });
   }
@@ -633,6 +705,8 @@ app.delete("/api/scan/inbox/:name", (req, res) => {
 });
 app.delete("/api/scan", (req, res) => {
   const keys = Array.isArray(req.body?.keys) ? new Set(req.body.keys.map(String)) : null;
+  // added: { file key: ["CRB-0007", …] } — the cards went into inventory; the phone shows their numbers
+  for (const [key, skus] of Object.entries(req.body?.added || {})) setPhone(key, { stage: "added", skus: (Array.isArray(skus) ? skus : []).map((s) => store.clean.str(s, 20)).slice(0, 20) });
   const q = store.load("scan-queue", {});
   store.save("scan-queue", keys ? Object.fromEntries(Object.entries(q).filter(([k]) => !keys.has(k))) : {});
   res.json({ ok: true });

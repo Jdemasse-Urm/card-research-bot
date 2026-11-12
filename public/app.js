@@ -402,7 +402,8 @@ async function streamPost(url, body, progressEl, controller) {
     progressEl.classList.add("done");
   }
   if (!final) throw new Error("Connection closed before the research finished.");
-  if (final.type === "error") throw new Error(final.message);
+  // retry: the job will work again by itself (Google's credit, a rate limit, an overload); Bulk scan waits and retries
+  if (final.type === "error") throw Object.assign(new Error(final.message), { retry: Boolean(final.retry) });
   progressEl.insertAdjacentHTML("beforeend", `<div>✓ Done</div>`);
   return final;
 }

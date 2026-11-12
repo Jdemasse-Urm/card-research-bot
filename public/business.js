@@ -1242,9 +1242,9 @@ function drawScanProgress() {
     ${p.filter((x) => x.countNote).map((x) => `<p class="small warn" style="margin:.2rem 0">⚠ ${esc(fileLabel(x.file.name))}: ${esc(x.countNote)} — a back may be missing or two cards overlap; check those cards' backs.</p>`).join("")}
     <div class="progress small hidden" id="scanSteps"></div></div>`;
   const b = (sel, fn) => { const x = $(sel, el); if (x) x.onclick = fn; };
-  b("[data-pause]", () => { scan.paused = true; scan.ctrl?.abort(); });
+  b("[data-pause]", () => { scan.paused = true; clearTimeout(scan.retryTimer); scan.ctrl?.abort(); });
   b("[data-resume]", () => runScan());
-  b("[data-clearscan]", () => { scan.paused = true; scan.ctrl?.abort(); Object.assign(scan, { pages: [], msg: "", usd: 0, location: "" }); drawScan(); });
+  b("[data-clearscan]", () => { scan.paused = true; clearTimeout(scan.retryTimer); scan.ctrl?.abort(); Object.assign(scan, { pages: [], msg: "", usd: 0, location: "" }); drawScan(); });
 }
 
 /**
@@ -1418,7 +1418,11 @@ async function runScan() {
       if (failed) {
         const err = failed.reason;
         scan.paused = true;
-        scan.msg = /cancel/i.test(err.message) ? "" : `Paused: ${err.message}${/quota|limit|429/i.test(err.message) ? " Everything read so far is kept — press Resume later (or tomorrow)." : ""}`;
+        scan.msg = /cancel/i.test(err.message) ? "" : `Paused: ${err.message}${err.retry ? " Trying again every minute by itself — everything read so far is kept, and the phone's pictures wait here." : ""}`;
+        // the reader is down for a while (Google's credit, a limit, an overload): try again by itself, so adding
+        // credit or a new key is all it takes — nobody has to find the Resume button
+        clearTimeout(scan.retryTimer);
+        if (err.retry) scan.retryTimer = setTimeout(() => { if (!scan.running && scan.pages.some((p) => p.status === "waiting" && p.file)) runScan(); }, 60000);
       }
       drawScanProgress();
     }
@@ -1440,7 +1444,13 @@ async function finishPage(p, cards) {
   } catch {
     /* unreadable now — the cards still list, without the picture */
   }
-  p.cards = cards.map((c, i) => ({ ...c, read: c.read || { name: c.name, grade: c.grade, details: { ...(c.details || {}) } }, uid: `${p.key}#${i}`, page: p, include: true, thumb: img ? cropCard(img, c.box || null, 220).toDataURL("image/jpeg", 0.75) : null }));
+  p.cards = cards.map((c, i) => {
+    // the same PSA cert is the same slab: already in stock, or already in this list (the slab shot twice) → unticked
+    const cert = certOf(c);
+    const twin = cert && scanCards().find((x) => x.include && certOf(x) === cert);
+    const backOnly = looksLikeBack(c);
+    return { ...c, read: c.read || { name: c.name, grade: c.grade, details: { ...(c.details || {}) } }, uid: `${p.key}#${i}`, page: p, twin: twin ? fileLabel(twin.page?.file?.name) || "another picture" : null, backOnly, include: !(c.have?.cert || twin || backOnly), thumb: img ? cropCard(img, c.box || null, 220).toDataURL("image/jpeg", 0.75) : null };
+  });
   forgetPicture(p.file);
   forgetPicture(p.back);
   appendScanRows(p.cards);
@@ -1517,6 +1527,17 @@ async function addCert(n) {
   }
 }
 
+const certOf = (c) => String(c.cert || "").replace(/\D/g, "");
+/**
+ * A picture of only a card's back (11/5: a slab's back shot on its own was read as a card called "One Piece Card
+ * Game"): no player or character, no number, and the name is just the game's. Unticked, never added by surprise.
+ */
+const looksLikeBack = (c) => {
+  const d = c.details || {};
+  if (d.player || d.number) return false;
+  const n = normName(String(c.name || "").replace(/^\d{4}(-\d{2})?\s+/, ""));
+  return /^(the )?(one piece|pokemon|pok mon|yu gi oh|magic( the gathering)?|digimon|lorcana|dragon ball( super)?|flesh and blood|star wars unlimited)( trading)?( card)?( game)?( back)?$/.test(n) || /^(trading )?card( game)? back$/.test(n);
+};
 function dupNote(c) {
   const have = scan.inv.filter((r) => r.status !== "sold" && ((c.url && r.priceUrl === c.url) || normName(r.name) === normName(c.name)) && normName(r.grade) === normName(c.grade));
   return have.length ? `<span class="chip warn" title="${esc(have.map((r) => `${r.sku} ${r.location ? "· " + r.location : ""}`).join("\n"))}">have ${have.reduce((n, r) => n + r.qty, 0)}</span>` : "";
@@ -1528,6 +1549,9 @@ function scanRowHtml(c) {
     <td>${c.thumb ? `<button class="ghost bare" data-zoom title="Look at it big (front and back)"><img class="scan-thumb" src="${c.thumb}" alt="Card picture"></button>` : `<span class="muted small">slab</span>`}</td>
     <td><input data-name value="${esc(c.name)}" aria-label="Card name" class="scan-name">
       <div class="small">${(c.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ")}${c.backBox ? ` <span class="chip" title="The back was read too">+ back</span>` : ""}${c.problem ? ` <span class="chip warn" title="The picture of this card: ${esc(PROBLEM_LABEL[c.problem] || c.problem)} — a retake reads better">📷 ${esc(PROBLEM_LABEL[c.problem] || c.problem)}</span>` : ""}${c.lookedTwice ? ` <span class="chip${c.lookedTwice.sure ? " good" : ""}" title="${esc(c.lookedTwice.note || "")}">👀 looked twice${c.lookedTwice.changed ? " — changed" : ""}</span>` : ""}${c.certVerified ? ` <span class="chip good" title="${esc(c.certNote || "")}">✓ PSA</span>` : ""}${c.readBy ? ` <span class="chip warn" title="Read by ${esc(c.readBy)} while Google’s main reader was overloaded — backup readers get parallels wrong. Check the version (✎ fix → Save once it’s right), or scan it again later.">⚠ backup read</span>` : ""}${c.checklist && !c.checklist.note ? ` <span class="chip good" title="${esc(`#${c.checklist.number} in ${c.checklist.set}`)}">✓ checklist</span>` : ""} <button class="ghost small" data-fix title="Fix what was read, field by field (the reader learns from it)">✎ fix</button></div>
+      ${c.have?.cert ? `<div class="small bad">Already in inventory as ${esc(c.have.sku)} — the same PSA cert, so the same slab. Unticked; it won't be added again.</div>` : ""}
+      ${c.twin ? `<div class="small bad">The same slab (same PSA cert) as ${esc(c.twin)} — shot twice. Unticked.</div>` : ""}
+      ${c.backOnly ? `<div class="small warn">Only a card's back? Nothing on it says which card. Unticked — take the front (or tick it if it really is a card).</div>` : ""}
       ${c.checklist?.note ? `<div class="small warn">⚠ ${esc(c.checklist.note)}</div>` : ""}
       ${c.parallel_check ? `<div class="small warn">⚠ Check: ${esc(c.parallel_check)}</div>` : ""}
       ${c.certNote && !c.certVerified ? `<div class="small bad">${esc(c.certNote)}</div>` : c.certNote && /says/.test(c.certNote) ? `<div class="small warn">${esc(c.certNote)}</div>` : ""}
@@ -1591,7 +1615,8 @@ function wireScanReview() {
   box.onclick = async (e) => {
     const t = e.target;
     if (t.matches("[data-skiplow], [data-tickall]")) {
-      for (const c of scanCards()) if (t.matches("[data-tickall]") || needsCheck(c)) c.include = t.matches("[data-tickall]");
+      // Tick all never ticks a slab already in stock (or shot twice) or a picture of only a back
+      for (const c of scanCards()) if (t.matches("[data-tickall]") || needsCheck(c)) c.include = t.matches("[data-tickall]") && !(c.have?.cert || c.twin || c.backOnly);
       $$("tr[data-uid]", box).forEach((tr) => { const c = cardOf(tr); $("[data-inc]", tr).checked = c.include; tr.classList.toggle("sold", !c.include); });
       return scanSummary();
     }
@@ -1623,9 +1648,20 @@ async function addScanned(btn) {
   const f = Object.fromEntries(new FormData($("#scanReview [data-scanadd]")));
   store.set("scanSell", Boolean(f.sell));
   let held = 0;
-  const chosen = scanCards().filter((c) => c.include && c.name);
-  if (!chosen.length) return toast("Tick the cards to add.", { error: true });
   if (scan.running) return toast("Wait for the scan to finish (or pause it) first.", { error: true });
+  // A slab whose PSA cert is already in stock is that same slab: never a second row (and a second website listing),
+  // even when ticked by hand. Checked against inventory as it is now (the other computer may have added it).
+  const certs = new Map((await getJSON("/api/inventory").catch(() => scan.inv)).filter((r) => r.status !== "sold" && r.facts?.cert).map((r) => [r.facts.cert, r.sku]));
+  const skipped = [];
+  const chosen = scanCards().filter((c) => {
+    if (!c.include || !c.name) return false;
+    const cert = certOf(c);
+    if (cert && certs.has(cert)) return skipped.push(`${c.name} (${certs.get(cert)})`), false;
+    if (cert) certs.set(cert, "this list");
+    return true;
+  });
+  if (skipped.length) toast(`Not added again — already in inventory (same PSA cert): ${skipped.join(", ")}`, { ms: 8000 });
+  if (!chosen.length) return skipped.length ? null : toast("Tick the cards to add.", { error: true });
   const fixes = new Map(chosen.map((c) => [c, scanFixes(c)])); // also brings typed-over names into the card's fields
   const newIds = [];
   // copies of the same card → one row with a quantity (photos from the first copy)
@@ -1645,6 +1681,7 @@ async function addScanned(btn) {
   const prog = $("#scanReview [data-addprog]");
   let added = 0;
   const doneCards = new Set();
+  const skusOf = new Map(); // file key → the inventory numbers its cards got (the phone shows them)
   try {
     for (let i = 0; i < groups.length; i += 20) {
       const items = [];
@@ -1678,7 +1715,10 @@ async function addScanned(btn) {
       if (!r.ok) throw new Error(j.error || "Couldn't add them");
       added += j.added;
       newIds.push(...(j.rows || []).map((x) => x.id));
-      for (const g of groups.slice(i, i + 20)) g.forEach((c) => doneCards.add(c));
+      groups.slice(i, i + 20).forEach((g, k) => g.forEach((c) => {
+        doneCards.add(c);
+        if (j.rows?.[k]?.sku) skusOf.set(c.page.key, [...new Set([...(skusOf.get(c.page.key) || []), j.rows[k].sku])]);
+      }));
       // free memory for files whose cards are all done
       for (const [file] of imageCache) if (!groups.slice(i + 20).some((g) => g[0].page.file === file || g[0].page.back === file)) forgetPicture(file);
       if (prog) prog.textContent = `Added ${added} of ${groups.length} rows…`;
@@ -1689,7 +1729,7 @@ async function addScanned(btn) {
   // the added cards leave the list, and a file any of them came from is forgotten on the bot (re-reading
   // that folder later reads it again, and the "have 1" chip shows what's already in)
   const keys = scan.pages.filter((p) => p.cards.some((c) => doneCards.has(c))).map((p) => p.key);
-  if (keys.length) await fetch("/api/scan", json("DELETE", { keys })).catch(() => {});
+  if (keys.length) await fetch("/api/scan", json("DELETE", { keys, added: Object.fromEntries(skusOf) })).catch(() => {});
   for (const p of scan.pages) p.cards = p.cards.filter((c) => !doneCards.has(c));
   scan.pages = scan.pages.filter((p) => p.cards.length || p.status !== "done");
   delete btn.dataset.busy;

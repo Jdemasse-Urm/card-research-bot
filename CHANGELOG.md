@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.19.1 (not released yet)
+
+- **A new Google key on the free plan gets the right explanation for Google Search.** On 11/12, a freshly made key's
+  project was on Google's free plan. Search was refused on the main model, and the free plan's older search model
+  answered "no longer available to new users". The self test said "The model gemini-3.8-flash wasn't found for this
+  key", which named the wrong model and gave the wrong fix. Now it says the search needs billing on the key's project,
+  and how to switch it on. That closed model isn't tried again until a new key is saved. A "not found" message also
+  names the model Google named.
+
 ## 3.19.0 — one inventory for both computers
 
 Joseph's PC and his dad's Mac each had their own inventory; a card scanned on one never showed up on the other.

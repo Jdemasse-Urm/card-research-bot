@@ -122,6 +122,25 @@ test("Google Search refused on a free-tier key (the free-search model too): fail
   assert.equal((await run({ search: true })).out, "answer from main-model");
 });
 
+test("a new free-tier key whose free-search model Google closed (11/12): 'needs billing', never 'the main model wasn't found'", async () => {
+  fresh();
+  const CLOSED = { message: "This model models/free-model is no longer available to new users. Please update your code to use models/main-model for the latest features and improvements.", status: "NOT_FOUND" };
+  behave = (m, search) => (search ? (m === "free-model" ? [404, CLOSED] : [429, NO_SEARCH]) : [200]);
+  const r = await run({ search: true });
+  assert.equal(r.err?.message, ai.SEARCH_NEEDS_BILLING, r.err?.message);
+  assert.deepEqual(seen.map((x) => x.model), ["main-model", "free-model"]);
+  assert.equal((await run({})).out, "answer from main-model", "photo reading and everything without search still work");
+  // billing switched on a few minutes later: the next search goes to the main model, not the closed free one
+  behave = () => [200];
+  ai.resetClient();
+  seen.length = 0;
+  assert.equal((await run({ search: true })).out, "answer from main-model");
+  // and the words for a 404 name the model Google named
+  const { ApiError } = await import("@google/genai");
+  assert.match(ai.explainError(new ApiError({ message: CLOSED.message, status: 404 })), /no longer offers free-model to new accounts/);
+  assert.match(ai.explainError(new ApiError({ message: "models/other-model is not found for API version v1beta", status: 404 })), /"other-model" wasn't found/);
+});
+
 test("a real per-minute speed limit on a search still waits and retries (it's not mistaken for 'needs billing')", async () => {
   fresh();
   let n = 0;

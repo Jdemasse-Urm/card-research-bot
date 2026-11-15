@@ -548,7 +548,7 @@ function openDetail(p) {
     found: `${p.found} card${p.found === 1 ? "" : "s"} found — reading them up close…`,
     error: `Not read: ${p.error || "unknown problem"}`,
     added: `In inventory${p.skus?.length ? ` as ${p.skus.join(", ")}` : ""}.`,
-    read: p.backOf ? "Read together with its front." : "Read — it's in the computer's Bulk scan list until you add it there.",
+    read: p.backOf ? "Read together with its front." : "Read — add it with ＋ Add here, or from Bulk scan on the computer that read it.",
   }[p.stage] || "";
   $("#detailBody").innerHTML = `<img alt="" src="${p.thumb}" style="width:100%;max-height:40vh;object-fit:contain;border-radius:10px">
     ${p.warn ? `<p class="warnText">📷 ${esc(p.warn)}</p>` : ""}${stage ? `<p>${esc(stage)}</p>` : ""}

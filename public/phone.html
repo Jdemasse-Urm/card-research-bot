@@ -18,6 +18,7 @@
     :root { --bg: #141416; --panel: #1d1d21; --ink: #f2f2f4; --muted: #a0a0aa; --gold: #e2b33c; --good: #3fb37f; --bad: #e5484d; --warn: #e8a33c; }
     @media (prefers-color-scheme: light) { :root { --bg: #f6f6f7; --panel: #fff; --ink: #18181b; --muted: #61616b; --warn: #a35f00; } }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; } /* a hidden block stays hidden whatever its own display (the Home Screen tip is flex) */
     body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; padding-top: calc(16px + env(safe-area-inset-top)); padding-bottom: calc(16px + env(safe-area-inset-bottom)); max-width: 760px; margin-inline: auto; }
     .addBar { margin: .6rem 0; padding: .7rem; border-radius: 14px; background: var(--panel); }
     .addBar .shoot { margin: 0 0 .5rem; padding: 1rem; font-size: 1.1rem; background: var(--good); color: #fff; }

@@ -21,7 +21,12 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const ls = {
   get: (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: this session only */ } },
+  /** like set, but says whether it fit (the phone keeps about 5 MB for a page) */
+  fits: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
 };
+/** A picture whose thumbnail had to go to make room (see save) shows this plain tile instead */
+const NO_THUMB = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3 4"><rect width="3" height="4" fill="#2a2d36"/></svg>');
+const thumbOf = (p) => p.thumb || NO_THUMB;
 const PROBLEM = { glare: "glare", blurry: "blurry", cut_off: "cut off by the edge", too_small: "too small", covered: "covered" };
 
 const CLOUD = location.pathname.startsWith("/scan");
@@ -70,7 +75,22 @@ function newSession() {
   ls.set("phoneSession", s);
   return s;
 }
-const save = () => { ls.set("phonePics", pics.slice(-150).map(({ progress, ...p }) => p)); ls.set("phoneCard", card); ls.set("phoneWaitingBack", waitingBack); };
+// 3.21.1: the list is kept within the phone's ~5 MB for a page. A save that doesn't fit used to fail silently, and the
+// list could vanish on the next open. Now the oldest pictures give up their thumbnails first (their cards and status
+// stay), then the oldest pictures beyond the last 40.
+const save = () => {
+  const keep = pics.slice(-150).map(({ progress, ...p }) => p);
+  if (!ls.fits("phonePics", keep)) {
+    const lean = keep.map((p, i) => (i < keep.length - 40 ? { ...p, thumb: "" } : p));
+    if (!ls.fits("phonePics", lean)) ls.fits("phonePics", lean.slice(-40));
+  }
+  ls.set("phoneCard", card);
+  ls.set("phoneWaitingBack", waitingBack);
+};
+/** History within the same room: the oldest sessions go first if it doesn't fit */
+function saveHistory() {
+  while (!ls.fits("phoneHistory", history) && history.length > 1) history = history.slice(0, -1);
+}
 const sessionOf = (name) => String(name).match(/^phone-(\w+)-/)?.[1] || null;
 const byName = (n) => pics.find((p) => p.name === n);
 /** Not done yet: still to send (always kept: it's the only copy), or on the computer within the last day */
@@ -86,14 +106,14 @@ function summarize(id) {
     value: Math.round(rows.reduce((n, r) => n + (r.c.value || 0), 0) * 100) / 100,
     added: rows.filter((r) => cardStatus(r.p, r.c) === "added").length,
     usd: mine.reduce((n, p) => n + (p.usd || 0), 0),
-    cards: rows.slice(0, 400).map((r) => ({ n: r.c.name, g: r.c.grade || "", v: r.c.value ?? null, s: cardStatus(r.p, r.c), k: skuFor(r.p, r.c) })),
+    cards: rows.slice(0, 300).map((r) => ({ n: String(r.c.name || "").slice(0, 140), g: r.c.grade || "", v: r.c.value ?? null, s: cardStatus(r.p, r.c), k: skuFor(r.p, r.c) })),
   };
 }
 function closeSession(id) {
   const s = summarize(id);
   if (!s.pictures) return;
   history = [s, ...history.filter((h) => h.id !== id)].slice(0, 30);
-  ls.set("phoneHistory", history);
+  saveHistory();
 }
 
 /**
@@ -228,7 +248,7 @@ async function take(file) {
     return say("That picture couldn't be opened — try again.", "bad");
   }
   const warn = quickCheck(img);
-  const thumb = scaled(img, 300).toDataURL("image/jpeg", 0.72);
+  const thumb = scaled(img, 240).toDataURL("image/jpeg", 0.68); // ~15 KB: a list of 150 fits the phone's room for a page
   img.close?.();
   const name = `phone-${session}-${String(n).padStart(4, "0")}-${side}`;
   const pic = { name: name + ".jpg", n, side, thumb, stage: "queued", warn, at: Date.now() };
@@ -704,7 +724,7 @@ function drawScan(m) {
       if (key !== justKey && ["read", "added"].includes(p.stage)) { fresh = justKey !== null; justKey = key; }
     } else title = "Reading…";
     if (cls === "waiting") justKey ||= "";
-    html = `<button type="button" class="just ${cls}${fresh ? " fresh" : ""}" data-name="${esc(p.name)}"><img alt="" src="${p.thumb}"><span><span class="who">${esc(who)}</span><span class="nm">${esc(title)}</span><span class="line">${line}</span></span></button>`;
+    html = `<button type="button" class="just ${cls}${fresh ? " fresh" : ""}" data-name="${esc(p.name)}"><img alt="" src="${thumbOf(p)}"><span><span class="who">${esc(who)}</span><span class="nm">${esc(title)}</span><span class="line">${line}</span></span></button>`;
   }
   if (setHTML($("#just"), html) && fresh && value != null) countUp($("#just .val"), value);
   // the last dozen pictures at a glance (mid-binder: which are back, which need a retake), newest first
@@ -712,7 +732,7 @@ function drawScan(m) {
   setHTML($("#strip"), recent.length > 1 ? recent.map((x) => {
     const [text, kind] = caption(x);
     const s = x.replacedBy ? "" : ["queued", "sent", "reading", "found", "held"].includes(x.stage) && !(x.stage === "found" && x.found === 0) ? "busy" : kind;
-    return `<button type="button" data-name="${esc(x.name)}" aria-label="Picture ${x.n}: ${esc(text)}"${x.replacedBy ? ' class="replaced"' : ""}><img alt="" src="${x.thumb}"><span class="no">#${x.n}</span><span class="s ${s}"></span></button>`;
+    return `<button type="button" data-name="${esc(x.name)}" aria-label="Picture ${x.n}: ${esc(text)}"${x.replacedBy ? ' class="replaced"' : ""}><img alt="" src="${thumbOf(x)}"><span class="no">#${x.n}</span><span class="s ${s}"></span></button>`;
   }).join("") : "");
   for (const seg of [$("#modeSeg"), $("#modeSeg2")]) for (const b of $$("[data-mode]", seg)) b.setAttribute("aria-checked", String((b.dataset.mode === "both") === prefs.both));
   $("#modeHint").textContent = retakeOf ? `Retake: the next picture replaces #${byName(retakeOf)?.n ?? ""}.` : prefs.both ? (waitingBack != null ? `Now flip #${waitingBack} over and take its back.` : "Take the front, then flip it and take the back.") : "One picture for each card or page.";
@@ -769,7 +789,7 @@ function drawCards(m) {
     rows.sort(prefs.sort === "value" ? (a, b) => (b.c.value || 0) - (a.c.value || 0) : (a, b) => b.p.at - a.p.at || a.i - b.i);
     const label = FILTERS.find(([f]) => f === prefs.filter)?.[1].toLowerCase();
     setHTML($("#cardList"), rows.length
-      ? rows.map((r) => `<button type="button" class="row" data-name="${esc(r.p.name)}"><img alt="" src="${r.p.thumb}" loading="lazy"><span><span class="nm">${esc(r.c.name)}</span><span class="meta">${gradeChip(r.c.grade)}<span class="st ${r.st}">${STATUS_LABEL[r.st]}</span><span>#${r.p.n}${skuFor(r.p, r.c) ? ` · ${esc(skuFor(r.p, r.c))}` : ""}</span></span></span><span class="val">${usd(r.c.value)}</span></button>`).join("")
+      ? rows.map((r) => `<button type="button" class="row" data-name="${esc(r.p.name)}"><img alt="" src="${thumbOf(r.p)}" loading="lazy"><span><span class="nm">${esc(r.c.name)}</span><span class="meta">${gradeChip(r.c.grade)}<span class="st ${r.st}">${STATUS_LABEL[r.st]}</span><span>#${r.p.n}${skuFor(r.p, r.c) ? ` · ${esc(skuFor(r.p, r.c))}` : ""}</span></span></span><span class="val">${usd(r.c.value)}</span></button>`).join("")
       : !m.rows.length
         ? `<div class="empty"><b>No cards yet</b>Take a picture on the Scan tab. Each card shows up here with its value.</div>`
         : `<div class="empty"><b>Nothing here</b>${q ? `No card matches “${esc(q)}”.` : `No cards ${label} right now.`}</div>`);
@@ -800,7 +820,7 @@ function caption(p) {
 }
 function tileHTML(p) {
   const [text, kind] = caption(p);
-  return `<button type="button" class="tile${p.replacedBy ? " replaced" : ""}" data-name="${esc(p.name)}" aria-label="Picture ${p.n}${p.side === "a" ? " front" : p.side === "b" ? " back" : ""}: ${esc(text)}"><img alt="" src="${p.thumb}" loading="lazy"><span class="no">#${p.n}${p.side === "a" ? " front" : p.side === "b" ? " back" : ""}</span>${text ? `<span class="tag ${kind}">${esc(text)}</span>` : ""}${p.stage === "queued" ? `<span class="bar" style="--p:${(p.progress || 0).toFixed(3)}"></span>` : ""}</button>`;
+  return `<button type="button" class="tile${p.replacedBy ? " replaced" : ""}" data-name="${esc(p.name)}" aria-label="Picture ${p.n}${p.side === "a" ? " front" : p.side === "b" ? " back" : ""}: ${esc(text)}"><img alt="" src="${thumbOf(p)}" loading="lazy"><span class="no">#${p.n}${p.side === "a" ? " front" : p.side === "b" ? " back" : ""}</span>${text ? `<span class="tag ${kind}">${esc(text)}</span>` : ""}${p.stage === "queued" ? `<span class="bar" style="--p:${(p.progress || 0).toFixed(3)}"></span>` : ""}</button>`;
 }
 function showDock(on, m) {
   const dock = $("#addBar");
@@ -876,7 +896,7 @@ function forgetPast() {
   if (!history.length) return say("No past sessions on this phone.");
   twoTaps("forget", `Tap again to forget ${plural(history.length, "past session")} (this phone's History only).`, () => {
     history = [];
-    ls.set("phoneHistory", history);
+    saveHistory();
     draw();
     say("Past sessions forgotten.", "good");
   });
@@ -934,7 +954,7 @@ function openDetail(p) {
     lastUndoable() === p ? `<button type="button" class="btn danger" data-act="undo">Take it back</button>` : "",
     `<button type="button" class="btn" data-act="close">Close</button>`,
   ].join("");
-  setHTML($("#detailBody"), `<img class="pic" alt="" src="${p.thumb}">
+  setHTML($("#detailBody"), `<img class="pic" alt="" src="${thumbOf(p)}">
     <p class="muted" style="margin:10px 0 2px">${esc(when(p.at))}${p.retakeOf ? `, retake of #${p.retakeOf}` : ""}${p.replacedBy ? `, replaced by #${p.replacedBy}` : ""}</p>
     ${stage ? `<p style="margin:4px 0 8px">${esc(stage)}</p>` : ""}${p.warn ? `<p class="why" style="color:var(--amber-text)">📷 ${esc(p.warn)}</p>` : ""}
     ${retakes.length ? `<p style="margin:8px 0 2px;color:var(--amber-text)">Retake it:</p><ul style="margin:0 0 8px">${retakes.join("")}</ul>` : ""}

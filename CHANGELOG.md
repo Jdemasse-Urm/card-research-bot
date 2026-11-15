@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.21.1 — the phone list never outgrows the phone; a security update
+
+From an audit of speed, data growth and security (11/15):
+- **The phone scanner's list always fits the phone.** An iPhone gives a web page about 5 MB. 3.21's bigger thumbnails
+  meant a list near 150 pictures could fill it, and the save then failed silently, so the list could vanish on the
+  next open. Now:
+  - Thumbnails are smaller (about 15 KB).
+  - If a save doesn't fit, the oldest pictures give up their thumbnails first, keeping their cards and status, and
+    show a plain tile. Then the oldest pictures beyond the last 40 go.
+  - History drops its oldest sessions first.
+  - Checked by imitating the iPhone's limit: all 150 pictures were kept, and the newest 40 kept their thumbnails.
+- **Security update:** body-parser 1.20.9 (via Express 4.22.3). It fixes a high-severity denial of service: a crafted
+  compressed request could tie up the bot's server. `npm audit` now finds 0 issues in the bot, the store and the site.
+
 ## 3.21.0 — the Card Scanner, 20-20: an app with tabs
 
 Joseph, 11/15: "a more advanced nicer smoother UI and UX … some tabs, some different page options". The phone page

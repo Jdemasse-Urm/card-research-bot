@@ -132,7 +132,7 @@ const phoneKeys = new Map(); // key -> expiry (ms)
 const SCAN_COOKIE = "cardbot_scan";
 const scannerToken = () => crypto.createHash("sha256").update("cardbot-scanner:" + (process.env.ACCESS_PIN || "")).digest("hex").slice(0, 32);
 const isScanner = (req) => SHARE && (req.headers.cookie || "").split(/;\s*/).includes(`${SCAN_COOKIE}=${scannerToken()}`);
-const SCANNER_ONLY = [/^GET \/phone\.(html|js)$/, /^GET \/api\/scan\/phone-status$/, /^POST \/api\/scan\/inbox$/, /^POST \/api\/scan\/inbox\/[^/]+\/single$/, /^DELETE \/api\/scan\/inbox\/[^/]+$/];
+const SCANNER_ONLY = [/^GET \/phone\.(html|js)$/, /^GET \/api\/scan\/phone-status$/, /^POST \/api\/scan\/inbox$/, /^POST \/api\/scan\/phone-add$/,/^POST \/api\/scan\/inbox\/[^/]+\/single$/, /^DELETE \/api\/scan\/inbox\/[^/]+$/];
 const PHONE_GONE = "<!doctype html><meta name=viewport content='width=device-width'><p style='font:18px system-ui;padding:24px'>This link no longer works: the code expired, or the PIN was changed. On the computer, open Inventory → Bulk scan → 📱 Phone and scan the new code (then add it to your Home Screen again).</p>";
 app.get("/phone", (req, res) => {
   for (const [key, t] of phoneKeys) if (t < Date.now()) phoneKeys.delete(key);
@@ -591,6 +591,8 @@ try {
 // bot doesn't blank the phone's view.
 const PHONE_FILE = path.join(INBOX, "phone-status.json");
 const phoneStatus = new Map();
+// the phone scanner through the MJC store (see relayTick): its key, the page put there, statuses to publish, adds asked
+const relay = { key: null, activeAt: 0, pageSent: null, busy: false, error: null, dirty: new Set(), pubTimer: null, adds: new Map() };
 try {
   for (const [n, v] of Object.entries(JSON.parse(fs.readFileSync(PHONE_FILE, "utf8")))) if (Date.now() - v.at < 7 * 86400000) phoneStatus.set(n, v);
 } catch {
@@ -603,6 +605,7 @@ function setPhone(key, patch) {
   if (!n) return;
   phoneStatus.set(n, { ...(phoneStatus.get(n) || {}), ...patch, at: Date.now() });
   if (phoneStatus.size > 3000) for (const k of [...phoneStatus.keys()].slice(0, 1000)) phoneStatus.delete(k);
+  publishSoon(n); // a phone sending through the MJC store sees it there
   phoneSaveTimer ||= setTimeout(() => {
     phoneSaveTimer = null;
     try {
@@ -643,13 +646,166 @@ app.get("/api/scan/phone-status", (req, res) => {
   res.json({ pictures: out, computer: inboxSeenAt ? Math.round((Date.now() - inboxSeenAt) / 1000) : null });
 });
 let inboxSeenAt = 0; // when the computer's Bulk scan last looked for phone pictures (the phone says if nobody is)
-app.get("/api/scan/phone-link", async (req, res) => {
-  if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
-  if (!SHARE) return res.json({ share: false });
+const qr = (url) => QRCode.toString(url, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
+/** The phone's link: through the MJC store when it's connected (works anywhere), else this computer on the home Wi-Fi. */
+async function phoneLink() {
+  if (mjc.configured()) {
+    try {
+      if (!relay.key) relay.key = (await mjc.call("GET", "/admin/scan")).key;
+      const url = `${mjc.apiUrl()}/scan/?s=${relay.key}`;
+      return { share: true, cloud: true, url, svg: await qr(url), pageReady: relay.pageSent === VERSION };
+    } catch (err) {
+      // a store from before 3.20 has no scanner yet: the home-Wi-Fi link, if this computer shares on the network
+      if (!SHARE) return { share: false, error: `The MJC store's phone scanner didn't answer (${err.message}).` };
+    }
+  }
+  if (!SHARE) return { share: false };
   const k = crypto.randomBytes(16).toString("hex");
   phoneKeys.set(k, Date.now() + 15 * 60000);
   const url = `${lanUrls()[0]}/phone?k=${k}`;
-  res.json({ share: true, url, svg: await QRCode.toString(url, { type: "svg", margin: 1, errorCorrectionLevel: "M" }), expires: Date.now() + 15 * 60000 });
+  return { share: true, url, svg: await qr(url), expires: Date.now() + 15 * 60000 };
+}
+app.get("/api/scan/phone-link", async (req, res) => {
+  if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
+  res.json(await phoneLink());
+});
+// A lost phone: a new link. Every saved Home Screen icon (on any phone) stops working; scan the new code.
+app.post("/api/scan/phone-link/new", async (req, res) => {
+  if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
+  try {
+    relay.key = (await mjc.call("POST", "/admin/scan/key")).key;
+    log(req, "made a new phone scanner link — the old Home Screen icons stopped working");
+    res.json(await phoneLink());
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// ---- the phone scanner from anywhere (3.20). With the MJC store connected, the phone sends its pictures to the store
+// (any Wi-Fi or cell signal) instead of straight to this computer over the home Wi-Fi. This carries them on: waiting
+// pictures come into the same scan inbox the home-Wi-Fi phone uses (so they're read exactly the same way), what was read
+// goes back to the store for the phone, and the phone's "＋ Add" requests go to Bulk scan, which adds them.
+// The golden rule's questions: (1) the inbox, its claim/read/status and Bulk scan's Add already do the work: they're
+// reused as they are; (2) this is a carrier, not a second inbox: a picture is the store's until one computer claims it
+// (the store's conditional write), then this inbox's alone (the store copy is deleted); the store's status copy is only
+// ever published FROM phoneStatus; (3) built because the phone couldn't reach this computer off the home Wi-Fi at all.
+// Which computer reads: the one running the daily jobs takes pictures at once; another open one steps in after a minute.
+const newerThan = (a, b) => {
+  const x = String(a || "0").split(".").map(Number), y = String(b || "0").split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+};
+async function relayTick() {
+  if (relay.busy || !mjc.configured()) return;
+  relay.busy = true;
+  try {
+    const reading = Date.now() - inboxSeenAt < 15000; // this computer's window is open: it can read what it takes
+    const s = await mjc.call("GET", `/admin/scan?reading=${reading ? 1 : 0}&device=${encodeURIComponent(team.deviceName())}`);
+    relay.key = s.key || relay.key;
+    relay.activeAt = Date.parse(s.activeAt || 0) || 0;
+    // the store serves this bot's own phone page: the newest bot's (an older one on the other computer leaves it be)
+    if (relay.pageSent !== VERSION) {
+      if (!s.pageVersion || newerThan(VERSION, s.pageVersion)) {
+        const pub = path.join(here, "public");
+        const files = Object.fromEntries(["phone.html", "phone.js", "phone-sw.js", "apple-touch-icon.png", "icon.svg"].map((f) => [f, fs.readFileSync(path.join(pub, f)).toString("base64")]));
+        await mjc.call("PUT", "/admin/scan/page", { version: VERSION, files });
+      }
+      relay.pageSent = VERSION;
+    }
+    // the phone's adds: the store's list is the list (an add another computer finished drops off here too)
+    const live = new Set((s.adds || []).map((a) => a.id));
+    for (const [id, a] of relay.adds) if (a.cloud && !live.has(id)) relay.adds.delete(id);
+    for (const a of s.adds || []) if (!relay.adds.has(a.id)) relay.adds.set(a.id, { id: a.id, names: a.names || [], paid: a.paid || 0, at: Date.parse(a.at) || Date.now(), cloud: true });
+    if (reading) {
+      const first = team.runsJobs();
+      for (const w of (s.waiting || []).slice(0, 12)) if (first || Date.now() - Date.parse(w.at) > 60000) await takeFromStore(w.name);
+    }
+    relay.error = null;
+  } catch (err) {
+    relay.error = err.status === 404 ? "The MJC store needs updating for the phone scanner (node api/deploy.mjs)." : err.message;
+  } finally {
+    relay.busy = false;
+  }
+}
+/** One waiting picture: claimed (or another computer has it), downloaded into the inbox, then off the store. */
+async function takeFromStore(given) {
+  const name = inboxName(given);
+  if (!/^phone-\w+-\d+-[asb]\.jpg$/.test(name)) return;
+  let url;
+  try {
+    ({ url } = await mjc.call("POST", `/admin/scan/claim/${encodeURIComponent(name)}`, { device: team.deviceName() }));
+  } catch (err) {
+    if (err.status === 409) return; // another computer took it
+    throw err;
+  }
+  // already here (the phone re-sent it after a dropped answer): never a second copy
+  if (![INBOX, TAKEN, FINISHED].some((d) => fs.existsSync(path.join(d, name)))) {
+    const r = await fetch(url, { signal: AbortSignal.timeout(90000) });
+    if (!r.ok) throw new Error(`The picture didn't download (${r.status}).`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length >= 1000 && buf[0] === 0xff && buf[1] === 0xd8) {
+      fs.mkdirSync(INBOX, { recursive: true });
+      fs.writeFileSync(path.join(INBOX, name), buf);
+      setPhone(name, { stage: "sent", error: null });
+    } else setPhone(name, { stage: "error", error: "That wasn't a photo." });
+  }
+  await mjc.call("DELETE", `/admin/scan/pic/${encodeURIComponent(name)}`);
+}
+/** What was read goes to the store for the phone (a session at a time, a moment after the last change). */
+function publishSoon(name) {
+  const s = String(name).match(/^phone-(\w+)-/)?.[1];
+  if (!s || !mjc.configured()) return;
+  relay.dirty.add(s);
+  relay.pubTimer ||= setTimeout(publishStatus, 1200);
+}
+async function publishStatus() {
+  relay.pubTimer = null;
+  const sessions = {};
+  for (const s of [...relay.dirty].slice(0, 20)) {
+    relay.dirty.delete(s);
+    sessions[s] = Object.fromEntries([...phoneStatus].filter(([n]) => n.startsWith(`phone-${s}-`)));
+  }
+  if (!Object.keys(sessions).length) return;
+  try {
+    await mjc.call("PUT", "/admin/scan/status", { sessions });
+  } catch {
+    for (const s of Object.keys(sessions)) relay.dirty.add(s); // tried again in a few seconds
+    relay.pubTimer ||= setTimeout(publishStatus, 8000);
+    return;
+  }
+  if (relay.dirty.size) relay.pubTimer ||= setTimeout(publishStatus, 1200);
+}
+// every 3 s while a phone has sent a picture in the last 10 minutes, else every 10 s (30 s with no store); first at 3 s
+(function relayLoop(wait) {
+  setTimeout(() => relayTick().finally(() => relayLoop(!mjc.configured() ? 30000 : Date.now() - relay.activeAt < 10 * 60000 ? 3000 : 10000)), wait).unref?.();
+})(3000);
+
+// ＋ Add from the phone: the phone (through the store, or on the home Wi-Fi) asks; Bulk scan on the computer that read
+// those pictures adds the cards it trusts (the same Add as its button) and says which it left for a check.
+app.post("/api/scan/phone-add", (req, res) => {
+  const names = (Array.isArray(req.body?.names) ? req.body.names : []).map(inboxName).filter((n) => /^phone-\w+-\d+-[asb]\.jpg$/.test(n)).slice(0, 200);
+  if (!names.length) return res.status(400).json({ error: "Which pictures?" });
+  const paid = Number.isFinite(+req.body?.paid) && +req.body.paid > 0 ? Math.round(+req.body.paid * 100) / 100 : 0;
+  const id = "L" + crypto.randomBytes(5).toString("hex");
+  relay.adds.set(id, { id, names, paid, at: Date.now(), cloud: false });
+  res.json({ ok: true, id });
+});
+app.get("/api/scan/phone-adds", (req, res) => {
+  if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
+  res.json([...relay.adds.values()]);
+});
+app.post("/api/scan/phone-adds/:id/done", async (req, res) => {
+  if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
+  const a = relay.adds.get(String(req.params.id));
+  if (!a) return res.json({ ok: true });
+  // each picture: how many of its cards were left for a check on the computer (⚠, already in stock, a back) — the
+  // phone says so on it. A picture this computer doesn't have (the other computer read it) is left alone.
+  const left = req.body?.left || {}, missing = new Set(Array.isArray(req.body?.missing) ? req.body.missing : []);
+  for (const name of a.names) if (!missing.has(name)) setPhone(name, { addLeft: Math.max(0, Math.min(50, parseInt(left[name], 10) || 0)), addDoneAt: Date.now() });
+  relay.adds.delete(a.id);
+  if (a.cloud) await mjc.call("DELETE", `/admin/scan/add/${encodeURIComponent(a.id)}`).catch(() => {});
+  log(req, `added ${req.body?.added || 0} cards from the phone`);
+  res.json({ ok: true });
 });
 // The phone sends the camera's own JPEG as it is (Content-Type image/jpeg, ?name=) — no re-encoding on the phone and
 // a quarter less to send than base64. A page from before 3.19 still sends JSON { name, image: data URL }.

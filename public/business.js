@@ -1131,8 +1131,37 @@ async function openPhoneLink() {
   } catch (err) {
     return toast(err.message, { error: true });
   }
+  if (j.cloud) {
+    // 3.20: through the MJC store — any Wi-Fi or cell signal, and any of your computers that's open reads the pictures
+    const body = openModal("📱 Scan with your phone — anywhere", `
+      <div class="row" style="align-items:flex-start;flex-wrap:wrap">
+        <div class="qr">${j.svg}</div>
+        <ol class="small" style="flex:1 1 240px;margin-top:0">
+          <li>Point the phone's camera at the code and open the link.</li>
+          <li>On the phone, tap <b>Share</b> (on newer iPhones it's under <b>⋯</b>) → <b>Add to Home Screen</b> → <b>Add</b>. From then on the <b>Card Scanner</b> icon opens the camera — no code.</li>
+          <li>Take a picture of each card (or a binder page). It works on <b>any Wi-Fi or cell signal</b>; with none, the pictures wait on the phone and go when the signal's back.</li>
+          <li>Whichever of your computers has Card Research Bot open reads them (the one running the daily jobs first). The phone shows what each card is and what it's worth.</li>
+          <li>On the phone, <b>＋ Add</b> puts the cards that read cleanly into the shared inventory; ⚠ ones wait for a check in Bulk scan on a computer.</li>
+        </ol></div>
+      ${j.pageReady ? "" : `<p class="small warnText">The scanner is being put on your store — give it a minute before opening the link.</p>`}
+      <p class="small muted">The code and the icon only send pictures, show what was read and add cards — they can't open costs, customers, settings or the website. Lost a phone? <button class="small" data-newlink>New link</button> stops every saved icon; scan the new code on your phones.</p>`);
+    $("[data-newlink]", body).onclick = async () => {
+      if (!confirm("Make a new phone link? Every phone's Card Scanner icon stops working until it scans the new code.")) return;
+      try {
+        const r = await fetch("/api/scan/phone-link/new", { method: "POST" });
+        const k = await r.json();
+        if (!r.ok) throw new Error(k.error || "The store didn't answer.");
+        modal.close();
+        toast("New phone link made — scan the code on your phones.");
+        openPhoneLink();
+      } catch (err) {
+        toast(err.message, { error: true });
+      }
+    };
+    return;
+  }
   if (!j.share) {
-    const body = openModal("📱 Scan with your phone", `<p>The phone sends its pictures to this computer over your home Wi-Fi. Switch that on once:</p>
+    const body = openModal("📱 Scan with your phone", `${j.error ? `<p class="warnText small">${esc(j.error)}</p>` : ""}<p>The phone sends its pictures to this computer over your home Wi-Fi. Switch that on once:</p>
       <ol class="small"><li><b>⚙ Settings → Share on home network</b>: tick <b>Share</b>, pick a PIN, <b>Save</b>.</li><li>Close the app and open it again.</li><li>Come back here and press <b>📱 Phone</b>.</li></ol>
       <div class="row"><button class="primary" data-set>Open Settings</button></div>`);
     $("[data-set]", body).onclick = () => { modal.close(); openSettings(); };
@@ -1164,6 +1193,7 @@ function pollInbox() {
     inboxBusy = true;
     try {
       const list = await getJSON("/api/scan/inbox");
+      await phoneAdds();
       if (!list.length) return;
       const byCard = new Map();
       for (const x of list) {
@@ -1200,6 +1230,27 @@ function pollInbox() {
 }
 
 pollInbox();
+
+/**
+ * ＋ Add from the phone (3.20). For each picture the phone names that this computer read: its cards Add would take
+ * without a check (ticked, no ⚠) go in through the same Add as the button; the rest wait here for a check, and the
+ * phone shows how many. Pictures still being read wait; ones the other computer read are left to it (after 15 minutes
+ * the ones here go in on their own).
+ */
+async function phoneAdds() {
+  if (scan.running) return;
+  const asks = await getJSON("/api/scan/phone-adds").catch(() => []);
+  for (const a of asks) {
+    const pages = a.names.map((n) => scan.pages.find((p) => p.file?.name === n && p.status === "done") || null);
+    const mine = pages.filter(Boolean), missing = a.names.filter((_n, i) => !pages[i]);
+    if (!mine.length || (missing.length && Date.now() - a.at < 15 * 60000)) continue;
+    const ok = mine.flatMap((p) => p.cards).filter((c) => c.include && c.name && !needsCheck(c));
+    const r = ok.length ? await addScanned(null, { cards: ok, paid: a.paid }) : { added: 0, doneCards: new Set() };
+    if (!r) return; // a scan started meanwhile: the next tick
+    const left = Object.fromEntries(mine.map((p) => [p.file.name, p.cards.filter((c) => !r.doneCards.has(c)).length]));
+    await fetch(`/api/scan/phone-adds/${encodeURIComponent(a.id)}/done`, json("POST", { left, missing, added: r.doneCards.size })).catch(() => {});
+  }
+}
 
 /** Cards read while Bulk scan wasn't open: a count on its button until it's opened. */
 function scanBadge() {
@@ -1645,16 +1696,20 @@ function wireScanReview() {
   scanSummary();
 }
 
-async function addScanned(btn) {
-  const f = Object.fromEntries(new FormData($("#scanReview [data-scanadd]")));
-  store.set("scanSell", Boolean(f.sell));
+/**
+ * ＋ Add to inventory: the ticked cards (the button), or — `phone` = { cards, paid } — the cards a phone asked for (3.20:
+ * ＋ Add on the phone; the same Add, with the plain choices: in stock, no location, copies on one row, not on the website).
+ */
+async function addScanned(btn, phone = null) {
+  const f = phone ? { location: "", total: String(phone.paid || ""), status: "in_stock", combine: "on" } : Object.fromEntries(new FormData($("#scanReview [data-scanadd]")));
+  if (!phone) store.set("scanSell", Boolean(f.sell));
   let held = 0;
-  if (scan.running) return toast("Wait for the scan to finish (or pause it) first.", { error: true });
+  if (scan.running) return phone ? null : toast("Wait for the scan to finish (or pause it) first.", { error: true });
   // A slab whose PSA cert is already in stock is that same slab: never a second row (and a second website listing),
   // even when ticked by hand. Checked against inventory as it is now (the other computer may have added it).
   const certs = new Map((await getJSON("/api/inventory").catch(() => scan.inv)).filter((r) => r.status !== "sold" && r.facts?.cert).map((r) => [r.facts.cert, r.sku]));
   const skipped = [];
-  const chosen = scanCards().filter((c) => {
+  const chosen = (phone ? phone.cards : scanCards()).filter((c) => {
     if (!c.include || !c.name) return false;
     const cert = certOf(c);
     if (cert && certs.has(cert)) return skipped.push(`${c.name} (${certs.get(cert)})`), false;
@@ -1662,7 +1717,7 @@ async function addScanned(btn) {
     return true;
   });
   if (skipped.length) toast(`Not added again — already in inventory (same PSA cert): ${skipped.join(", ")}`, { ms: 8000 });
-  if (!chosen.length) return skipped.length ? null : toast("Tick the cards to add.", { error: true });
+  if (!chosen.length) return phone ? { added: 0, doneCards: new Set() } : skipped.length ? null : toast("Tick the cards to add.", { error: true });
   const fixes = new Map(chosen.map((c) => [c, scanFixes(c)])); // also brings typed-over names into the card's fields
   const newIds = [];
   // copies of the same card → one row with a quantity (photos from the first copy)
@@ -1677,9 +1732,11 @@ async function addScanned(btn) {
   const total = parseFloat(f.total) || 0;
   const worth = chosen.reduce((n, c) => n + (c.value || 0), 0);
   const costEach = (c) => (!total ? 0 : Math.round((worth > 0 ? (total * (c.value || 0)) / worth : total / chosen.length) * 100) / 100);
-  btn.disabled = true;
-  btn.dataset.busy = "1";
-  const prog = $("#scanReview [data-addprog]");
+  if (btn) {
+    btn.disabled = true;
+    btn.dataset.busy = "1";
+  }
+  const prog = phone ? null : $("#scanReview [data-addprog]");
   let added = 0;
   const doneCards = new Set();
   const skusOf = new Map(); // file key → the inventory numbers its cards got (the phone shows them)
@@ -1707,7 +1764,7 @@ async function addScanned(btn) {
           facts: factsOf(c),
           // the reader's condition estimate (scale, corners, edges, surface, centering) — raw cards only
           ...(c.condition && /^raw$/i.test(c.grade || "Raw") ? { condition: c.condition } : {}),
-          notes: [`Scanned ${today()}`, c.condition_note, c.cert ? `cert ${c.cert}${c.certVerified ? " (matches PSA)" : ""}` : "", c.parallel_check ? `check: ${c.parallel_check}` : ""].filter(Boolean).join(" · "),
+          notes: [`Scanned ${today()}${phone ? " · added from the phone" : ""}`, c.condition_note, c.cert ? `cert ${c.cert}${c.certVerified ? " (matches PSA)" : ""}` : "", c.parallel_check ? `check: ${c.parallel_check}` : ""].filter(Boolean).join(" · "),
           photos,
         });
       }
@@ -1733,7 +1790,7 @@ async function addScanned(btn) {
   if (keys.length) await fetch("/api/scan", json("DELETE", { keys, added: Object.fromEntries(skusOf) })).catch(() => {});
   for (const p of scan.pages) p.cards = p.cards.filter((c) => !doneCards.has(c));
   scan.pages = scan.pages.filter((p) => p.cards.length || p.status !== "done");
-  delete btn.dataset.busy;
+  if (btn) delete btn.dataset.busy;
   const fb = [...doneCards].map((c) => fixes.get(c)).filter(Boolean);
   if (fb.length) fetch("/api/scan/feedback", json("POST", { cards: fb })).then(loadScanAccuracy).catch(() => {});
   if (f.box && newIds.length) {
@@ -1743,10 +1800,12 @@ async function addScanned(btn) {
     else toast(j.error || "Couldn't record the box opening", { error: true });
     scan.box = null;
   }
-  if (added) toast(`Added ${plural(added, "row")} (${plural(doneCards.size, "card")}) to inventory${f.location ? " in " + f.location : ""} ✓${f.sell ? ` · 🌐 going on the website${held ? ` — ${plural(held, "row")} marked ⚠ kept off until checked` : ""}` : ""}`, { ms: 8000 });
+  if (added && phone) toast(`📱 Added ${plural(doneCards.size, "card")} from the phone to inventory ✓`, { ms: 6000 });
+  else if (added) toast(`Added ${plural(added, "row")} (${plural(doneCards.size, "card")}) to inventory${f.location ? " in " + f.location : ""} ✓${f.sell ? ` · 🌐 going on the website${held ? ` — ${plural(held, "row")} marked ⚠ kept off until checked` : ""}` : ""}`, { ms: 8000 });
   if (added && f.sell && newIds.length) webReport(newIds);
   scan.inv = await getJSON("/api/inventory").catch(() => scan.inv);
   drawScan();
+  return { added, doneCards };
 }
 
 // ------------------------------------------------------------------ GRADING

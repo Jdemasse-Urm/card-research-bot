@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.20.0 — scan from anywhere, add from the phone
+
+Joseph, 11/15: "I should be able to scan in from any WiFi or even on the road with no WiFi", and his dad should see what
+he scans. The shared inventory already reached every computer at any location. What didn't was the phone: it sent its
+pictures straight to one computer, so it only worked on the same Wi-Fi as that computer.
+
+- **The phone sends its pictures through your MJC store** (it needs store 1.3.0: `node api/deploy.mjs --profile mjc`).
+  That works on any Wi-Fi or cell signal. With no signal at all, the page still opens from the phone, the pictures wait
+  there, and they go up by themselves once there's a signal.
+  - **Which computer reads them:** whichever of your computers has Card Research Bot open. The one running the daily
+    jobs takes each picture first; another open one steps in after a minute. A picture is read once (the store
+    hands it to one computer only), then deleted from the store. It's read exactly like a home-Wi-Fi picture.
+  - **The phone shows** what each card is, what it's worth, and which computer is reading.
+  - **No computer on:** the phone says so. The pictures wait safely in the store (up to a week) until a computer is
+    open.
+- **＋ Add on the phone.** Cards that read cleanly go into the shared inventory from the phone, so every computer sees
+  them within seconds. There's an optional "Paid for these $" box, split by value.
+  - **What stays for a computer:** ⚠ cards (an unsure read, a checklist doubt), a slab already in stock and the back of
+    a card all wait for a check in Bulk scan. The phone shows how many.
+  - **How it adds:** the computer that read the pictures adds them through the same Add as its button (in stock, no
+    location, copies on one row). The website still changes only from a computer.
+  - Phones on the home Wi-Fi (no store) can use ＋ Add too.
+- **The 📱 Phone window** shows the store's link when the store is connected. Add it to the Home Screen once and it works
+  everywhere.
+  - **New link** is for a lost phone: every saved icon stops working.
+  - The link only sends pictures, shows what was read and adds cards. It can't open costs, customers, settings or the
+    website.
+- The bot puts its own phone page on the store (the newest bot's version), so there's never a second copy to keep up.
+
 ## 3.19.1 — the phone scanner on your Home Screen
 
 - **The phone scanner can go on the iPhone's Home Screen, so it opens without a QR code.** Scan the code once, then

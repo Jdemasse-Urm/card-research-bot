@@ -3,8 +3,10 @@
 // retake (glare, blur, cut off), each card's name and value, whether it's already in stock, and its inventory number
 // once it's added — while the cards are still on the table.
 // Names tell the computer how pictures go together: phone-<session>-<n>-a (front), -b (back), -s (one picture).
-// This page only ever adds pictures to the computer's scan. It never adds, changes or removes inventory: that is
-// "＋ Add to inventory" on the computer.
+// Two ways to the computer (3.20): through the MJC store — this page at /scan/ on the store's address, from any Wi-Fi or
+// cell signal (no signal: pictures wait here and go when it's back) — or straight to it on the home Wi-Fi (/phone).
+// Inventory changes only by "＋ Add": here (the computer that read the pictures adds the cards it trusts; ⚠ ones wait
+// for a check on a computer) or on the computer. The website changes only from the computer.
 // A phone still on the old address (/phone.html, before 3.19.1) moves to /phone?s=…, the one that can go on the Home
 // Screen (the computer itself, testing on localhost, stays put).
 if (location.pathname === "/phone.html" && !/^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/.test(location.hostname)) location.replace("/phone");
@@ -16,6 +18,19 @@ const ls = {
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode: this session only */ } },
 };
 const PROBLEM = { glare: "glare", blurry: "blurry", cut_off: "cut off by the edge", too_small: "too small", covered: "covered" };
+
+const CLOUD = location.pathname.startsWith("/scan");
+// the scanner key is in the address the QR code or Home Screen icon opened (kept, should the page open without it)
+const KEY = CLOUD ? (() => { const k = new URLSearchParams(location.search).get("s"); if (k) ls.set("scanKey", k); return k || ls.get("scanKey", ""); })() : "";
+const json = (body) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+/** A call to the computer: through the store (with the scanner key) or straight to it */
+const api = (url, opts = {}) => fetch(url, CLOUD ? { ...opts, headers: { ...(opts.headers || {}), "x-scan-key": KEY } } : opts);
+const API = CLOUD
+  ? { status: (s) => `/scan/status?session=${encodeURIComponent(s)}`, single: (n) => `/scan/pic/${encodeURIComponent(n)}/single`, pic: (n) => `/scan/pic/${encodeURIComponent(n)}`, add: "/scan/add" }
+  : { status: (s) => `/api/scan/phone-status?session=${encodeURIComponent(s)}`, single: (n) => `/api/scan/inbox/${encodeURIComponent(n)}/single`, pic: (n) => `/api/scan/inbox/${encodeURIComponent(n)}`, add: "/api/scan/phone-add" };
+let linkGone = false; // the store said this link was replaced (a new one was made on the computer)
+// with no signal at all, the page still opens from the phone (the store's address is https, so it can keep a copy)
+if (CLOUD && "serviceWorker" in navigator) navigator.serviceWorker.register("phone-sw.js").catch(() => {});
 /** "2:45 PM" today, "Nov 5, 2:45 PM" before */
 const when = (t) => new Date(t).toLocaleString(undefined, new Date(t).toDateString() === new Date().toDateString() ? { hour: "numeric", minute: "2-digit" } : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
@@ -217,10 +232,22 @@ async function queued() {
 }
 const queueCount = () => pics.filter((p) => p.stage === "queued").length;
 
-/** One picture to the computer: the JPEG itself (3.19), or a picture queued by an older page (a data URL in JSON). */
-function upload(item, name) {
-  if (item.blob) return fetch("/api/scan/inbox?name=" + encodeURIComponent(name), { method: "POST", headers: { "content-type": "image/jpeg" }, body: item.blob });
-  return fetch("/api/scan/inbox", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name, image: item.image }) });
+/**
+ * One picture to the computer: the JPEG itself (3.19), or a picture queued by an older page (a data URL in JSON).
+ * Through the store: a signed link, the picture straight into the store's private folder, then "sent".
+ */
+async function upload(item, name) {
+  if (!CLOUD) {
+    if (item.blob) return fetch("/api/scan/inbox?name=" + encodeURIComponent(name), { method: "POST", headers: { "content-type": "image/jpeg" }, body: item.blob });
+    return fetch("/api/scan/inbox", json({ name, image: item.image }));
+  }
+  if (!item.blob) return new Response(JSON.stringify({ error: "An old picture from before 3.20 — take it again." }), { status: 400 });
+  const up = await api("/scan/upload", json({ name: name + ".jpg", bytes: item.blob.size }));
+  if (!up.ok) return up;
+  const { url, headers } = await up.json();
+  const put = await fetch(url, { method: "PUT", headers, body: item.blob });
+  if (!put.ok) throw new Error(`the upload stopped (${put.status})`);
+  return api("/scan/sent", json({ name: name + ".jpg" }));
 }
 
 let pumping = false, backoff = 0, pumpTimer = null;
@@ -242,6 +269,11 @@ async function pump() {
           if (pic) Object.assign(pic, { stage: "error", error: j.error || "The computer refused this picture." });
           continue;
         }
+        if (r.status === 401) { // a new link was made on the computer: this one is retired (the pictures stay here)
+          linkGone = true;
+          say(j.error || "This scanner link no longer works — scan the new code on the computer (Inventory → Bulk scan → 📱 Phone).", "bad");
+          break;
+        }
         if (!r.ok) throw new Error(j.error || `The computer said ${r.status}`);
         await dequeue(next.name);
         if (pic?.single) Object.assign(pic, { name: sendName + ".jpg", side: "s", single: false });
@@ -250,7 +282,10 @@ async function pump() {
       } catch (err) {
         // the Wi-Fi dropped or the computer is busy: keep it, try again soon (and the moment the page is back in view)
         backoff = Math.min(document.hidden ? 30000 : 8000, backoff ? backoff * 2 : 2000);
-        say(`Not sent yet (${err.message === "Load failed" || err.message === "Failed to fetch" ? "can't reach the computer" : err.message}) — trying again in ${Math.round(backoff / 1000)} s. Same Wi-Fi as the computer?`, "bad");
+        const offline = err.message === "Load failed" || err.message === "Failed to fetch" || navigator.onLine === false;
+        say(CLOUD
+          ? `Not sent yet (${offline ? "no signal" : err.message}) — ${queueCount()} waiting here, sent by itself when the phone is back online. Keep shooting.`
+          : `Not sent yet (${offline ? "can't reach the computer" : err.message}) — trying again in ${Math.round(backoff / 1000)} s. Same Wi-Fi as the computer?`, "bad");
         pumpTimer = setTimeout(pump, backoff);
         break;
       } finally {
@@ -284,7 +319,7 @@ async function noBack() {
   const p = pics.find((x) => x.n === n && x.side === "a" && sessionOf(x.name) === session);
   if (p?.stage === "queued") p.single = true;
   else if (p) {
-    const r = await fetch("/api/scan/inbox/" + encodeURIComponent(p.name) + "/single", { method: "POST" }).catch(() => null);
+    const r = await api(API.single(p.name), { method: "POST" }).catch(() => null);
     if (r?.ok) Object.assign(p, { name: p.name.replace(/-a\.jpg$/, "-s.jpg"), side: "s" });
   }
   save();
@@ -300,7 +335,7 @@ async function undoLast() {
   const base = p.name.replace(/\.jpg$/, "");
   if (p.stage === "queued") await dequeue(base);
   else {
-    const r = await fetch("/api/scan/inbox/" + encodeURIComponent(p.name), { method: "DELETE" });
+    const r = await api(API.pic(p.name), { method: "DELETE" });
     if (!r.ok) return say((await r.json().catch(() => ({}))).error || "Too late — the computer is already reading it.", "warn");
   }
   pics = pics.filter((x) => x !== p);
@@ -316,7 +351,7 @@ async function undoLast() {
 
 // ---------------------------------------------------------------- what the computer found
 
-let computerAge = null, pollTimer = null, polling = false;
+let computerAge = null, computerName = null, pollTimer = null, polling = false;
 async function poll() {
   clearTimeout(pollTimer);
   if (polling) return;
@@ -324,17 +359,24 @@ async function poll() {
   try {
     // this session and any a not-yet-done picture came from
     const sessions = [...new Set([session, ...pics.map((p) => sessionOf(p.name)).filter(Boolean)])].slice(0, 5);
-    const r = await fetch("/api/scan/phone-status?session=" + encodeURIComponent(sessions.join(",")));
+    const r = await api(API.status(sessions.join(",")));
+    if (r.status === 401) linkGone = true;
     if (r.ok) {
       const j = await r.json();
       computerAge = j.computer;
+      computerName = j.computerName || null;
       let readNow = 0, failedNow = 0;
       for (const p of pics) {
         const s = j.pictures?.[p.name];
         if (!s || p.stage === "queued") continue;
         if (s.stage === "read" && p.stage !== "read") readNow++;
         if (["error", "held"].includes(s.stage) && s.stage !== p.stage) failedNow++;
-        Object.assign(p, { stage: s.stage, usd: (s.findUsd || 0) + (s.readUsd || 0), found: s.found ?? p.found, problems: s.problems || p.problems || [], cards: s.cards || p.cards, error: s.error || null, backOf: s.backOf || null, skus: s.skus || p.skus });
+        // the store only knows a picture once a computer has taken it: until then it's "sent" here
+        if (s.stage === "sent" && p.stage !== "queued" && p.stage !== "sent") continue;
+        Object.assign(p, { stage: s.stage, usd: (s.findUsd || 0) + (s.readUsd || 0), found: s.found ?? p.found, problems: s.problems || p.problems || [], cards: s.cards || p.cards, error: s.error || null, backOf: s.backOf || null, skus: s.skus || p.skus, addLeft: s.addLeft ?? p.addLeft });
+        // an add the computer has dealt with (added, or left every card for a check) isn't "adding…" any more
+        // (the computer's clock may be a little off the phone's: two minutes' grace; nothing after 10 minutes → ask again)
+        if (p.addAsked && ((s.addDoneAt || 0) > p.addAsked - 120000 || Date.now() - p.addAsked > 10 * 60000)) p.addAsked = null;
       }
       if (sound.checked && readNow) beep(880);
       else if (sound.checked && failedNow) beep(330);
@@ -379,16 +421,53 @@ function sameAs(p) {
 const haveSku = (p) => (p.cards || []).find((c) => c.have)?.have;
 const firstSentence = (s) => String(s || "").split(/(?<=\.)\s/)[0];
 
+// ---------------------------------------------------------------- ＋ Add from the phone (3.20)
+
+/** A card the computer would add without a check: no ⚠ note, no retake, not a slab already in stock */
+const trusted = (c) => Boolean(c.name) && !c.check && !c.problem && !c.have?.cert;
+const canAdd = (p) => p.stage === "read" && !p.backOf && !p.addAsked && (p.cards || []).some(trusted);
+/** The computer that read these pictures adds their trusted cards to the shared inventory and sends back the numbers. */
+async function addPictures(list) {
+  const n = list.flatMap((p) => p.cards.filter(trusted)).length;
+  if (!n) return;
+  const paid = Math.max(0, parseFloat($("#paid").value) || 0);
+  $("#addBtn").disabled = true;
+  try {
+    const r = await api(API.add, json({ names: list.map((p) => p.name), paid }));
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) linkGone = true;
+    if (!r.ok) throw new Error(j.error || `The computer said ${r.status}`);
+    const at = Date.now();
+    for (const p of list) p.addAsked = at;
+    $("#paid").value = "";
+    const nobody = computerAge == null || computerAge > 60;
+    say(nobody
+      ? `${n} card${n === 1 ? "" : "s"} will be added as soon as Card Research Bot is open on one of your computers.`
+      : `Adding ${n} card${n === 1 ? "" : "s"} — each picture shows ✓ and its inventory number in a few seconds.${paid ? ` ${usd(paid)} split over them by value.` : ""}`, "good");
+  } catch (err) {
+    const offline = /load failed|failed to fetch/i.test(err.message) || navigator.onLine === false;
+    say(`Not added yet: ${offline ? "no signal — press ＋ Add again when you have one" : err.message}`, "bad");
+  } finally {
+    $("#addBtn").disabled = false;
+    save();
+    draw();
+    poll();
+  }
+}
+$("#addBtn").onclick = () => addPictures(pics.filter(canAdd));
+
 function caption(p) {
   const who = `#${p.n}${p.side === "a" ? " front" : p.side === "b" ? " back" : ""}`;
   if (p.stage === "queued") return [`${who} · waiting to send`, "warn"];
-  if (p.stage === "sent") return [`${who} · on the computer`, ""];
+  if (p.stage === "sent") return [`${who} · ${CLOUD ? "sent" : "on the computer"}`, ""];
   if (p.stage === "reading") return [`${who} · reading…`, ""];
   if (p.stage === "held") return [`${who} · ⏸ waiting for the reader`, "warn"];
   if (p.stage === "error") return [`${who} · ✗ not read — tap`, "bad"];
   if (p.stage === "found") return [`${who} · ${p.found} found${p.problems?.length ? ` · ${p.problems.length} retake` : ""}`, p.found ? (p.problems?.length ? "warn" : "") : "bad"];
-  if (p.stage === "added") return [`#${p.n} · ✓ in inventory${p.skus?.length ? " " + p.skus.join(", ") : ""}`, "good"];
+  if (p.stage === "added") return [`#${p.n} · ✓ in inventory${p.skus?.length ? " " + p.skus.join(", ") : ""}${p.addLeft ? ` · ${p.addLeft} to check` : ""}`, p.addLeft ? "warn" : "good"];
   if (p.stage === "read" && p.backOf) return [`#${p.n} back · read with the front`, "good"];
+  if (p.stage === "read" && p.addAsked) return [`#${p.n} · adding…`, ""];
+  if (p.stage === "read" && p.addLeft) return [`#${p.n} · ⚠ ${p.addLeft} to check on a computer`, "warn"];
   if (p.stage === "read") {
     const n = (p.cards || []).length, check = (p.cards || []).filter((c) => c.check || c.problem).length, have = haveSku(p);
     if (have?.cert) return [`#${p.n} · already in inventory (${have.sku})`, "warn"];
@@ -410,8 +489,16 @@ function draw() {
   const toAdd = read.filter((p) => p.stage === "read").flatMap((p) => p.cards || []);
   const check = toAdd.filter((c) => c.check || c.problem).length;
   const waiting = queueCount(), held = pics.filter((p) => p.stage === "held").length, added = read.filter((p) => p.stage === "added").length;
+  // ＋ Add: the cards the computer would add without a check; the ⚠ ones wait for a computer
+  const addable = pics.filter(canAdd), nAdd = addable.flatMap((p) => p.cards.filter(trusted)).length;
+  const flagged = read.filter((p) => p.stage === "read" && !p.addAsked).flatMap((p) => (p.cards || []).filter((c) => !trusted(c))).length;
+  $("#addBar").hidden = !nAdd;
+  if (nAdd) {
+    $("#addBtn").textContent = `＋ Add ${nAdd} card${nAdd === 1 ? "" : "s"} to inventory`;
+    $("#addNote").textContent = `${flagged ? `${flagged} marked ⚠ wait for a check on a computer. ` : ""}Added cards are in the shared inventory on every computer right away. The website changes only from a computer.`;
+  }
   $("#totals").innerHTML = pics.length
-    ? [toAdd.length ? `<div class="muted" style="flex-basis:100%">Next, on the computer: Inventory → Bulk scan → check each ⚠ card → ＋ Add to inventory (tick 🌐 to sell them on the website).</div>` : "", `<span><b>${cards.length}</b> card${cards.length === 1 ? "" : "s"} read</span>`, cards.some((c) => c.value != null) ? `<span>worth <b>${usd(value)}</b></span>` : cards.length ? `<span class="muted">not priced yet</span>` : "", check ? `<span class="warnText"><b>${check}</b> to check</span>` : "", added ? `<span class="goodText"><b>${added}</b> in inventory</span>` : "", held ? `<span class="warnText"><b>${held}</b> waiting for the reader</span>` : "", waiting ? `<span class="badText"><b>${waiting}</b> waiting to send</span>` : "", spent(pics)].join("")
+    ? [flagged && !nAdd ? `<div class="muted" style="flex-basis:100%">⚠ cards: check them on a computer (Inventory → Bulk scan → ✎ fix → ＋ Add to inventory).</div>` : "", `<span><b>${cards.length}</b> card${cards.length === 1 ? "" : "s"} read</span>`, cards.some((c) => c.value != null) ? `<span>worth <b>${usd(value)}</b></span>` : cards.length ? `<span class="muted">not priced yet</span>` : "", check ? `<span class="warnText"><b>${check}</b> to check</span>` : "", added ? `<span class="goodText"><b>${added}</b> in inventory</span>` : "", held ? `<span class="warnText"><b>${held}</b> waiting for the reader</span>` : "", waiting ? `<span class="badText"><b>${waiting}</b> waiting to send</span>` : "", spent(pics)].join("")
     : "";
   // banners: the reader is down, the computer isn't picking up, a back with a different count, a page shot twice
   const notes = [];
@@ -420,7 +507,12 @@ function draw() {
     const why = firstSentence(heldPic.error) || "the reader is down";
     notes.push(`⏸ The computer can't read pictures right now: ${why}${/[.!?]$/.test(why) ? "" : "."} Keep going — every picture waits on the computer and is read as soon as that's fixed.`);
   }
-  if (pics.some((p) => p.stage === "sent" && Date.now() - p.at > 20000) && (computerAge == null || computerAge > 20)) notes.push("The computer isn't picking pictures up — is Card Research Bot open on it? They wait there until it is.");
+  if (linkGone) notes.push("This scanner link was replaced on the computer — scan the new code there (Inventory → Bulk scan → 📱 Phone) and add it to your Home Screen again. Pictures taken here wait on this phone.");
+  else if (pics.some((p) => p.stage === "sent" && Date.now() - p.at > 20000) && (computerAge == null || computerAge > 20)) {
+    notes.push(CLOUD
+      ? "No computer is picking pictures up right now. They're safe in your MJC store and get read as soon as Card Research Bot is open on one of your computers."
+      : "The computer isn't picking pictures up — is Card Research Bot open on it? They wait there until it is.");
+  }
   for (const p of pics) {
     if (p.side !== "a" || p.found == null) continue;
     const b = pics.find((q) => q.n === p.n && q.side === "b" && q.found != null && sessionOf(q.name) === sessionOf(p.name));
@@ -434,7 +526,7 @@ function draw() {
   $("#noBackBtn").hidden = !(both.checked && waitingBack != null);
   const started = parseInt(session, 36);
   const mine = pics.filter((p) => sessionOf(p.name) === session).length;
-  $("#sessionLine").textContent = `This session: started ${when(started)} · ${mine} picture${mine === 1 ? "" : "s"}${pics.length > mine ? ` (+${pics.length - mine} from earlier, not done yet)` : ""}`;
+  $("#sessionLine").textContent = `This session: started ${when(started)} · ${mine} picture${mine === 1 ? "" : "s"}${pics.length > mine ? ` (+${pics.length - mine} from earlier, not done yet)` : ""}${CLOUD && computerName && computerAge != null && computerAge < 60 ? ` · read on ${computerName}` : ""}`;
 }
 
 /** What the AI cost for this session — only on the paid tier; Google's free tier is $0. */
@@ -460,7 +552,11 @@ function openDetail(p) {
   }[p.stage] || "";
   $("#detailBody").innerHTML = `<img alt="" src="${p.thumb}" style="width:100%;max-height:40vh;object-fit:contain;border-radius:10px">
     ${p.warn ? `<p class="warnText">📷 ${esc(p.warn)}</p>` : ""}${stage ? `<p>${esc(stage)}</p>` : ""}
-    ${retakes.length ? `<ul>${retakes.join("")}</ul>` : ""}${list.length ? `<ul>${list.join("")}</ul><p class="muted">Fix anything wrong on the computer (Inventory → Bulk scan): each fix teaches the reader.</p>` : ""}`;
+    ${retakes.length ? `<ul>${retakes.join("")}</ul>` : ""}${list.length ? `<ul>${list.join("")}</ul><p class="muted">Fix anything wrong on the computer (Inventory → Bulk scan): each fix teaches the reader.</p>` : ""}
+    ${p.addLeft ? `<p class="warnText">${p.addLeft} card${p.addLeft === 1 ? "" : "s"} left for a check on a computer (⚠, already in stock, or the back of a card).</p>` : ""}
+    ${canAdd(p) ? `<button class="more" id="addOne" style="width:100%">＋ Add this picture's ${p.cards.filter(trusted).length} card${p.cards.filter(trusted).length === 1 ? "" : "s"} to inventory</button>` : ""}`;
+  const one = $("#addOne");
+  if (one) one.onclick = () => ($("#detail").close(), addPictures([p]));
   $("#detail").showModal();
 }
 
@@ -473,9 +569,9 @@ function openDetail(p) {
 {
   const homeApp = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
   const hint = $("#homeHint");
-  if (!homeApp && location.pathname === "/phone" && !ls.get("phoneHomeHintDone", false)) {
+  if (!homeApp && (location.pathname === "/phone" || CLOUD) && !ls.get("phoneHomeHintDone", false)) {
     const apple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-    hint.innerHTML = `<p>📲 <b>Put the scanner on your Home Screen</b>, so next time it's one tap and no QR code: ${apple ? "tap <b>Share</b> (on newer iPhones it's under <b>⋯</b>), then <b>Add to Home Screen</b> → <b>Add</b>" : "open the browser menu <b>⋮</b>, then <b>Add to Home screen</b>"}. It works whenever the phone is on the same Wi-Fi as the computer.</p><button type="button" id="homeHintOk">Got it</button>`;
+    hint.innerHTML = `<p>📲 <b>Put the scanner on your Home Screen</b>, so next time it's one tap and no QR code: ${apple ? "tap <b>Share</b> (on newer iPhones it's under <b>⋯</b>), then <b>Add to Home Screen</b> → <b>Add</b>" : "open the browser menu <b>⋮</b>, then <b>Add to Home screen</b>"}. ${CLOUD ? "It works anywhere: any Wi-Fi or cell signal, and with none the pictures wait on the phone." : "It works whenever the phone is on the same Wi-Fi as the computer."}</p><button type="button" id="homeHintOk">Got it</button>`;
     hint.hidden = false;
     $("#homeHintOk").onclick = () => { ls.set("phoneHomeHintDone", true); hint.hidden = true; };
   }

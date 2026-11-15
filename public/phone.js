@@ -326,13 +326,50 @@ async function upload(item, name, onProgress) {
     return fetch("/api/scan/inbox", json({ name, image: item.image }));
   }
   if (!item.blob) return new Response(JSON.stringify({ error: "An old picture from before 3.20 — take it again." }), { status: 400 });
-  const up = await api("/scan/upload", json({ name: name + ".jpg", bytes: item.blob.size }));
+  // 3.21.2 (11/15: Joseph's iPhone left a picture "waiting for a signal" while the store answered it fine): the saved
+  // picture is read into memory first. A camera file kept in the phone's storage can fail to stream on iOS, and a copy
+  // in memory doesn't; a picture that can't be read at all says so instead of waiting forever.
+  let body;
+  try {
+    body = new Blob([await item.blob.arrayBuffer()], { type: "image/jpeg" });
+  } catch (err) {
+    throw Object.assign(new Error("the saved picture can't be read on this phone — take it again"), { step: "read", cause: err, unreadable: true });
+  }
+  const up = await api("/scan/upload", json({ name: name + ".jpg", bytes: body.size }));
   if (!up.ok) return up;
   const { url, headers } = await up.json();
-  const put = await xhr("PUT", url, { headers, body: item.blob, onProgress });
-  if (!put.ok) throw new Error(`the upload stopped (${put.status})`);
+  await putPicture(url, headers, body, onProgress);
   return api("/scan/sent", json({ name: name + ".jpg" }));
 }
+/** Into the store's private folder: the watched way first (progress), then once more the plain way if that fails */
+async function putPicture(url, headers, body, onProgress) {
+  let first;
+  try {
+    const r = await xhr("PUT", url, { headers, body, onProgress });
+    if (r.ok) return;
+    first = new Error(`storage answered ${r.status}`);
+  } catch (err) {
+    first = err;
+  }
+  try {
+    const r = await fetch(url, { method: "PUT", headers, body });
+    if (r.ok) return;
+    const text = await r.text().catch(() => "");
+    throw new Error(`storage answered ${r.status}${/<Code>(\w+)<\/Code>/.exec(text)?.[1] ? ` (${/<Code>(\w+)<\/Code>/.exec(text)[1]})` : ""}`);
+  } catch (err) {
+    throw Object.assign(new Error(err.message === first.message ? err.message : `${first.message}, then ${err.message}`), { step: "storage" });
+  }
+}
+/** When something fails, the store hears what and where (once per picture and step), so it can be fixed from afar */
+const reported = new Set();
+function report(step, err, name, blob) {
+  const k = `${name}:${step}`;
+  if (!CLOUD || reported.has(k)) return;
+  reported.add(k);
+  api("/scan/report", json({ step, error: String(err?.message || err).slice(0, 300), cause: String(err?.cause?.name || err?.cause?.message || "").slice(0, 120), name, bytes: blob?.size || 0, type: blob?.type || "", onLine: navigator.onLine, standalone: navigator.standalone === true || matchMedia("(display-mode: standalone)").matches, ua: navigator.userAgent.slice(0, 160) })).catch(() => {});
+}
+let lastPollOk = 0; // the store answered the phone's last check: the signal is fine, whatever an upload says
+const netError = (err) => /^(load failed|failed to fetch|network ?error|the network connection was lost)/i.test(String(err?.message || "")) || err?.name === "TypeError";
 
 let pumping = false, backoff = 0, pumpTimer = null, sendTrouble = false;
 async function pump() {
@@ -363,18 +400,28 @@ async function pump() {
         if (pic?.single) Object.assign(pic, { name: sendName + ".jpg", side: "s", single: false });
         if (pic && pic.stage === "queued") pic.stage = "sent";
         backoff = 0;
-        if (sendTrouble) say(CLOUD ? "Back online — sending what was waiting." : "Reached the computer again.", "good");
+        if (pic) delete pic.sendError;
+        if (sendTrouble) say(sendTrouble === "no signal" || sendTrouble === "can't reach the computer" ? (CLOUD ? "Back online — sending what was waiting." : "Reached the computer again.") : `#${pic?.n ?? ""} went through.`, "good");
         sendTrouble = false;
       } catch (err) {
-        // no signal, or the computer is busy: keep it, try again soon (and the moment the page is back in view)
+        // no signal, or something else in the way: keep it, try again soon (and the moment the page is back in view).
+        // "No signal" only when there really is none — the store still answering means the trouble is the upload itself.
         backoff = Math.min(document.hidden ? 30000 : 8000, backoff ? backoff * 2 : 2000);
-        const offline = err.message === "Load failed" || err.message === "Failed to fetch" || navigator.onLine === false;
-        if (!sendTrouble) {
-          say(CLOUD
-            ? `${offline ? "No signal" : `Not sent yet (${err.message})`} — pictures wait on this phone and go by themselves when it's back. Keep shooting.`
-            : `Not sent yet (${offline ? "can't reach the computer" : err.message}). Same Wi-Fi as the computer? It keeps trying.`, "warn");
+        const offline = navigator.onLine === false || (netError(err) && Date.now() - lastPollOk > 20000);
+        const why = offline ? (CLOUD ? "no signal" : "can't reach the computer") : err.message;
+        if (pic) pic.sendError = why;
+        if (!offline) report(err.step || "upload", err, next.name + ".jpg", next.blob);
+        if (err.unreadable && pic) { // nothing to retry: the phone can't read its own copy
+          await dequeue(next.name);
+          Object.assign(pic, { stage: "error", error: err.message });
+          continue;
         }
-        sendTrouble = true;
+        if (!sendTrouble || sendTrouble !== why) {
+          say(CLOUD
+            ? offline ? "No signal — pictures wait on this phone and go by themselves when it's back. Keep shooting." : `Couldn't upload #${pic?.n ?? ""}: ${why}. Trying again by itself.`
+            : `Not sent yet (${why}). Same Wi-Fi as the computer? It keeps trying.`, "warn");
+        }
+        sendTrouble = why;
         pumpTimer = setTimeout(pump, backoff);
         break;
       } finally {
@@ -463,6 +510,7 @@ async function poll() {
     if (r.ok) {
       const j = await r.json();
       polled = true;
+      lastPollOk = Date.now();
       computerAge = j.computer;
       computerName = j.computerName || null;
       let readNow = 0, failedNow = 0;
@@ -630,7 +678,8 @@ function pillState() {
   const up = pics.find((p) => p.progress != null);
   const waiting = queueCount();
   if (up) return ["busy", `Sending #${up.n} · ${Math.round(up.progress * 100)}%${waiting > 1 ? ` · ${waiting - 1} more` : ""}`];
-  if (navigator.onLine === false || sendTrouble) return ["warn", waiting ? `${CLOUD ? "No signal" : "Can't reach the computer"} · ${waiting} waiting on this phone` : CLOUD ? "No signal" : "Can't reach the computer"];
+  if ((navigator.onLine === false || sendTrouble === "no signal" || sendTrouble === "can't reach the computer")) return ["warn", waiting ? `${CLOUD ? "No signal" : "Can't reach the computer"} · ${waiting} waiting on this phone` : CLOUD ? "No signal" : "Can't reach the computer"];
+  if (sendTrouble && waiting) return ["bad", `Upload trouble · ${waiting} waiting — tap for details`];
   if (waiting) return ["busy", `Sending ${plural(waiting, "picture")}`];
   if (!polled) return ["", "Connecting…"];
   const reading = computerAge != null && computerAge < (CLOUD ? 60 : 20);
@@ -704,7 +753,7 @@ function drawScan(m) {
     const cards = p.cards || [];
     const best = [...cards].sort((a, b) => (b.value || 0) - (a.value || 0))[0];
     let title, line = "", cls = "waiting";
-    if (p.stage === "queued") title = p.progress != null ? "Sending…" : navigator.onLine === false || sendTrouble ? "Waiting for a signal" : "Sending…";
+    if (p.stage === "queued") title = p.progress != null ? "Sending…" : (navigator.onLine === false || sendTrouble === "no signal" || sendTrouble === "can't reach the computer") ? "Waiting for a signal" : sendTrouble ? `Couldn't upload: ${p.sendError || sendTrouble} — trying again` : "Sending…";
     else if (p.stage === "sent") title = p.side === "a" && prefs.both && waitingBack === p.n ? "Sent — now the back" : "Waiting for the computer";
     else if (p.stage === "reading") title = "Reading…";
     else if (p.stage === "held") title = "Waiting for the reader";
@@ -914,8 +963,7 @@ function drawSettings(m) {
   setHTML($("#connText"), CLOUD
     ? `Through your MJC store<small>Works on any Wi-Fi or cell data. With no signal, pictures wait on this phone. ${reading ? `${esc(computerName || "Your computer")} is reading right now.` : "No computer is reading right now — pictures wait in your store until one is open."}</small>`
     : `Home Wi-Fi, straight to the computer<small>Works on the same Wi-Fi as the computer.${reading ? " It's reading right now." : " It isn't picking up right now — is Card Research Bot open?"}</small>`);
-  setHTML($("#queueText"), m.waiting ? `${plural(m.waiting, "picture")} waiting on this phone<small>${sendTrouble || navigator.onLine === false ? "They go by themselves when there's a signal." : "Sending now."}</small>` : "Nothing waiting on this phone");
-  $("#sendNow").disabled = !m.waiting;
+  setHTML($("#queueText"), m.waiting ? `${plural(m.waiting, "picture")} waiting on this phone<small>${(navigator.onLine === false || sendTrouble === "no signal" || sendTrouble === "can't reach the computer") ? "They go by themselves when there's a signal." : sendTrouble ? `Upload trouble: ${esc(sendTrouble)}. It keeps trying by itself.` : "Sending now."}</small>` : "Nothing waiting on this phone");
   setHTML($("#aboutText"), `What ＋ Add does<small>Cards that read cleanly go into the shared inventory from here. ⚠ ones wait for a check in Bulk scan on a computer. The website changes only from a computer. Lost this phone? On the computer: Bulk scan → 📱 Phone → New link.</small>`);
 }
 function applyTheme() {
@@ -931,7 +979,7 @@ function openDetail(p) {
   if (!p) return;
   $("#detailTitle").textContent = `#${p.n}${p.side === "a" ? " front" : p.side === "b" ? " back" : ""}`;
   const stage = {
-    queued: navigator.onLine === false || sendTrouble ? "Waiting on this phone for a signal." : "Sending…",
+    queued: p.sendError ? `Not sent yet: ${p.sendError}. It keeps trying by itself; Try again sends it now.` : (navigator.onLine === false || sendTrouble === "no signal" || sendTrouble === "can't reach the computer") ? "Waiting on this phone for a signal." : "Sending…",
     sent: CLOUD ? "Sent. Waiting for a computer to pick it up." : "On the computer, waiting to be read.",
     reading: "Being read…",
     held: `Waiting — the reader can't read right now: ${p.error || "it's down"}`,
@@ -951,6 +999,7 @@ function openDetail(p) {
   const acts = [
     canAdd(p) ? `<button type="button" class="btn gold" data-act="add">＋ Add ${plural(n, "card")}</button>` : "",
     needsRetake(p) || p.problems?.length ? `<button type="button" class="btn" data-act="retake">Retake this picture</button>` : "",
+    p.stage === "queued" ? `<button type="button" class="btn gold" data-act="send">Try again now</button>` : "",
     lastUndoable() === p ? `<button type="button" class="btn danger" data-act="undo">Take it back</button>` : "",
     `<button type="button" class="btn" data-act="close">Close</button>`,
   ].join("");
@@ -1055,7 +1104,16 @@ $("#chips").onclick = (e) => { const b = e.target.closest("[data-f]"); if (b) { 
 $("#sortBtn").onclick = () => { setPref("sort", prefs.sort === "value" ? "new" : "value"); draw(); };
 $("#q").oninput = () => draw();
 $("#pill").onclick = () => setTab("settings");
-$("#sendNow").onclick = () => { backoff = 0; sendTrouble = false; pump(); poll(); say("Sending what's waiting…"); };
+$("#sendNow").onclick = () => sendNow();
+/** Send now / Try again: whatever is waiting goes at once (not at the next retry); with nothing waiting, it says so */
+function sendNow() {
+  if (!queueCount()) return say("Nothing is waiting on this phone — every picture has gone.", "good");
+  clearTimeout(pumpTimer);
+  backoff = 0;
+  pump();
+  poll();
+  say(`Sending ${plural(queueCount(), "picture")} now…`);
+}
 $("#newBtn").onclick = confirmNew;
 $("#forgetBtn").onclick = forgetPast;
 $("#welcomeBtn").onclick = () => openWelcome(true);
@@ -1086,6 +1144,7 @@ $("#detailBody").onclick = async (e) => {
   if (act === "add") addPictures([p]);
   else if (act === "retake") retake(p);
   else if (act === "undo") undoLast();
+  else if (act === "send") sendNow();
 };
 // tapping outside a sheet closes it
 for (const d of $$("dialog.sheet")) d.addEventListener("click", (e) => { if (e.target === d) d.close(); });

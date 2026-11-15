@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.21.2 — a picture that won't upload says why, and Send now always works
+
+Joseph, 11/15: a picture sat "waiting for a signal" and Send now wouldn't do anything. His phone was online: the store
+answered its other calls (26 that hour from his cell connection). But the picture never reached the store's folder.
+The same page uploads fine in Safari's engine and Chrome's on the PC, so the cause is on the phone, and the page hid it.
+- **"No signal" only when there's no signal.** If the store is still answering, the problem is the upload itself, and
+  the phone names it on the picture, in the pill at the top ("Upload trouble · 1 waiting — tap for details"), in
+  Settings and in the picture's sheet.
+- **The picture is read into memory before it goes.** A camera file kept in the phone's storage can fail to stream on
+  iOS; a copy in memory doesn't. A picture the phone can't read back at all says "take it again" instead of waiting
+  forever.
+- **A second way to send:** if the watched upload (the one with the progress bar) fails, the picture goes once more
+  the plain way.
+- **Send now always works** (it was greyed out), and a waiting picture's sheet has **Try again now**.
+- **The phone tells the store what went wrong** (store 1.3.1: one line in its log, nothing kept), so a problem on a
+  phone can be fixed from the computer.
+
 ## 3.21.1 — the phone list never outgrows the phone; a security update
 
 From an audit of speed, data growth and security (11/15):

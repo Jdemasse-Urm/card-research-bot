@@ -1,5 +1,75 @@
 # Changelog
 
+## 3.21.0 — the Card Scanner, 20-20: an app with tabs
+
+Joseph, 11/15: "a more advanced nicer smoother UI and UX … some tabs, some different page options". The phone page
+was one long column. It's now an app with four tabs along the bottom: **Scan**, **Cards**, **History** and
+**Settings**. Sending, reading and adding work exactly as in 3.20. Look: the TCRB ink and gold (light mode follows the
+phone), rounded figures for money and counts, and one bold element, a refractor shutter ring.
+
+### 20 major
+
+1. **Four tabs** in a bar at the bottom, within reach of your thumb. The Cards tab carries a badge with how many cards are
+   ready to add, or a red dot when a picture needs a retake.
+2. **The Scan tab is built around the shutter.** It's a big gold button in a holographic ring. Above it is a switch
+   between Front + back and One side, with a line saying what to shoot next ("Now flip #4 over and take its back").
+3. **Connection pill** at the top: it says how pictures travel right now. For example "Joseph's PC is reading",
+   "Sending #5 · 64%", "No signal · 3 waiting on this phone" or "No computer open · pictures wait in your store". Tap it
+   for the connection settings.
+4. **"Just read" card:** the newest picture goes from sending to reading to its best card's name, grade, value and
+   status, without leaving the camera.
+5. **Recent strip:** the last dozen pictures as thumbnails, each with a colour bar (reading, read, to check, retake).
+6. **Cards tab:** every card read, one row each, with its picture, grade, value and where it stands. The statuses are
+   ready to add, adding, in inventory, check on a computer, retake and already in stock.
+7. **Filters with counts:** All, Ready to add, To check, In inventory.
+8. **Search by name, and sort** by value or newest.
+9. **＋ Add dock:** "＋ Add 7 cards · $372", with the Paid box. It shows what that comes to a card and against what
+   they're worth ("$12.00 a card, worth $38.50 (+$26.50)").
+10. **Pictures view** on the Cards tab: every picture with where it is, its number and a progress bar while it uploads.
+11. **Real upload progress:** each picture's percentage, measured as it goes up (to the store, or to the computer on the
+    home Wi-Fi).
+12. **Picture sheet** that slides up from the bottom: the picture, its cards with their status and why, retake reasons,
+    and the actions (＋ Add, Retake, Take it back). The buttons stay pinned at the bottom.
+13. **Retake:** opens the camera, and the new picture stands in for the old one. The old picture's cards leave the totals
+    and ＋ Add.
+14. **History tab:** this session (cards, value, in inventory, pictures, cards a minute, reader cost, best three cards)
+    and the sessions before it on this phone (the last 30), each with its cards.
+15. **Share a session** through the iPhone share sheet: a plain list of cards, grades and values with the total, ready to
+    text to your dad. Where sharing isn't possible, there's a copy box.
+16. **The screen stays on while scanning**, so the phone doesn't lock in the middle of a binder. On by default; switch it
+    off in Settings.
+17. **Settings tab:** pictures per card, sound, screen on, send from the photo library, connection, theme, picture tips,
+    how it works, new session, and forget past sessions.
+18. **Waiting on this phone:** how many pictures haven't gone yet, with Send now.
+19. **First open:** a short sheet with the four steps (Home Screen, shoot, watch them come back, add). It shows once and
+    can be reopened from Settings.
+20. **Theme:** Auto (follows the phone), Dark or Light. The phone's status-bar colour follows it.
+
+### 20 niche
+
+1. The phone's rounded typeface for money and counts, with fixed-width digits, so a value counting up doesn't jitter.
+2. A fresh read's value counts up: the one animation, never for anyone whose phone asks for less motion. Fixed during
+   testing: it showed a negative amount for one frame.
+3. The shutter shows the next picture's number and side ("#5 back").
+4. The shutter's ring spins while a picture is prepared, and it can't be double-tapped.
+5. Undo #N and "No back for #N" sit on either side of the shutter, only when they apply.
+6. The mini row under the shutter (cards, worth, ready to add) jumps to the Cards tab.
+7. The tab bar, the top and the sheets keep clear of the iPhone's notch and home bar.
+8. Touch targets of at least 44 points.
+9. Screen readers get proper tabs (and arrow keys move between them), labelled buttons, and announced messages.
+10. Sheets close by tapping outside them, with Escape, or with their own button.
+11. A chime (two notes) when cards go into inventory, and a message with their inventory numbers.
+12. The last tab, view, filter and sort are remembered.
+13. New session and Forget past sessions take two taps: the first says what will happen.
+14. Empty screens say what to do next.
+15. The no-signal message shows once per dropped signal, not on every retry. "Back online" when it returns.
+16. Grades look like a slab label (PSA 10 in a box); raw cards just say Raw.
+17. Cards already in stock, and the inventory numbers of added ones, show on their rows.
+18. Copy name in the picture sheet, for searching it elsewhere.
+19. The reader's cost moved off the main screen into History.
+20. Smoother: only what changed is redrawn (no flicker every 2 seconds), there's no tap flash or double-tap zoom, and the
+    page doesn't bounce at the edges.
+
 ## 3.20.0 — scan from anywhere, add from the phone
 
 Joseph, 11/15: "I should be able to scan in from any WiFi or even on the road with no WiFi", and his dad should see what

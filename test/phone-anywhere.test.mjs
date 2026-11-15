@@ -104,7 +104,7 @@ test("a picture sent from anywhere lands in this computer's scan inbox; what was
   await until(bot, () => S.page);
   assert.equal(S.page.version, version);
   for (const f of ["phone.html", "phone.js", "phone-sw.js", "apple-touch-icon.png", "icon.svg"]) assert.ok(S.page.files[f], f);
-  assert.match(Buffer.from(S.page.files["phone.html"], "base64").toString(), /Card Bot camera/);
+  assert.match(Buffer.from(S.page.files["phone.html"], "base64").toString(), /<title>Card Scanner<\/title>/);
 
   // the 📱 Phone window: the store's link (works anywhere), not the home Wi-Fi one
   const link = (await bot.call("GET", "/api/scan/phone-link")).body;

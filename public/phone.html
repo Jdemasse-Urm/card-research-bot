@@ -3,11 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Card Bot camera</title>
-  <meta name="theme-color" content="#141416" media="(prefers-color-scheme: dark)" />
-  <meta name="theme-color" content="#f6f6f7" media="(prefers-color-scheme: light)" />
+  <title>Card Scanner</title>
+  <meta name="theme-color" content="#16171c" />
   <!-- Home Screen: opens full screen as "Card Scanner". No manifest on purpose: without one the icon keeps this page's
-       own address (/phone?s=…, which signs the icon in); the main app's manifest would open the whole bot instead. -->
+       own address (/phone?s=… or /scan/?s=…, which signs the icon in); the main app's manifest would open the whole bot. -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="Card Scanner" />
@@ -15,83 +14,365 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <style>
-    :root { --bg: #141416; --panel: #1d1d21; --ink: #f2f2f4; --muted: #a0a0aa; --gold: #e2b33c; --good: #3fb37f; --bad: #e5484d; --warn: #e8a33c; }
-    @media (prefers-color-scheme: light) { :root { --bg: #f6f6f7; --panel: #fff; --ink: #18181b; --muted: #61616b; --warn: #a35f00; } }
-    * { box-sizing: border-box; }
-    [hidden] { display: none !important; } /* a hidden block stays hidden whatever its own display (the Home Screen tip is flex) */
-    body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; padding-top: calc(16px + env(safe-area-inset-top)); padding-bottom: calc(16px + env(safe-area-inset-bottom)); max-width: 760px; margin-inline: auto; }
-    .addBar { margin: .6rem 0; padding: .7rem; border-radius: 14px; background: var(--panel); }
-    .addBar .shoot { margin: 0 0 .5rem; padding: 1rem; font-size: 1.1rem; background: var(--good); color: #fff; }
-    .addBar label { display: flex; gap: .5rem; align-items: center; }
-    .addBar input { flex: 1; min-width: 0; font-size: 1rem; padding: .5rem .6rem; border-radius: 10px; border: 1px solid var(--muted); background: var(--bg); color: var(--ink); }
-    .addBar p { margin: .4rem 0 0; }
-    .homeHint { border-left-color: var(--gold); display: flex; gap: .6rem; align-items: flex-start; }
-    .homeHint p { margin: 0; flex: 1; }
-    .homeHint button { flex: none; padding: .4rem .7rem; border-radius: 10px; border: 1px solid var(--muted); background: transparent; color: var(--ink); font-size: .9rem; }
-    h1 { font-size: 1.25rem; margin: 0 0 .3rem; }
-    p { margin: .3rem 0; }
-    .muted { color: var(--muted); font-size: .9rem; }
-    .shoot { display: block; width: 100%; margin: 1rem 0 .6rem; padding: 1.4rem 1rem; font-size: 1.25rem; font-weight: 700; border: 0; border-radius: 16px; background: var(--gold); color: #1b1300; }
-    .shoot:active { transform: scale(.98); }
-    .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
-    label.check { display: flex; gap: .5rem; align-items: center; padding: .6rem .8rem; border-radius: 12px; background: var(--panel); }
-    label.check input { width: 22px; height: 22px; flex: none; }
-    .totals { display: flex; gap: .4rem; flex-wrap: wrap; margin: .4rem 0; }
-    .totals span { background: var(--panel); border-radius: 10px; padding: .35rem .6rem; font-size: .9rem; }
-    .banner { border-radius: 12px; padding: .6rem .8rem; margin: .5rem 0; background: var(--panel); border-left: 4px solid var(--warn); }
-    .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: .8rem; }
-    .gallery button { all: unset; display: block; position: relative; cursor: pointer; border-radius: 10px; outline-offset: 2px; }
-    .gallery button:focus-visible { outline: 3px solid var(--gold); }
-    .gallery img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 10px; display: block; }
-    .gallery .cap { position: absolute; left: 4px; right: 4px; bottom: 4px; font-size: .72rem; background: rgba(0,0,0,.72); color: #fff; padding: 2px 6px; border-radius: 6px; }
-    .gallery .cap.bad { background: rgba(160,20,30,.9); }
-    .gallery .cap.warn { background: rgba(150,90,0,.92); }
-    .gallery .cap.good { background: rgba(20,110,70,.9); }
-    .status { min-height: 1.5em; font-weight: 600; }
-    .status.bad { color: var(--bad); }
-    .status.good { color: var(--good); }
-    .status.warn { color: var(--warn); }
-    .more { padding: .8rem 1rem; border-radius: 12px; border: 1px solid var(--muted); background: transparent; color: var(--ink); font-size: 1rem; flex: 1 1 auto; }
-    dialog { width: min(96vw, 640px); border: 0; border-radius: 16px; background: var(--panel); color: var(--ink); padding: 1rem; }
-    dialog::backdrop { background: rgba(0,0,0,.6); }
-    dialog ul { padding-left: 1.1rem; margin: .4rem 0; }
-    dialog li { margin: .25rem 0; }
-    .warnText { color: var(--warn); }
-    .badText { color: var(--bad); }
-    .goodText { color: var(--good); }
-    #sessionLine { margin: .8rem 0 0; }
-    @media (orientation: landscape) and (max-height: 500px) { .shoot { padding: .8rem; margin: .5rem 0; } }
+    /* 3.21: the scanner as an app. Ink and gold (the TCRB colours, so it matches the desktop bot); one bold thing, the
+       refractor shutter ring; rounded figures for money and counts. Light mode follows the phone (or Settings). */
+    :root {
+      color-scheme: dark;
+      --bg: #16171c; --surface: #1f2128; --raised: #2a2d36; --line: #343847; --ink: #f1f1f4; --muted: #9a9eac;
+      --gold: #e2b33c; --gold-ink: #1d1500; --gold-text: #ecc55e;
+      --mint: #3fb37f; --mint-text: #5fd39b; --red: #ef5a5f; --red-text: #ff8085; --amber: #eaa53d; --amber-text: #f2bb63;
+      --num: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, sans-serif;
+      --text: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --tabbar: 62px; --dock: 0px;
+      --sb: env(safe-area-inset-bottom, 0px); --st: env(safe-area-inset-top, 0px);
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        color-scheme: light;
+        --bg: #f1f2f5; --surface: #ffffff; --raised: #e7e9ee; --line: #d7dae2; --ink: #15171c; --muted: #5d6270;
+        --gold-text: #8a6200; --mint-text: #17805a; --red-text: #c22c33; --amber-text: #955600;
+      }
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f1f2f5; --surface: #ffffff; --raised: #e7e9ee; --line: #d7dae2; --ink: #15171c; --muted: #5d6270;
+      --gold-text: #8a6200; --mint-text: #17805a; --red-text: #c22c33; --amber-text: #955600;
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    [hidden] { display: none !important; } /* hidden always wins over a block's own display */
+    html { background: var(--bg); }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 var(--text); -webkit-text-size-adjust: 100%; overscroll-behavior-y: none; }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+    button:disabled { opacity: .5; cursor: default; }
+    :focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+    .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .muted { color: var(--muted); }
+    .num { font-family: var(--num); font-variant-numeric: tabular-nums; }
+
+    .app { max-width: 640px; margin: 0 auto; padding: calc(8px + var(--st)) 16px calc(var(--tabbar) + var(--sb) + var(--dock) + 28px); min-height: 100vh; min-height: 100svh; }
+
+    /* the line at the top: how pictures travel right now */
+    .top { display: flex; align-items: center; gap: 8px; min-height: 48px; }
+    .pill { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; max-width: 100%; padding: 6px 13px 6px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 14px; font-weight: 600; text-align: left; }
+    .pill span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+    .pill[data-state="good"] .dot { background: var(--mint); box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint) 28%, transparent); }
+    .pill[data-state="warn"] .dot { background: var(--amber); }
+    .pill[data-state="bad"] .dot { background: var(--red); }
+    .pill[data-state="busy"] .dot { background: var(--gold); animation: pulse 1.1s ease-in-out infinite; }
+
+    h1.title { font: 700 30px/1.15 var(--num); letter-spacing: -.01em; margin: 6px 0 10px; }
+    h2.sec { font-size: 14px; font-weight: 700; color: var(--muted); margin: 22px 4px 8px; }
+    .panel { animation: fade .16s ease-out; }
+
+    /* notices: the reader is down, nobody is picking up, a page shot twice… */
+    .note { margin: 8px 0; padding: 10px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--amber); font-size: 14.5px; }
+    .note.bad { border-left-color: var(--red); }
+
+    /* ---------------------------------------------------------------- Scan */
+    #tab-scan { display: flex; flex-direction: column; min-height: calc(100svh - var(--tabbar) - var(--sb) - var(--st) - 92px); }
+    .grow { flex: 1; min-height: 12px; }
+    .just { display: grid; grid-template-columns: 78px 1fr; gap: 14px; align-items: center; width: 100%; padding: 10px; border-radius: 20px; border: 1px solid var(--line); background: var(--surface); text-align: left; }
+    .just img { width: 78px; height: 104px; object-fit: cover; border-radius: 11px; display: block; background: var(--raised); }
+    .just .who { font-size: 13px; color: var(--muted); }
+    .just .nm { font-weight: 650; font-size: 16px; line-height: 1.3; margin: 2px 0 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .just .line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .just .val { font: 700 28px/1 var(--num); font-variant-numeric: tabular-nums; margin-right: 2px; }
+    .just.fresh { animation: rise .32s cubic-bezier(.2, .8, .2, 1); }
+    .just.waiting .nm { color: var(--muted); }
+    .guide { padding: 16px; border-radius: 20px; border: 1px dashed var(--line); color: var(--muted); }
+    .guide b { color: var(--ink); }
+    .guide ul { margin: 8px 0 0; padding-left: 18px; }
+
+    .strip { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 12px 2px 4px; }
+    .strip:empty { display: none; }
+    .strip::-webkit-scrollbar { display: none; }
+    .strip button { position: relative; flex: none; width: 58px; height: 77px; padding: 0; border: 0; border-radius: 10px; overflow: hidden; background: var(--raised); }
+    .strip button.replaced img { opacity: .35; filter: grayscale(1); }
+    .strip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .strip .no { position: absolute; top: 3px; left: 3px; padding: 0 5px; border-radius: 6px; background: rgba(12, 12, 16, .72); color: #fff; font: 700 10.5px/1.45 var(--num); }
+    .strip .s { position: absolute; left: 5px; right: 5px; bottom: 5px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .55); }
+    .strip .s.good { background: var(--mint); }
+    .strip .s.warn { background: var(--amber); }
+    .strip .s.bad { background: var(--red); }
+    .strip .s.busy { background: var(--gold); animation: pulse 1.1s ease-in-out infinite; }
+    .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; padding: 4px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); }
+    .seg button { min-height: 40px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-weight: 650; }
+    .seg button[aria-checked="true"], .seg button[aria-selected="true"] { background: var(--raised); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .18); }
+    .modeHint { text-align: center; font-size: 14px; color: var(--muted); margin: 8px 0 0; min-height: 1.45em; }
+
+    .shutterRow { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; margin: 16px 0 6px; }
+    .shutter { position: relative; width: 108px; height: 108px; padding: 0; border: 0; border-radius: 50%; background: none; display: grid; place-items: center; }
+    .halo { position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(from 200deg, #e2b33c, #f6e7a8, #8fdccf, #9fa8f5, #e7a6c8, #e2b33c); -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 7px), #000 calc(100% - 6px)); mask: radial-gradient(farthest-side, transparent calc(100% - 7px), #000 calc(100% - 6px)); }
+    .core { position: relative; width: 82px; height: 82px; border-radius: 50%; background: var(--gold); color: var(--gold-ink); display: grid; place-items: center; align-content: center; font: 750 20px/1 var(--num); transition: transform .12s ease-out; }
+    .core small { display: block; font: 650 12px/1.2 var(--num); margin-top: 3px; }
+    .shutter:active .core { transform: scale(.92); }
+    .shutter.busy .halo { animation: spin 1s linear infinite; }
+    .shutter.busy .core { opacity: .75; }
+    .slot { display: grid; place-items: center; }
+    .aside { min-height: 44px; max-width: 120px; padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 13.5px; font-weight: 650; line-height: 1.2; }
+    .mini { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .mini button, .mini span { min-height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 14px; font-weight: 600; }
+    .mini b { font-family: var(--num); font-variant-numeric: tabular-nums; }
+    .mini .go { border-color: color-mix(in srgb, var(--gold) 55%, var(--line)); color: var(--gold-text); }
+
+    /* ---------------------------------------------------------------- Cards */
+    .sum { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; margin: 0 0 4px; }
+    .sum .big { font: 750 40px/1 var(--num); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+    .sum .sub { color: var(--muted); font-size: 15px; }
+    .tools { display: flex; gap: 8px; margin: 12px 0 8px; }
+    .tools input { flex: 1; min-width: 0; min-height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); outline: none; }
+    .tools input:focus { border-color: var(--gold); }
+    .tools button { min-height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-weight: 650; white-space: nowrap; }
+    .chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px 0 6px; margin: 0 0 6px; }
+    .chips::-webkit-scrollbar { display: none; }
+    .chips button { flex: none; min-height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 14px; font-weight: 650; }
+    .chips button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    .chips .n { font-family: var(--num); font-variant-numeric: tabular-nums; opacity: .7; margin-left: 5px; }
+    .list { display: grid; gap: 8px; }
+    .row { display: grid; grid-template-columns: 50px 1fr auto; gap: 12px; align-items: center; width: 100%; padding: 8px 12px 8px 8px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); text-align: left; }
+    .row img { width: 50px; height: 66px; object-fit: cover; border-radius: 8px; display: block; background: var(--raised); }
+    .row .nm { font-weight: 600; font-size: 15px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .row .meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 5px; font-size: 12.5px; color: var(--muted); }
+    .row .val { font: 700 17px var(--num); font-variant-numeric: tabular-nums; text-align: right; }
+    .grade { padding: 0 6px; border-radius: 5px; border: 1.5px solid var(--ink); font: 750 11.5px/1.55 var(--num); color: var(--ink); letter-spacing: .01em; }
+    .st { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; background: var(--raised); color: var(--muted); }
+    .st.ready { background: color-mix(in srgb, var(--gold) 22%, transparent); color: var(--gold-text); }
+    .st.added { background: color-mix(in srgb, var(--mint) 20%, transparent); color: var(--mint-text); }
+    .st.check, .st.retake, .st.have { background: color-mix(in srgb, var(--amber) 20%, transparent); color: var(--amber-text); }
+    .st.error { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red-text); }
+    .empty { padding: 26px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 16px; }
+    .empty b { color: var(--ink); display: block; margin-bottom: 4px; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
+    .tile { position: relative; padding: 0; border: 0; border-radius: 12px; overflow: hidden; background: var(--raised); aspect-ratio: 3 / 4; display: block; width: 100%; }
+    .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .tile .no { position: absolute; top: 6px; left: 6px; padding: 2px 7px; border-radius: 8px; background: rgba(12, 12, 16, .72); color: #fff; font: 700 12px/1.4 var(--num); }
+    .tile .tag { position: absolute; left: 6px; right: 6px; bottom: 6px; padding: 3px 7px; border-radius: 8px; background: rgba(12, 12, 16, .8); color: #fff; font-size: 11.5px; font-weight: 700; text-align: left; line-height: 1.3; }
+    .tile .tag.good { background: rgba(24, 118, 78, .94); }
+    .tile .tag.warn { background: rgba(156, 96, 0, .95); }
+    .tile .tag.bad { background: rgba(168, 30, 40, .95); }
+    .tile .bar { position: absolute; left: 0; top: 0; height: 4px; width: calc(var(--p, 0) * 100%); background: var(--gold); transition: width .2s; }
+    .tile.replaced img { opacity: .35; filter: grayscale(1); }
+
+    .dock { position: fixed; left: 0; right: 0; bottom: calc(var(--tabbar) + var(--sb)); z-index: 15; padding: 10px 16px 12px; background: color-mix(in srgb, var(--bg) 90%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border-top: 1px solid var(--line); animation: rise .2s ease-out; }
+    .dock .in { max-width: 608px; margin: 0 auto; display: grid; gap: 8px; }
+    .paid { display: flex; align-items: center; gap: 10px; }
+    .paid label { display: flex; align-items: center; gap: 6px; flex: 0 1 190px; min-height: 44px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; }
+    .paid input { flex: 1; min-width: 0; min-height: 40px; border: 0; background: transparent; outline: none; font-family: var(--num); font-variant-numeric: tabular-nums; }
+    .paid .est { flex: 1; font-size: 13px; color: var(--muted); line-height: 1.3; }
+    .addBtn { min-height: 54px; border: 0; border-radius: 16px; background: var(--mint); color: #fff; font: 750 17px var(--num); }
+    .dock .fine { font-size: 12.5px; color: var(--muted); margin: 0; }
+
+    /* ---------------------------------------------------------------- History & Settings */
+    .box { padding: 14px; border-radius: 18px; background: var(--surface); border: 1px solid var(--line); }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+    .stat { padding: 10px; border-radius: 12px; background: var(--raised); font-size: 12.5px; color: var(--muted); }
+    .stat b { display: block; font: 750 21px/1.15 var(--num); font-variant-numeric: tabular-nums; color: var(--ink); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn { flex: 1 1 140px; min-height: 46px; padding: 0 14px; border-radius: 13px; border: 1px solid var(--line); background: var(--raised); font-weight: 650; }
+    .btn.gold { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); }
+    .btn.danger { color: var(--red-text); }
+    .top3 { display: grid; gap: 6px; margin-top: 10px; }
+    .top3 div { display: flex; justify-content: space-between; gap: 10px; font-size: 14.5px; }
+    .top3 b { font-family: var(--num); font-variant-numeric: tabular-nums; }
+    details.past { border-radius: 14px; background: var(--surface); border: 1px solid var(--line); margin: 8px 0; }
+    details.past summary { list-style: none; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px 14px; cursor: pointer; }
+    details.past summary::-webkit-details-marker { display: none; }
+    details.past summary .v { font: 700 17px var(--num); font-variant-numeric: tabular-nums; text-align: right; }
+    details.past summary small { color: var(--muted); grid-column: 1 / -1; }
+    details.past ul { margin: 0; padding: 0 14px 12px 30px; font-size: 14px; }
+    details.past li { margin: 4px 0; }
+    .group { border-radius: 16px; background: var(--surface); border: 1px solid var(--line); overflow: hidden; }
+    .item { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px 14px; border-top: 1px solid var(--line); }
+    .item:first-child { border-top: 0; }
+    .item .txt { flex: 1; min-width: 0; }
+    .item small { display: block; color: var(--muted); font-size: 13px; line-height: 1.35; }
+    .item .seg { flex: none; }
+    .item .seg button { min-height: 34px; padding: 0 10px; font-size: 14px; }
+    button.item { width: 100%; border-left: 0; border-right: 0; border-bottom: 0; background: none; text-align: left; }
+    .group > .item:first-child, .group > details:first-child > .item { border-top: 0; }
+    .switch { -webkit-appearance: none; appearance: none; flex: none; width: 51px; height: 31px; margin: 0; border-radius: 16px; background: var(--raised); border: 1px solid var(--line); position: relative; cursor: pointer; transition: background .2s; }
+    .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 25px; height: 25px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform .2s; }
+    .switch:checked { background: var(--mint); border-color: var(--mint); }
+    .switch:checked::after { transform: translateX(20px); }
+    .tips { padding: 4px 14px 12px; font-size: 14.5px; }
+    .tips li { margin: 6px 0; }
+
+    /* ---------------------------------------------------------------- the bar at the bottom, the message, the sheets */
+    .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; padding: 4px 8px calc(4px + var(--sb)); background: color-mix(in srgb, var(--surface) 90%, transparent); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border-top: 1px solid var(--line); }
+    .tabbar .in { max-width: 640px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); }
+    .tabbar button { position: relative; display: grid; justify-items: center; align-content: center; gap: 1px; min-height: 54px; border: 0; border-radius: 12px; background: none; color: var(--muted); font-size: 11.5px; font-weight: 650; }
+    .tabbar button[aria-selected="true"] { color: var(--gold-text); }
+    .tabbar svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .badge { position: absolute; top: 3px; left: calc(50% + 7px); min-width: 19px; height: 19px; padding: 0 5px; border-radius: 10px; background: var(--gold); color: var(--gold-ink); font: 750 11.5px/19px var(--num); text-align: center; }
+    .badge.alert { min-width: 10px; width: 10px; height: 10px; padding: 0; top: 8px; left: calc(50% + 9px); background: var(--red); }
+
+    .toast { position: fixed; left: 50%; bottom: calc(var(--tabbar) + var(--sb) + var(--dock) + 12px); z-index: 30; width: min(560px, calc(100% - 24px)); transform: translate(-50%, 10px); padding: 12px 14px; border-radius: 14px; background: var(--raised); border: 1px solid var(--line); border-left: 4px solid var(--muted); box-shadow: 0 12px 32px rgba(0, 0, 0, .3); font-size: 15px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; }
+    .toast.on { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+    .toast.good { border-left-color: var(--mint); }
+    .toast.warn { border-left-color: var(--amber); }
+    .toast.bad { border-left-color: var(--red); }
+
+    dialog.sheet { width: 100%; max-width: 640px; max-height: 90vh; max-height: 90svh; margin: auto auto 0; padding: 0; border: 0; border-radius: 22px 22px 0 0; background: var(--surface); color: var(--ink); box-shadow: 0 -12px 40px rgba(0, 0, 0, .4); }
+    dialog.sheet[open] { animation: up .26s cubic-bezier(.2, .8, .2, 1); }
+    dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); }
+    .grab { display: block; width: 40px; height: 5px; margin: 8px auto 2px; border-radius: 3px; background: var(--line); }
+    .sheet .body { padding: 6px 18px calc(18px + var(--sb)); overflow-y: auto; max-height: calc(90svh - 16px); }
+    .sheet h2 { font: 700 21px/1.25 var(--num); margin: 4px 0 10px; }
+    .sheet .acts { position: sticky; bottom: calc(-18px - var(--sb)); margin: 14px -18px 0; padding: 12px 18px calc(18px + var(--sb)); background: var(--surface); border-top: 1px solid var(--line); }
+    .sheet .pic { width: 100%; max-height: 30vh; object-fit: contain; border-radius: 12px; background: var(--raised); display: block; }
+    .sheet ol.steps { padding-left: 22px; }
+    .sheet ol.steps li { margin: 10px 0; }
+    .cardLine { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+    .cardLine .nm { font-weight: 600; }
+    .cardLine .val { font: 700 17px var(--num); font-variant-numeric: tabular-nums; text-align: right; }
+    .cardLine .meta { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--muted); }
+    .cardLine .why { grid-column: 1 / -1; font-size: 13.5px; color: var(--amber-text); }
+    .copy { min-height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); font-size: 12.5px; font-weight: 650; }
+    textarea.share { width: 100%; min-height: 220px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); padding: 10px; font: 14px/1.4 var(--text); }
+
+    @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    @keyframes up { from { transform: translateY(40%); opacity: .4; } to { transform: none; opacity: 1; } }
+    @keyframes spin { to { transform: rotate(1turn); } }
+    @keyframes pulse { 50% { opacity: .35; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+    @media (orientation: landscape) and (max-height: 520px) {
+      #tab-scan { min-height: 0; }
+      .shutterRow { margin: 8px 0; }
+      .just img { width: 60px; height: 80px; }
+    }
   </style>
 </head>
 <body>
-  <h1>📷 Card Bot camera</h1>
-  <div class="banner homeHint" id="homeHint" hidden></div>
-  <p class="muted">Each picture goes to the computer and is read there; what it found shows up here in a few seconds, so a card that needs a retake can be retaken while it's still on the table. Cards on a dark background, phone straight down, good light, no glare.</p>
-  <label class="check"><input type="checkbox" id="both" /> <span><b>Front + back</b>: take the front, then flip the card — or the whole page, like turning a book page — and take the back</span></label>
-  <button class="shoot" id="shoot">📸 Take a picture</button>
-  <button class="more" id="noBackBtn" hidden style="width:100%;margin-bottom:.5rem">⏭ No back for this one (a slab) — next card</button>
+  <div class="app">
+    <header class="top">
+      <button class="pill" id="pill" type="button" aria-label="Connection — open settings"><span class="dot"></span><span id="pillText">Connecting…</span></button>
+    </header>
+
+    <main>
+      <!-- Scan: the shutter, what was just read, front + back or one side -->
+      <section class="panel" id="tab-scan" role="tabpanel" aria-labelledby="t-scan">
+        <h1 class="sr">Scan cards</h1>
+        <div id="notesScan"></div>
+        <div id="just"></div>
+        <div class="strip" id="strip" aria-label="Recent pictures"></div>
+        <div class="grow"></div>
+        <div class="seg" id="modeSeg" role="radiogroup" aria-label="Pictures per card">
+          <button type="button" role="radio" data-mode="both">Front + back</button>
+          <button type="button" role="radio" data-mode="one">One side</button>
+        </div>
+        <p class="modeHint" id="modeHint"></p>
+        <div class="shutterRow">
+          <div class="slot"><button class="aside" id="undoBtn" type="button" hidden>Undo</button></div>
+          <button class="shutter" id="shoot" type="button" aria-label="Take a picture"><span class="halo"></span><span class="core" id="shootLbl">#1</span></button>
+          <div class="slot"><button class="aside" id="noBackBtn" type="button" hidden>No back</button></div>
+        </div>
+        <div class="mini" id="mini"></div>
+      </section>
+
+      <!-- Cards: every card read, with its value and what happens to it next -->
+      <section class="panel" id="tab-cards" role="tabpanel" aria-labelledby="t-cards" hidden>
+        <h1 class="title">Cards</h1>
+        <div class="sum" id="sum" aria-live="polite"></div>
+        <div id="notesCards"></div>
+        <div class="seg" id="viewSeg" role="tablist" aria-label="Show" style="margin-top:12px">
+          <button type="button" role="tab" data-view="cards">Cards</button>
+          <button type="button" role="tab" data-view="pictures">Pictures</button>
+        </div>
+        <div id="cardsView">
+          <div class="tools">
+            <input type="search" id="q" placeholder="Search cards" aria-label="Search cards" autocomplete="off" enterkeyhint="search" />
+            <button type="button" id="sortBtn" aria-label="Sort"></button>
+          </div>
+          <div class="chips" id="chips" role="group" aria-label="Show cards that are"></div>
+          <div class="list" id="cardList"></div>
+        </div>
+        <div class="grid" id="picGrid" hidden></div>
+      </section>
+
+      <!-- History: this session, and the ones before it on this phone -->
+      <section class="panel" id="tab-history" role="tabpanel" aria-labelledby="t-history" hidden>
+        <h1 class="title">History</h1>
+        <div id="nowBox"></div>
+        <h2 class="sec" id="pastHead" hidden>Earlier on this phone</h2>
+        <div id="past"></div>
+      </section>
+
+      <!-- Settings -->
+      <section class="panel" id="tab-settings" role="tabpanel" aria-labelledby="t-settings" hidden>
+        <h1 class="title">Settings</h1>
+        <h2 class="sec">Taking pictures</h2>
+        <div class="group">
+          <div class="item"><div class="txt">Pictures per card<small>Front + back reads the number, year and set off the back. One side for slabs.</small></div>
+            <div class="seg" id="modeSeg2" role="radiogroup" aria-label="Pictures per card"><button type="button" role="radio" data-mode="both">2</button><button type="button" role="radio" data-mode="one">1</button></div></div>
+          <label class="item"><span class="txt">Sound when a picture is read<small>A low tone if it can't be, a chime when cards go into inventory.</small></span><input type="checkbox" role="switch" class="switch" id="sound" /></label>
+          <label class="item"><span class="txt">Keep the screen on while scanning<small>The phone doesn't lock in the middle of a binder.</small></span><input type="checkbox" role="switch" class="switch" id="awake" /></label>
+          <button type="button" class="item" id="pickBtn"><span class="txt">Send pictures already on the phone<small>From your photo library, several at once.</small></span></button>
+        </div>
+        <h2 class="sec">Connection</h2>
+        <div class="group">
+          <div class="item"><div class="txt" id="connText"></div></div>
+          <div class="item" id="queueItem"><div class="txt" id="queueText"></div><button type="button" class="btn" id="sendNow" style="flex:none">Send now</button></div>
+        </div>
+        <h2 class="sec">Look</h2>
+        <div class="group">
+          <div class="item"><div class="txt">Theme</div>
+            <div class="seg" id="themeSeg" role="radiogroup" aria-label="Theme"><button type="button" role="radio" data-theme="auto">Auto</button><button type="button" role="radio" data-theme="dark">Dark</button><button type="button" role="radio" data-theme="light">Light</button></div></div>
+        </div>
+        <h2 class="sec">Help</h2>
+        <div class="group">
+          <details><summary class="item" style="list-style:none;cursor:pointer"><span class="txt">Getting a good picture</span></summary>
+            <ul class="tips">
+              <li>Lay cards on something dark and plain, with a little space between them.</li>
+              <li>Hold the phone straight above, close enough that the cards fill the picture.</li>
+              <li>Even light, no glare: tilt away from a lamp or window if the gloss shines.</li>
+              <li>A binder page or 8–12 cards at once works. Shoot the back by flipping the whole page.</li>
+              <li>Slabs: switch to One side, or tap No back after the front.</li>
+            </ul></details>
+          <button type="button" class="item" id="welcomeBtn"><span class="txt">How the scanner works</span></button>
+          <div class="item"><div class="txt" id="aboutText"></div></div>
+        </div>
+        <h2 class="sec">This phone</h2>
+        <div class="group">
+          <button type="button" class="item" id="newBtn"><span class="txt">Start a new session<small>Clears this phone's list (it moves to History). Inventory, the website and the computer's list don't change.</small></span></button>
+          <button type="button" class="item" id="forgetBtn"><span class="txt">Forget past sessions<small>Only the History list on this phone.</small></span></button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="dock" id="addBar" hidden>
+    <div class="in">
+      <div class="paid">
+        <label for="paid">Paid $<input id="paid" type="number" inputmode="decimal" min="0" step="0.01" placeholder="optional" /></label>
+        <span class="est" id="est"></span>
+      </div>
+      <button type="button" class="addBtn" id="addBtn">＋ Add to inventory</button>
+      <p class="fine" id="addNote"></p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <nav class="tabbar" aria-label="Scanner">
+    <div class="in" role="tablist">
+      <button type="button" role="tab" id="t-scan" data-tab="scan" aria-controls="tab-scan"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5h3l1.8-2.5h6.4L17 8.5h3V19H4z" /><circle cx="12" cy="13.2" r="3.4" /></svg>Scan</button>
+      <button type="button" role="tab" id="t-cards" data-tab="cards" aria-controls="tab-cards"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="11" height="15" rx="2" /><path d="M5.5 6.5V19a2 2 0 0 0 2 2H16" /></svg>Cards<span class="badge" id="cardsBadge" hidden></span></button>
+      <button type="button" role="tab" id="t-history" data-tab="history" aria-controls="tab-history"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></svg>History</button>
+      <button type="button" role="tab" id="t-settings" data-tab="settings" aria-controls="tab-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>Settings</button>
+    </div>
+  </nav>
+
+  <dialog class="sheet" id="detail" aria-labelledby="detailTitle"><span class="grab" aria-hidden="true"></span><div class="body"><h2 id="detailTitle"></h2><div id="detailBody"></div></div></dialog>
+  <dialog class="sheet" id="welcome" aria-labelledby="welcomeTitle"><span class="grab" aria-hidden="true"></span><div class="body" id="welcomeBody"></div></dialog>
+  <dialog class="sheet" id="shareSheet" aria-labelledby="shareTitle"><span class="grab" aria-hidden="true"></span><div class="body"><h2 id="shareTitle">Copy this session</h2><textarea class="share" id="shareText" readonly></textarea><div class="actions" style="margin-top:10px"><button type="button" class="btn" id="shareClose">Done</button></div></div></dialog>
+
   <input type="file" id="cam" accept="image/*" capture="environment" hidden />
   <input type="file" id="pick" accept="image/*" multiple hidden />
-  <div class="status" id="status" role="status" aria-live="polite"></div>
-  <div id="banner"></div>
-  <div class="totals" id="totals" aria-live="polite"></div>
-  <div class="addBar" id="addBar" hidden>
-    <button class="shoot" id="addBtn" type="button">＋ Add to inventory</button>
-    <label>Paid for these $ <input id="paid" type="number" inputmode="decimal" min="0" step="0.01" placeholder="optional — split by value" /></label>
-    <p class="muted" id="addNote"></p>
-  </div>
-  <div class="row">
-    <button class="more" id="pickBtn">🖼 Send pictures already on the phone</button>
-    <button class="more" id="undoBtn" hidden>↩ Undo last</button>
-  </div>
-  <div class="row" style="margin-top:.5rem">
-    <label class="check" style="flex:1"><input type="checkbox" id="sound" /> <span>🔔 A sound when a picture is read (a low one if it can't be)</span></label>
-    <button class="more" id="newBtn" style="flex:0 0 auto" title="Clears this phone's list only — inventory, the website and the computer's list don't change">🆕 New session</button>
-  </div>
-  <p class="muted" id="sessionLine" aria-live="polite"></p>
-  <p class="muted" style="margin:0">New session clears this phone's list only. Cards go into inventory only when you press ＋ Add (here or on a computer); the website changes only from a computer.</p>
-  <div class="gallery" id="gallery" aria-label="Pictures sent"></div>
-  <dialog id="detail" aria-labelledby="detailTitle"><h2 id="detailTitle" style="margin:0 0 .4rem;font-size:1.1rem"></h2><div id="detailBody"></div><div class="row" style="margin-top:.6rem"><button class="more" id="detailClose">Close</button></div></dialog>
   <script src="phone.js"></script>
 </body>
 </html>

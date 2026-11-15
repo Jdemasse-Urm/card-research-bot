@@ -150,7 +150,7 @@ test("Home Screen icon (11/15): the QR code lands on an address that signs the i
   // the icon, opened with none of Safari's cookies: the camera page, and a scanner-only sign-in
   const icon = await lan(home1);
   assert.equal(icon.status, 200);
-  assert.match(icon.text, /Card Bot camera/);
+  assert.match(icon.text, /<title>Card Scanner<\/title>/);
   assert.match(icon.text, /apple-mobile-web-app-capable/);
   assert.doesNotMatch(icon.text, /rel="manifest"/, "a manifest would send the icon to the whole bot");
   const scan = icon.cookie;

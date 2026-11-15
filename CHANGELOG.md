@@ -28,6 +28,10 @@ pictures straight to one computer, so it only worked on the same Wi-Fi as that c
   - The link only sends pictures, shows what was read and adds cards. It can't open costs, customers, settings or the
     website.
 - The bot puts its own phone page on the store (the newest bot's version), so there's never a second copy to keep up.
+- **The app keeps full speed when its window is closed to the tray.** That's where it is when you're on the road. Before,
+  a hidden window slowed to about one check a minute, so phone pictures would have waited a minute or two each.
+- **Fixed (3.19.1): "Got it" on the phone's Home Screen tip didn't hide it,** and opening the scanner from the icon showed
+  an empty box.
 
 ## 3.19.1 — the phone scanner on your Home Screen
 

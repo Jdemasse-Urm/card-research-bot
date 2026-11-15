@@ -59,7 +59,10 @@ function createWindow() {
     backgroundColor: "#141416",
     show: false,
     autoHideMenuBar: true,
-    webPreferences: { preload: path.join(here, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: true },
+    // backgroundThrottling off (3.20): this page reads the phone's pictures and adds its cards while the window sits in
+    // the tray. Throttled, a hidden page's timers drop to about once a minute after 5 minutes, so every picture from the
+    // road would wait a minute or two and the phone would say no computer is picking up.
+    webPreferences: { preload: path.join(here, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: true, backgroundThrottling: false },
   });
   win.once("ready-to-show", () => {
     if (b.maximized) win.maximize();

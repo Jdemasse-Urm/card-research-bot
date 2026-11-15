@@ -43,9 +43,9 @@ test("a picture of only a card's back is recognised (11/5: a slab's back was rea
 
 const kids = [];
 after(() => kids.forEach((k) => k.kill()));
-async function startBot(home) {
+async function startBot(home, env = {}) {
   const port = 43000 + Math.floor(Math.random() * 2000);
-  const child = spawn(process.execPath, ["server.js"], { cwd: root, env: { ...process.env, CARD_BOT_HOME: home, PORT: String(port), NO_BROWSER: "1", GEMINI_API_KEY: "", SHARE_ON_NETWORK: "0", MJC_API_URL: "" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["server.js"], { cwd: root, env: { ...process.env, CARD_BOT_HOME: home, PORT: String(port), NO_BROWSER: "1", GEMINI_API_KEY: "", SHARE_ON_NETWORK: "0", MJC_API_URL: "", ...env }, stdio: ["ignore", "pipe", "pipe"] });
   kids.push(child);
   let out = "";
   child.stdout.on("data", (d) => (out += d));
@@ -67,7 +67,10 @@ async function startBot(home) {
     return { status: r.status, body: j, text };
   };
   const stop = () => new Promise((r) => (child.once("exit", r), child.kill()));
-  return { call, stop };
+  // the home-network address (the same startup lines; read once they're all in)
+  await new Promise((r) => setTimeout(r, 200));
+  const lan = out.match(/home network \(PIN required\): (http:\/\/[\d.]+:\d+)/)?.[1] || null;
+  return { call, stop, lan };
 }
 const inbox = (home, ...p) => path.join(home, "data", "scan-inbox", ...p);
 
@@ -124,5 +127,53 @@ test("the phone sees which pictures' cards went into inventory, across sessions 
   const p = (await bot.call("GET", "/api/scan/phone-status?session=new")).body.pictures["phone-new-0001-s.jpg"];
   assert.equal(p.stage, "added");
   assert.deepEqual(p.skus, ["CRB-0007", "CRB-0008"]);
+  await bot.stop();
+});
+
+test("Home Screen icon (11/15): the QR code lands on an address that signs the icon in by itself — the scanner only, until the PIN changes", { timeout: 60000 }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tcrb-scanner-home-"));
+  let bot = await startBot(home, { SHARE_ON_NETWORK: "1", ACCESS_PIN: "4321" });
+  if (!bot.lan) return bot.stop(); // no network adapter on this machine: nothing to sign in from
+  const lan = async (url, { cookie = "", method = "GET", body, type } = {}) => {
+    const r = await fetch(bot.lan + url, { method, redirect: "manual", headers: { ...(cookie ? { cookie } : {}), ...(type ? { "content-type": type } : {}) }, body });
+    return { status: r.status, location: r.headers.get("location"), cookie: (r.headers.get("set-cookie") || "").split(";")[0], text: await r.text() };
+  };
+  const k = new URL((await bot.call("GET", "/api/scan/phone-link")).body.url).searchParams.get("k");
+
+  // the QR code: signs this browser in fully (as before) and moves on to the address the Home Screen keeps
+  const qr = await lan(`/phone?k=${k}`);
+  assert.equal(qr.status, 302);
+  assert.match(qr.cookie, /^cardbot_pin=/);
+  const home1 = qr.location;
+  assert.match(home1, /^\/phone\?s=[0-9a-f]{32}$/);
+
+  // the icon, opened with none of Safari's cookies: the camera page, and a scanner-only sign-in
+  const icon = await lan(home1);
+  assert.equal(icon.status, 200);
+  assert.match(icon.text, /Card Bot camera/);
+  assert.match(icon.text, /apple-mobile-web-app-capable/);
+  assert.doesNotMatch(icon.text, /rel="manifest"/, "a manifest would send the icon to the whole bot");
+  const scan = icon.cookie;
+  assert.match(scan, /^cardbot_scan=/);
+  assert.equal((await lan("/phone.js", { cookie: scan })).status, 200);
+  const sent = await lan("/api/scan/inbox?name=phone-h1-0001-s", { cookie: scan, method: "POST", body: JPEG, type: "image/jpeg" });
+  assert.equal(sent.status, 200, sent.text);
+  assert.equal((await lan("/api/scan/phone-status?session=h1", { cookie: scan })).status, 200);
+  assert.equal((await lan("/api/scan/inbox/phone-h1-0001-s.jpg", { cookie: scan, method: "DELETE" })).status, 200, "undo");
+  // …and nothing else: no inventory, customers, settings, or the computer's own scan list
+  for (const url of ["/api/inventory", "/api/customers", "/api/status", "/api/scan/inbox"]) assert.equal((await lan(url, { cookie: scan })).status, 401, url);
+  assert.match((await lan("/", { cookie: scan })).text, /PIN/i, "the bot itself still asks for the PIN");
+
+  // a phone already signed in, on the old address or a used-up code: straight on to the Home Screen address
+  assert.equal((await lan("/phone", { cookie: scan })).location, home1);
+  assert.equal((await lan("/phone?k=used-up", { cookie: qr.cookie })).location, home1);
+  // a wrong key, no key, or a key that isn't even hex: "this link no longer works", never a crash
+  for (const url of ["/phone", "/phone?k=nope", `/phone?s=${"0".repeat(32)}`, `/phone?s=${"é".repeat(32)}`]) assert.equal((await lan(url)).status, 403, url);
+
+  // a new PIN retires every icon and its sign-in
+  await bot.stop();
+  bot = await startBot(home, { SHARE_ON_NETWORK: "1", ACCESS_PIN: "9999" });
+  assert.equal((await lan(home1)).status, 403);
+  assert.equal((await lan("/api/scan/phone-status?session=h1", { cookie: scan })).status, 401);
   await bot.stop();
 });

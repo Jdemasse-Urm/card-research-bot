@@ -4,13 +4,23 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Card Bot camera</title>
-  <meta name="theme-color" content="#141416" />
+  <meta name="theme-color" content="#141416" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f6f6f7" media="(prefers-color-scheme: light)" />
+  <!-- Home Screen: opens full screen as "Card Scanner". No manifest on purpose: without one the icon keeps this page's
+       own address (/phone?s=…, which signs the icon in); the main app's manifest would open the whole bot instead. -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Card Scanner" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <style>
     :root { --bg: #141416; --panel: #1d1d21; --ink: #f2f2f4; --muted: #a0a0aa; --gold: #e2b33c; --good: #3fb37f; --bad: #e5484d; --warn: #e8a33c; }
     @media (prefers-color-scheme: light) { :root { --bg: #f6f6f7; --panel: #fff; --ink: #18181b; --muted: #61616b; --warn: #a35f00; } }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); max-width: 760px; margin-inline: auto; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; padding-top: calc(16px + env(safe-area-inset-top)); padding-bottom: calc(16px + env(safe-area-inset-bottom)); max-width: 760px; margin-inline: auto; }
+    .homeHint { border-left-color: var(--gold); display: flex; gap: .6rem; align-items: flex-start; }
+    .homeHint p { margin: 0; flex: 1; }
+    .homeHint button { flex: none; padding: .4rem .7rem; border-radius: 10px; border: 1px solid var(--muted); background: transparent; color: var(--ink); font-size: .9rem; }
     h1 { font-size: 1.25rem; margin: 0 0 .3rem; }
     p { margin: .3rem 0; }
     .muted { color: var(--muted); font-size: .9rem; }
@@ -48,6 +58,7 @@
 </head>
 <body>
   <h1>📷 Card Bot camera</h1>
+  <div class="banner homeHint" id="homeHint" hidden></div>
   <p class="muted">Each picture goes to the computer and is read there; what it found shows up here in a few seconds, so a card that needs a retake can be retaken while it's still on the table. Cards on a dark background, phone straight down, good light, no glare.</p>
   <label class="check"><input type="checkbox" id="both" /> <span><b>Front + back</b>: take the front, then flip the card — or the whole page, like turning a book page — and take the back</span></label>
   <button class="shoot" id="shoot">📸 Take a picture</button>

@@ -1,7 +1,21 @@
 # Changelog
 
-## 3.19.1 (not released yet)
+## 3.19.1 — the phone scanner on your Home Screen
 
+- **The phone scanner can go on the iPhone's Home Screen, so it opens without a QR code.** Scan the code once, then
+  tap Share (on newer iPhones it's under ⋯) → Add to Home Screen. The **Card Scanner** icon opens the camera straight
+  away whenever the phone is on the same Wi-Fi as the computer. The phone page says how the first time, and so does
+  the computer's 📱 Phone window.
+  - Why the code was needed every time: an app on the Home Screen keeps its own sign-in, apart from Safari's, so the
+    sign-in the code gave Safari didn't carry over. Now the code lands on an address that signs the icon in by itself
+    (`/phone?s=…`). A phone already on the old address (`/phone.html`) moves to the new one by itself.
+  - That address only opens the camera page: it sends pictures, shows what was read, and can undo a picture. It can't
+    open inventory, customers, costs or settings (those still ask for the PIN). It comes from the PIN, so changing the
+    PIN retires every icon; scan the new code and add the icon again.
+  - The icon goes to the computer's Wi-Fi address, which the 📱 Phone window shows. If the router ever gives the
+    computer a new address, scan the code again and add the icon again.
+  - Opening a used-up code on a phone that's already signed in now opens the scanner instead of "This code has
+    expired".
 - **A new Google key on the free plan gets the right explanation for Google Search.** On 11/12, a freshly made key's
   project was on Google's free plan. Search was refused on the main model, and the free plan's older search model
   answered "no longer available to new users". The self test said "The model gemini-3.8-flash wasn't found for this

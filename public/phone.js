@@ -5,6 +5,9 @@
 // Names tell the computer how pictures go together: phone-<session>-<n>-a (front), -b (back), -s (one picture).
 // This page only ever adds pictures to the computer's scan. It never adds, changes or removes inventory: that is
 // "＋ Add to inventory" on the computer.
+// A phone still on the old address (/phone.html, before 3.19.1) moves to /phone?s=…, the one that can go on the Home
+// Screen (the computer itself, testing on localhost, stays put).
+if (location.pathname === "/phone.html" && !/^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/.test(location.hostname)) location.replace("/phone");
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const usd = (v) => (v == null ? "—" : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: v < 100 ? 2 : 0, maximumFractionDigits: v < 100 ? 2 : 0 })}`);
@@ -465,6 +468,17 @@ function openDetail(p) {
 {
   const last = Math.max(0, ...pics.map((p) => p.at || 0));
   if (pics.length && Date.now() - last > SESSION_GAP) startSession(`New session — the last pictures were taken ${when(last)}. Their cards are on the computer (Inventory → Bulk scan or your inventory); nothing was removed.`);
+}
+// In the browser (not yet from a Home Screen icon): say once how to put the scanner there, so next time is one tap.
+{
+  const homeApp = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+  const hint = $("#homeHint");
+  if (!homeApp && location.pathname === "/phone" && !ls.get("phoneHomeHintDone", false)) {
+    const apple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    hint.innerHTML = `<p>📲 <b>Put the scanner on your Home Screen</b>, so next time it's one tap and no QR code: ${apple ? "tap <b>Share</b> (on newer iPhones it's under <b>⋯</b>), then <b>Add to Home Screen</b> → <b>Add</b>" : "open the browser menu <b>⋮</b>, then <b>Add to Home screen</b>"}. It works whenever the phone is on the same Wi-Fi as the computer.</p><button type="button" id="homeHintOk">Got it</button>`;
+    hint.hidden = false;
+    $("#homeHintOk").onclick = () => { ls.set("phoneHomeHintDone", true); hint.hidden = true; };
+  }
 }
 draw();
 pump();

@@ -123,21 +123,39 @@ app.post("/api/login", (req, res) => {
   res.json({ ok: true, helper: Boolean(helper) });
 });
 
-// Phone as a scanner: Bulk scan shows a QR code holding a short-lived key; opening it on a phone signs that
-// phone in (the same cookie the PIN gives) and opens the phone camera page. Keys last 15 minutes.
+// Phone as a scanner: Bulk scan shows a QR code holding a short-lived key (15 minutes). Opening it signs the phone in
+// (the same cookie the PIN gives) and lands on /phone?s=<scanner key>: the address an iPhone saves with "Add to Home
+// Screen". A home-screen app keeps its own cookies, apart from Safari's, so that address has to sign it in by itself.
+// The scanner key only opens the camera page and lets it send pictures and see what was found: no inventory, customers,
+// costs or settings. It comes from the PIN, so changing the PIN retires every saved icon (and every QR sign-in).
 const phoneKeys = new Map(); // key -> expiry (ms)
+const SCAN_COOKIE = "cardbot_scan";
+const scannerToken = () => crypto.createHash("sha256").update("cardbot-scanner:" + (process.env.ACCESS_PIN || "")).digest("hex").slice(0, 32);
+const isScanner = (req) => SHARE && (req.headers.cookie || "").split(/;\s*/).includes(`${SCAN_COOKIE}=${scannerToken()}`);
+const SCANNER_ONLY = [/^GET \/phone\.(html|js)$/, /^GET \/api\/scan\/phone-status$/, /^POST \/api\/scan\/inbox$/, /^POST \/api\/scan\/inbox\/[^/]+\/single$/, /^DELETE \/api\/scan\/inbox\/[^/]+$/];
+const PHONE_GONE = "<!doctype html><meta name=viewport content='width=device-width'><p style='font:18px system-ui;padding:24px'>This link no longer works: the code expired, or the PIN was changed. On the computer, open Inventory → Bulk scan → 📱 Phone and scan the new code (then add it to your Home Screen again).</p>";
 app.get("/phone", (req, res) => {
-  const k = String(req.query.k || "");
-  const until = phoneKeys.get(k);
   for (const [key, t] of phoneKeys) if (t < Date.now()) phoneKeys.delete(key);
-  if (!SHARE || !until || until < Date.now()) return res.status(403).send("<!doctype html><meta name=viewport content='width=device-width'><p style='font:18px system-ui;padding:24px'>This code has expired — on the computer, open Inventory → Bulk scan → 📱 Phone and scan the new code.</p>");
-  res.setHeader("Set-Cookie", `${PIN_COOKIE}=${pinToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`);
-  res.redirect("/phone.html");
+  if (!SHARE) return res.status(403).send(PHONE_GONE);
+  const k = String(req.query.k || ""), s = String(req.query.s || "");
+  const fresh = phoneKeys.get(k) > Date.now();
+  if (s) {
+    const given = Buffer.from(s), want = Buffer.from(scannerToken());
+    if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return res.status(403).send(PHONE_GONE);
+    res.setHeader("Set-Cookie", `${SCAN_COOKIE}=${scannerToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`);
+    res.setHeader("Cache-Control", "no-store");
+    return res.sendFile(path.join(here, "public", "phone.html"));
+  }
+  // a fresh code, or a phone already signed in: on to the address that can go on the Home Screen
+  if (!fresh && !hasPinCookie(req) && !isScanner(req)) return res.status(403).send(PHONE_GONE);
+  if (fresh) res.setHeader("Set-Cookie", `${PIN_COOKIE}=${pinToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`);
+  res.redirect(`/phone?s=${scannerToken()}`);
 });
 
 const PUBLIC_WITHOUT_PIN = new Set(["/pin.js", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/apple-touch-icon.png"]);
 app.use((req, res, next) => {
   if (isLoopback(req.socket.remoteAddress) || hasPinCookie(req) || PUBLIC_WITHOUT_PIN.has(req.path)) return next();
+  if (isScanner(req) && SCANNER_ONLY.some((re) => re.test(`${req.method} ${req.path}`))) return next();
   if (isHelper(req)) {
     req.helper = true;
     if (!req.path.startsWith("/api/") || HELPER_API.some((re) => re.test(`${req.method} ${req.path}`))) return next();

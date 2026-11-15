@@ -1147,7 +1147,8 @@ async function openPhoneLink() {
         <li>Take a picture of each card (or a binder page). Tick <b>Front + back</b> on the phone to read both sides.</li>
         <li>The pictures show up here in a few seconds and are read like scanned files.</li>
       </ol></div>
-    <p class="small muted">The code works for 15 minutes; the phone stays signed in after that.</p>`);
+    <p class="small"><b>📲 Skip this code next time:</b> once the camera page is open on the phone, tap <b>Share</b> (on newer iPhones it's under <b>⋯</b>) → <b>Add to Home Screen</b>. The <b>Card Scanner</b> icon then opens the camera straight away, whenever the phone is on this Wi-Fi.</p>
+    <p class="small muted">The code works for 15 minutes. The Home Screen icon can only send pictures and see what was read — it can't open inventory, customers or settings — and it keeps working until the PIN is changed. It goes to this computer's address on the Wi-Fi, <b>${esc(new URL(j.url).host)}</b>: if that ever changes, scan the code again and add the icon again.</p>`);
 }
 
 /**

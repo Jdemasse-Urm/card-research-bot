@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.21.3 — the scanner says where pictures really go
+
+Joseph, 11/15: "I don't want it to reach the store, I want it to reach the TCRB." It already did. But the
+scanner's words ("pictures wait in your store", "Through your MJC store") read as the website. They now say what
+happens: a picture goes straight into Card Research Bot, through a private folder in your MJC cloud that only your
+computers can open. It never touches the website, and it's deleted from the cloud the moment Card Research Bot has
+it. Cards reach the website only when you choose them in Card Research Bot, as always. Only words changed.
+
 ## 3.21.2 — a picture that won't upload says why, and Send now always works
 
 Joseph, 11/15: a picture sat "waiting for a signal" and Send now wouldn't do anything. His phone was online: the store

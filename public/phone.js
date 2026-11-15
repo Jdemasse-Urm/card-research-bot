@@ -683,7 +683,7 @@ function pillState() {
   if (waiting) return ["busy", `Sending ${plural(waiting, "picture")}`];
   if (!polled) return ["", "Connecting…"];
   const reading = computerAge != null && computerAge < (CLOUD ? 60 : 20);
-  if (CLOUD) return reading ? ["good", `${computerName || "Your computer"} is reading`] : ["warn", "No computer open · pictures wait in your store"];
+  if (CLOUD) return reading ? ["good", `${computerName || "Your computer"} is reading`] : ["warn", "No computer open · pictures wait safely"];
   return reading ? ["good", "The computer is reading"] : ["warn", "The computer isn't picking up"];
 }
 function drawPill() {
@@ -726,7 +726,7 @@ function notesHTML() {
   if (linkGone) notes.push(["bad", "This scanner link was replaced on the computer. Scan the new code there (Inventory → Bulk scan → 📱 Phone) and add it to your Home Screen again. Pictures taken here wait on this phone."]);
   else if (polled && live.some((p) => p.stage === "sent" && Date.now() - p.at > 20000) && (computerAge == null || computerAge > 20)) {
     notes.push(["warn", CLOUD
-      ? "No computer is picking pictures up right now. They're safe in your MJC store and get read as soon as Card Research Bot is open on one of your computers."
+      ? "No computer is picking pictures up right now. They wait safely in your private cloud folder (never on the website) and go into Card Research Bot as soon as it's open on one of your computers."
       : "The computer isn't picking pictures up — is Card Research Bot open on it? They wait there until it is."]);
   }
   for (const p of live) {
@@ -961,7 +961,7 @@ function drawSettings(m) {
   $("#awake").disabled = !("wakeLock" in navigator);
   const reading = computerAge != null && computerAge < (CLOUD ? 60 : 20);
   setHTML($("#connText"), CLOUD
-    ? `Through your MJC store<small>Works on any Wi-Fi or cell data. With no signal, pictures wait on this phone. ${reading ? `${esc(computerName || "Your computer")} is reading right now.` : "No computer is reading right now — pictures wait in your store until one is open."}</small>`
+    ? `Straight to Card Research Bot, from anywhere<small>Each picture goes through a private folder in your MJC cloud that only your computers can open — never the website — and is deleted the moment Card Research Bot has it. Works on any Wi-Fi or cell data; with no signal, pictures wait on this phone. ${reading ? `${esc(computerName || "Your computer")} is reading right now.` : "No computer is reading right now — pictures wait in your store until one is open."}</small>`
     : `Home Wi-Fi, straight to the computer<small>Works on the same Wi-Fi as the computer.${reading ? " It's reading right now." : " It isn't picking up right now — is Card Research Bot open?"}</small>`);
   setHTML($("#queueText"), m.waiting ? `${plural(m.waiting, "picture")} waiting on this phone<small>${(navigator.onLine === false || sendTrouble === "no signal" || sendTrouble === "can't reach the computer") ? "They go by themselves when there's a signal." : sendTrouble ? `Upload trouble: ${esc(sendTrouble)}. It keeps trying by itself.` : "Sending now."}</small>` : "Nothing waiting on this phone");
   setHTML($("#aboutText"), `What ＋ Add does<small>Cards that read cleanly go into the shared inventory from here. ⚠ ones wait for a check in Bulk scan on a computer. The website changes only from a computer. Lost this phone? On the computer: Bulk scan → 📱 Phone → New link.</small>`);
@@ -980,7 +980,7 @@ function openDetail(p) {
   $("#detailTitle").textContent = `#${p.n}${p.side === "a" ? " front" : p.side === "b" ? " back" : ""}`;
   const stage = {
     queued: p.sendError ? `Not sent yet: ${p.sendError}. It keeps trying by itself; Try again sends it now.` : (navigator.onLine === false || sendTrouble === "no signal" || sendTrouble === "can't reach the computer") ? "Waiting on this phone for a signal." : "Sending…",
-    sent: CLOUD ? "Sent. Waiting for a computer to pick it up." : "On the computer, waiting to be read.",
+    sent: CLOUD ? "Sent. Waiting for Card Research Bot on one of your computers to pick it up." : "On the computer, waiting to be read.",
     reading: "Being read…",
     held: `Waiting — the reader can't read right now: ${p.error || "it's down"}`,
     found: p.found ? `${plural(p.found, "card")} found — reading them up close…` : "No card found in this picture.",

@@ -1140,10 +1140,10 @@ async function openPhoneLink() {
           <li>Point the phone's camera at the code and open the link.</li>
           <li>On the phone, tap <b>Share</b> (on newer iPhones it's under <b>⋯</b>) → <b>Add to Home Screen</b> → <b>Add</b>. From then on the <b>Card Scanner</b> icon opens the camera — no code.</li>
           <li>Take a picture of each card (or a binder page). It works on <b>any Wi-Fi or cell signal</b>; with none, the pictures wait on the phone and go when the signal's back.</li>
-          <li>Whichever of your computers has Card Research Bot open reads them (the one running the daily jobs first). The phone shows what each card is and what it's worth.</li>
-          <li>On the phone, <b>＋ Add</b> puts the cards that read cleanly into the shared inventory; ⚠ ones wait for a check in Bulk scan on a computer.</li>
+          <li>They come straight into Card Research Bot on whichever of your computers is open (the one running the daily jobs first), through a private folder in your MJC cloud that only your computers can open. They never touch the website, and each picture is deleted from the cloud the moment Card Research Bot has it. The phone shows what each card is and what it's worth.</li>
+          <li>On the phone, <b>＋ Add</b> puts the cards that read cleanly into your inventory here (both computers see them); ⚠ ones wait for a check in Bulk scan. Nothing goes on the website until you choose it here, as always.</li>
         </ol></div>
-      ${j.pageReady ? "" : `<p class="small warnText">The scanner is being put on your store — give it a minute before opening the link.</p>`}
+      ${j.pageReady ? "" : `<p class="small warnText">The scanner page is being set up in your MJC cloud — give it a minute before opening the link.</p>`}
       <p class="small muted">The code and the icon only send pictures, show what was read and add cards — they can't open costs, customers, settings or the website. Lost a phone? <button class="small" data-newlink>New link</button> stops every saved icon; scan the new code on your phones.</p>`);
     $("[data-newlink]", body).onclick = async () => {
       if (!confirm("Make a new phone link? Every phone's Card Scanner icon stops working until it scans the new code.")) return;

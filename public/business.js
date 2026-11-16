@@ -1189,7 +1189,7 @@ async function openPhoneLink() {
       <ol class="small" style="flex:1 1 240px;margin-top:0">
         <li>Phone on the <b>same Wi-Fi</b> as this computer.</li>
         <li>Point the phone's camera at the code and open the link.</li>
-        <li>Take a picture of each card (or a binder page). Tick <b>Front + back</b> on the phone to read both sides.</li>
+        <li>Tap <b>Upload</b>, then <b>Camera</b> or <b>Photos</b>: a picture of each card (or a binder page), as many as you like.</li>
         <li>The pictures show up here in a few seconds and are read like scanned files.</li>
       </ol></div>
     <p class="small"><b>📲 Skip this code next time:</b> once the camera page is open on the phone, tap <b>Share</b> (on newer iPhones it's under <b>⋯</b>) → <b>Add to Home Screen</b>. The <b>Card Scanner</b> icon then opens the camera straight away, whenever the phone is on this Wi-Fi.</p>

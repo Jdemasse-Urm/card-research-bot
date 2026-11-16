@@ -1,31 +1,33 @@
 # Changelog
 
-## 3.22.0 — whose phone, front only, Photos, and straight to the computer through Tailscale
+## 3.23.0 — Upload (Camera or Photos), whose phone, and straight to the computer through Tailscale
 
 11/15, the first cards through the phone from anywhere came from Joseph's dad, and Joseph took them for his own:
 "make sure you can differentiate between the two". Dad: "can we have it just read the front pic? Also can we have
-the option to take a pic or go to photo library?" Joseph: Tailscale is already on his PC, "hook it up so I can do
-this all from my phone".
+the option to take a pic or go to photo library?", then: no front / front + back toggle at all, "it should just be
+'upload' and then it should have us select either camera or photos". Joseph: Tailscale is already on his PC, "hook it
+up so I can do this all from my phone". (3.22.0 was never released; its phone page was on the store for a few minutes.)
+- **Upload.** The gold button says Upload. It opens two choices: **Camera** (take a picture now) or **Photos** (pick
+  from the library, as many as you like). Every picture is read on its own: one per card, or a whole binder page.
+  There is no Front / Front + back toggle any more, and no "No back". A slab's label names the card, and a raw card's
+  number comes from the set's checklist when the player has one number in that set. A front an older page took and
+  never sent with its back goes as a single picture, so it's read at once. The computer still pairs fronts and backs
+  sent by a phone that hasn't updated yet.
 - **Whose phone.** Each phone asks once, "Whose phone is this?" (the welcome sheet, and Settings → Whose phone). The
   name goes with every picture and every ＋ Add, through the cloud or straight to the computer. On the computer:
   "📱 1 picture from Dad's phone", the card's note says "added from the phone (Dad)", "Added by" is Dad, and the
   activity says Dad added it. Needs store 1.4.0 for the cloud way; an older store just drops the name.
-- **Front only is the default.** One picture of the front reads most cards, and every slab (its label names the
-  card). A raw card's number comes from the set's checklist when the player has one number in that set.
-  **Front + back** is still one tap away for a raw card whose number is only on its back.
-- **Photos, next to the shutter.** Pick pictures already on the phone, several at once. Before, it was only in
-  Settings. The spot shows Undo right after a picture, and Photos the rest of the time.
 - **Straight to the computer, through Tailscale.** When the computer is on Tailscale and shares on the network,
   **📱 Phone** also shows a second code for this computer's Tailscale address. A phone with Tailscale on sends its
   pictures straight into Card Research Bot from anywhere, with nothing in between, and can open the whole bot at the
   same address (PIN). The cloud code stays the one that works for every phone, Tailscale or not. Nothing new runs: it
   is the home Wi-Fi way, at the address Tailscale gives the computer.
 - **Why Dad's ＋ Add did nothing:** his Wembanyama slab carried the wrong "Splash… tilt it under a light" note, so
-  the phone showed it as "Check on a computer", and ＋ Add skips those. 3.21.4's fixes (below, in this release)
+  the phone showed it as "Check on a computer", and ＋ Add skips those. 3.21.4's fixes (below, released in 3.23.0)
   stop that note on slabs.
 - The phone's Settings still said pictures "wait in your store" in one place; now "your private cloud folder".
 
-## 3.21.4 (released in 3.22.0) — the right set for an insert, no tilt warning on a slab, and sales dated the day they happened
+## 3.21.4 (released in 3.23.0) — the right set for an insert, no tilt warning on a slab, and sales dated the day they happened
 
 Joseph's first card through the phone from anywhere (11/15, a PSA 10 2023 Donruss Optic Victor Wembanyama My House #6)
 came in, was read right and priced from the right page ($140). But its set check said "#6 in 2023 Donruss Optic

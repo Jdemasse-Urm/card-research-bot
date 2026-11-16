@@ -38,8 +38,8 @@ const json = (body) => ({ method: "POST", headers: { "content-type": "applicatio
 /** A call to the computer: through the store (with the scanner key) or straight to it */
 const api = (url, opts = {}) => fetch(url, CLOUD ? { ...opts, headers: { ...(opts.headers || {}), "x-scan-key": KEY } } : opts);
 const API = CLOUD
-  ? { status: (s) => `/scan/status?session=${encodeURIComponent(s)}`, single: (n) => `/scan/pic/${encodeURIComponent(n)}/single`, pic: (n) => `/scan/pic/${encodeURIComponent(n)}`, add: "/scan/add" }
-  : { status: (s) => `/api/scan/phone-status?session=${encodeURIComponent(s)}`, single: (n) => `/api/scan/inbox/${encodeURIComponent(n)}/single`, pic: (n) => `/api/scan/inbox/${encodeURIComponent(n)}`, add: "/api/scan/phone-add" };
+  ? { status: (s) => `/scan/status?session=${encodeURIComponent(s)}`, pic: (n) => `/scan/pic/${encodeURIComponent(n)}`, add: "/scan/add" }
+  : { status: (s) => `/api/scan/phone-status?session=${encodeURIComponent(s)}`, pic: (n) => `/api/scan/inbox/${encodeURIComponent(n)}`, add: "/api/scan/phone-add" };
 let linkGone = false; // the store said this link was replaced (a new one was made on the computer)
 // with no signal at all, the page still opens from the phone (the store's address is https, so it can keep a copy)
 if (CLOUD && "serviceWorker" in navigator) navigator.serviceWorker.register("phone-sw.js").catch(() => {});
@@ -48,13 +48,10 @@ const when = (t) => new Date(t).toLocaleString(undefined, new Date(t).toDateStri
 
 // ---------------------------------------------------------------- this phone's settings (kept on the phone)
 
-const PREF_KEY = { who: "phoneWho", both: "phoneBoth", sound: "phoneSound", awake: "phoneAwake", theme: "phoneTheme", tab: "phoneTab", view: "phoneView", filter: "phoneFilter", sort: "phoneSort" };
+const PREF_KEY = { who: "phoneWho", sound: "phoneSound", awake: "phoneAwake", theme: "phoneTheme", tab: "phoneTab", view: "phoneView", filter: "phoneFilter", sort: "phoneSort" };
 const prefs = {
   // whose phone ("Joseph", "Dad"): asked once, sent with every picture and ＋ Add so the computers can tell (3.22)
   who: ls.get("phoneWho", ""),
-  // 3.22 (Dad, 11/15: "can we have it just read the front?"): front only unless this phone picks Front + back. A slab's
-  // label names the card; a raw card's number comes from the set's checklist when the player has one number in it.
-  both: ls.get("phoneBoth", false),
   sound: ls.get("phoneSound", false),
   awake: ls.get("phoneAwake", true),
   theme: ls.get("phoneTheme", "auto"),
@@ -73,7 +70,7 @@ const TABS = ["scan", "cards", "history", "settings"];
 const SESSION_GAP = 4 * 3600000;
 let session = ls.get("phoneSession", null) || newSession();
 let pics = ls.get("phonePics", []); // [{ name, n, side, thumb, stage, found, problems, cards, error, warn, skus, at, … }]
-let card = ls.get("phoneCard", 0), waitingBack = ls.get("phoneWaitingBack", null);
+let card = ls.get("phoneCard", 0);
 let history = ls.get("phoneHistory", []); // sessions that ended on this phone, newest first (30 kept)
 let retakeOf = null; // the next picture replaces this one (its name)
 function newSession() {
@@ -91,7 +88,6 @@ const save = () => {
     if (!ls.fits("phonePics", lean)) ls.fits("phonePics", lean.slice(-40));
   }
   ls.set("phoneCard", card);
-  ls.set("phoneWaitingBack", waitingBack);
 };
 /** History within the same room: the oldest sessions go first if it doesn't fit */
 function saveHistory() {
@@ -131,7 +127,6 @@ function startSession(message) {
   pics = pics.filter(unfinished);
   session = newSession();
   card = 0;
-  waitingBack = null;
   retakeOf = null;
   save();
   draw();
@@ -234,11 +229,7 @@ async function take(file) {
   // a picture after hours away starts a new session first (the page may have stayed open since then)
   const last = Math.max(0, ...pics.map((p) => p.at || 0));
   if (pics.length && Date.now() - last > SESSION_GAP) startSession("");
-  let side = "s", n;
-  if (prefs.both) {
-    if (waitingBack == null) { n = waitingBack = ++card; side = "a"; }
-    else { n = waitingBack; waitingBack = null; side = "b"; }
-  } else n = ++card;
+  const side = "s", n = ++card;
   save();
   setBusy(true);
   let img, blob;
@@ -247,7 +238,7 @@ async function take(file) {
     blob = await fullPicture(file, img);
     if (!blob) throw new Error("no picture");
   } catch {
-    if (side === "a") { waitingBack = null; card--; } else if (side === "b") waitingBack = n; else card--;
+    card--;
     save();
     setBusy(false);
     draw();
@@ -270,7 +261,6 @@ async function take(file) {
   draw();
   keepAwake();
   if (warn) say(`#${n}: ${warn}. Sent anyway — retake it if it can't be read.`, "warn");
-  else if (side === "a") say(`#${n} front sent. Flip it over and take the back.`, "good");
   else say(`#${n}${side === "b" ? " back" : ""} sent${old ? ` — it replaces #${old.n}` : ""}.`, "good");
   pump();
 }
@@ -459,25 +449,10 @@ function progressed(p) {
 }
 
 /**
- * The front just taken has no back worth shooting (a slab — its label says it all): it's read on its own now. Still on
- * the phone → it goes as a single picture; already at the computer → the computer renames it, instead of holding it
- * 2 minutes for a back.
+ * 3.23: no more front + back. A front this phone took before the update and never sent with its back goes as a single
+ * picture (it's read at once instead of the computer holding it 2 minutes for a back that isn't coming).
  */
-async function noBack() {
-  if (waitingBack == null) return;
-  const n = waitingBack;
-  waitingBack = null;
-  const p = pics.find((x) => x.n === n && x.side === "a" && sessionOf(x.name) === session);
-  if (p?.stage === "queued") p.single = true;
-  else if (p) {
-    const r = await api(API.single(p.name), { method: "POST" }).catch(() => null);
-    if (r?.ok) Object.assign(p, { name: p.name.replace(/-a\.jpg$/, "-s.jpg"), side: "s" });
-  }
-  save();
-  draw();
-  pump();
-  say(`#${n} goes without a back. Take the next card's front.`, "good");
-}
+for (const p of pics) if (p.stage === "queued" && p.side === "a" && !pics.some((q) => q.side === "b" && q.n === p.n && sessionOf(q.name) === sessionOf(p.name))) p.single = true;
 
 const lastUndoable = () => [...pics].reverse().find((x) => ["queued", "sent"].includes(x.stage));
 async function undoLast() {
@@ -492,10 +467,7 @@ async function undoLast() {
   pics = pics.filter((x) => x !== p);
   for (const q of pics) if (q.replacedBy === p.n && sessionOf(q.name) === sessionOf(p.name)) delete q.replacedBy; // its retake is undone
   // numbering steps back so the next picture takes its place (a front waiting for its back is forgotten too)
-  if (sessionOf(p.name) === session) {
-    if (p.side === "b") waitingBack = p.n;
-    else { if (p.n === card) card--; if (p.side === "a") waitingBack = null; }
-  }
+  if (sessionOf(p.name) === session && p.n === card) card--;
   save();
   draw();
   say(`#${p.n}${p.side === "b" ? " back" : ""} taken back — the computer won't read it.`);
@@ -753,14 +725,14 @@ function drawScan(m) {
   const p = [...m.live].reverse().find((x) => x.side !== "b") || m.live[m.live.length - 1];
   let html = "", fresh = false, value = null;
   if (!p) {
-    html = `<div class="guide"><b>Ready when you are.</b><ul><li>Lay the card (or a binder page) on something dark.</li><li>Hold the phone straight above it, close enough to fill the picture.</li><li>Tap the gold button. The card's name and value come back here in seconds.</li></ul></div>`;
+    html = `<div class="guide"><b>Ready when you are.</b><ul><li>Lay the card (or a binder page) on something dark.</li><li>Hold the phone straight above it, close enough to fill the picture.</li><li>Tap <b>Upload</b>, then <b>Camera</b> or <b>Photos</b>. The card's name and value come back here in seconds.</li></ul></div>`;
   } else {
     const who = `#${p.n}${p.side === "a" ? " front" : ""}${p.retakeOf ? `, retake of #${p.retakeOf}` : ""}`;
     const cards = p.cards || [];
     const best = [...cards].sort((a, b) => (b.value || 0) - (a.value || 0))[0];
     let title, line = "", cls = "waiting";
     if (p.stage === "queued") title = p.progress != null ? "Sending…" : (navigator.onLine === false || sendTrouble === "no signal" || sendTrouble === "can't reach the computer") ? "Waiting for a signal" : sendTrouble ? `Couldn't upload: ${p.sendError || sendTrouble} — trying again` : "Sending…";
-    else if (p.stage === "sent") title = p.side === "a" && prefs.both && waitingBack === p.n ? "Sent — now the back" : "Waiting for the computer";
+    else if (p.stage === "sent") title = "Waiting for the computer";
     else if (p.stage === "reading") title = "Reading…";
     else if (p.stage === "held") title = "Waiting for the reader";
     else if (p.stage === "found" && p.found) title = `${plural(p.found, "card")} found — reading them up close`;
@@ -789,17 +761,12 @@ function drawScan(m) {
     const s = x.replacedBy ? "" : ["queued", "sent", "reading", "found", "held"].includes(x.stage) && !(x.stage === "found" && x.found === 0) ? "busy" : kind;
     return `<button type="button" data-name="${esc(x.name)}" aria-label="Picture ${x.n}: ${esc(text)}"${x.replacedBy ? ' class="replaced"' : ""}><img alt="" src="${thumbOf(x)}"><span class="no">#${x.n}</span><span class="s ${s}"></span></button>`;
   }).join("") : "");
-  for (const seg of [$("#modeSeg"), $("#modeSeg2")]) for (const b of $$("[data-mode]", seg)) b.setAttribute("aria-checked", String((b.dataset.mode === "both") === prefs.both));
-  $("#modeHint").textContent = retakeOf ? `Retake: the next picture replaces #${byName(retakeOf)?.n ?? ""}.` : prefs.both ? (waitingBack != null ? `Now flip #${waitingBack} over and take its back.` : "Take the front, then flip it and take the back.") : "One picture of each card's front, or a binder page.";
-  const next = prefs.both ? (waitingBack != null ? [waitingBack, "back"] : [card + 1, "front"]) : [card + 1, ""];
-  setHTML($("#shootLbl"), `#${next[0]}${next[1] ? `<small>${next[1]}</small>` : ""}`);
-  $("#shoot").setAttribute("aria-label", `Take picture ${next[0]}${next[1] ? ", " + next[1] : ""}`);
+  $("#modeHint").textContent = retakeOf ? `Retake: the next picture replaces #${byName(retakeOf)?.n ?? ""}.` : "A picture of each card, or a binder page — as many as you like.";
+  setHTML($("#shootLbl"), `<span class="up">Upload</span><small>#${card + 1}</small>`);
+  $("#shoot").setAttribute("aria-label", `Upload picture ${card + 1}: camera or photos`);
   const u = lastUndoable();
   $("#undoBtn").hidden = !u;
-  $("#photosBtn").hidden = Boolean(u); // the same spot: Undo while there's one, Photos the rest of the time
   if (u) $("#undoBtn").textContent = `Undo #${u.n}${u.side === "b" ? " back" : ""}`;
-  $("#noBackBtn").hidden = !(prefs.both && waitingBack != null);
-  $("#noBackBtn").textContent = `No back for #${waitingBack ?? ""}`;
   const mini = [];
   if (m.rows.length) mini.push(`<span><b>${m.rows.length}</b> card${m.rows.length === 1 ? "" : "s"}</span>`);
   if (m.priced) mini.push(`<span>worth <b>${usd(m.value)}</b></span>`);
@@ -961,7 +928,6 @@ function forgetPast() {
 // ---- Settings
 
 function drawSettings(m) {
-  for (const b of $$("#modeSeg2 [data-mode]")) b.setAttribute("aria-checked", String((b.dataset.mode === "both") === prefs.both));
   for (const b of $$("#themeSeg [data-theme]")) b.setAttribute("aria-checked", String(b.dataset.theme === prefs.theme));
   if (document.activeElement !== $("#whoSet")) $("#whoSet").value = prefs.who;
   $("#sound").checked = prefs.sound;
@@ -1041,7 +1007,7 @@ function openWelcome(force) {
   const apple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const steps = [];
   if (!homeApp) steps.push(`<li><b>Put it on your Home Screen.</b> ${apple ? "Tap Share (on newer iPhones it's under ⋯), then Add to Home Screen → Add." : "Open the browser menu ⋮, then Add to Home screen."} Next time it's one tap, no QR code.</li>`);
-  steps.push(`<li><b>Shoot.</b> Cards on something dark, the phone straight above, then the gold button — or <b>Photos</b> for pictures already on the phone. One picture of the front is enough for most cards and every slab; <b>Front + back</b> also reads a raw card's number off its back.</li>`);
+  steps.push(`<li><b>Upload.</b> Tap the gold <b>Upload</b> button, then <b>Camera</b> to take a picture or <b>Photos</b> to pick ones already on the phone — as many as you like. One picture per card (or a whole binder page), card on something dark.</li>`);
   steps.push(`<li><b>Watch them come back.</b> ${CLOUD ? "Your computer reads each picture, from any Wi-Fi or cell data. With no signal they wait here." : "The computer reads each picture over the home Wi-Fi."} Name and value show up in seconds.</li>`);
   steps.push(`<li><b>Add.</b> On the Cards tab, ＋ Add puts the cleanly read cards into the shared inventory. ⚠ ones wait for a check on a computer.</li>`);
   $("#welcomeBody").innerHTML = `<h2 id="welcomeTitle">Card Scanner</h2>
@@ -1092,23 +1058,14 @@ $(".tabbar [role=tablist]").addEventListener("keydown", (e) => {
   $(`#t-${t}`).focus();
   e.preventDefault();
 });
-$("#shoot").onclick = () => { if (!busy) $("#cam").click(); };
-$("#pickBtn").onclick = $("#photosBtn").onclick = () => $("#pick").click();
+// Upload (3.23, Dad 11/15: "it should just be 'upload' and then it should have us select either camera or photos")
+$("#shoot").onclick = () => { if (!busy) $("#uploadSheet").showModal(); };
+$("#upCam").onclick = () => { $("#uploadSheet").close(); $("#cam").click(); };
+$("#upPhotos").onclick = () => { $("#uploadSheet").close(); $("#pick").click(); };
+$("#upCancel").onclick = () => $("#uploadSheet").close();
 $("#cam").onchange = (e) => takeAll(e.target);
 $("#pick").onchange = (e) => { setTab("scan"); takeAll(e.target); };
 $("#undoBtn").onclick = undoLast;
-$("#noBackBtn").onclick = noBack;
-for (const seg of [$("#modeSeg"), $("#modeSeg2")]) {
-  seg.onclick = (e) => {
-    const b = e.target.closest("[data-mode]");
-    if (!b || (b.dataset.mode === "both") === prefs.both) return;
-    setPref("both", b.dataset.mode === "both");
-    waitingBack = null;
-    save();
-    draw();
-    say(prefs.both ? "Front + back: the front, then flip it over and take the back." : "Front only: one picture of each card. Slabs and most cards read from the front.");
-  };
-}
 $("#sound").onchange = (e) => { setPref("sound", e.target.checked); if (e.target.checked) beep(880); };
 $("#awake").onchange = (e) => { setPref("awake", e.target.checked); keepAwake(); };
 $("#themeSeg").onclick = (e) => { const b = e.target.closest("[data-theme]"); if (b) { setPref("theme", b.dataset.theme); applyTheme(); draw(); } };

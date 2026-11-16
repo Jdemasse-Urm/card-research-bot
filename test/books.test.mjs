@@ -87,7 +87,7 @@ test("routes: books, 1099-K check, eBay sales import (SKU + title, no double imp
     await call("PUT", "/api/shop/settings", { salesTaxPct: 6, taxIncluded: true });
 
     // an eBay "Orders report": a title line before the header, a SKU match, a title match, and a line for nothing we have
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date().toLocaleDateString("en-CA"); // the local day, as the books count it (UTC is already tomorrow after 7 PM in Detroit)
     const csv = `"Seller Hub orders report"\n"Order Number","Buyer Username","Item Title","Custom Label","Quantity","Sold For","Sale Date"\n"01-111","buyer_one","Paul Skenes Chrome Refractor PSA 10","CRB-0100","1","$140.00","${today}"\n"01-112","buyer_two","2023 Bowman Chrome Jackson Holliday BCP-1 raw","","1","$30.00","${today}"\n"01-113","buyer_3","Something else entirely","","1","$5.00","${today}"\n`;
     const prev = (await call("POST", "/api/import-sales/preview", { text: csv, platform: "eBay" })).body;
     assert.equal(prev.columns.sku, "Custom Label");

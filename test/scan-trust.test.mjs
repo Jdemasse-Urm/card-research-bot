@@ -144,6 +144,34 @@ test("checklist: a card read as the base gets a by-eye check when the set has a 
   assert.match(jobs.checklistCheck({ category: "baseball", details: { year: "2018", set: "Topps Chrome", player: "Shohei Ohtani", number: "150", parallel: "" } }, chrome).note, /also comes as Refractor/);
 });
 
+test("checklist: an insert named only in the price search picks that insert's set; a slab's label settles base vs Holo (11/15 Wembanyama My House)", () => {
+  // what the price site's search returned for "2023 Donruss Optic 6" on 11/15 (trimmed): inserts are sets of their own
+  const OPTIC_6 = [
+    ["Victor Wembanyama #6", "2023 Donruss Optic My House (Basketball)", "$14.99"],
+    ["Victor Wembanyama #6", "2023 Donruss Optic Splash (Basketball)", "$11.99"],
+    ["Victor Wembanyama [Holo] #6", "2023 Donruss Optic Splash (Basketball)", "$24.97"],
+    ["Victor Wembanyama [Holo] #6", "2023 Donruss Optic My House (Basketball)", "$40.00"],
+    ["Victor Wembanyama [Blue] #6", "2023 Donruss Optic My House (Basketball)", "$129.38"],
+    ["C.J. Stroud #6", "2023 Panini Donruss Optic My House (Football)", "$2.63"],
+    ["Nikola Jokic #6", "2023 Donruss Optic Winner Stays (Basketball)", "$1.70"],
+    ["Luguentz Dort [Dragon Choice] #6", "2023 Panini Donruss Optic (Basketball)", "$3.90"],
+  ].map(([name, set, ungraded]) => ({ name, set, ungraded }));
+  // what the reader made of Joseph's slab: the insert only in the price search
+  const read = {
+    category: "basketball", grade: "PSA 10", price_search: "2023 Donruss Optic Victor Wembanyama My House #6",
+    details: { year: "2023", set: "Donruss Optic", player: "Victor Wembanyama", number: "6", parallel: "", team: "San Antonio Spurs", rookie: true },
+  };
+  const v = jobs.checklistCheck(read, OPTIC_6);
+  assert.equal(v.set, "2023 Donruss Optic My House (Basketball)", "not Splash, not the base set's #6 (Dort)");
+  assert.deepEqual(v.players, ["Victor Wembanyama"]);
+  assert.deepEqual(v.parallels, ["Base", "Holo", "Blue"]);
+  assert.equal(v.note, null, "PSA's label prints the parallel — read as the base off it, it is the base");
+  const raw = jobs.checklistCheck({ ...read, grade: "" }, OPTIC_6);
+  assert.match(raw.note, /in 2023 Donruss Optic My House \(Basketball\) also comes as Holo \(~\$40 raw vs ~\$15 for the base\)/, "a raw card still gets the by-eye check, against the right set");
+  assert.equal(jobs.checklistCheck({ ...read, price_search: "" }, OPTIC_6).set === "2023 Donruss Optic My House (Basketball)", false, "(without the insert words it can't be told — the reason for the fix)");
+  assert.equal(jobs.checklistCheck({ ...read, price_search: "2023 Donruss Optic Victor Wembanyama #6 PSA 10 RC" }, OPTIC_6).set === "2023 Donruss Optic My House (Basketball)", false, "grade and rookie words never pick a set");
+});
+
 test("phone scans: each found card gets its place on the page, what it's in, and what spoiled its photo", () => {
   const photos = jobs.placeCards(2, [
     { photo: 1, box: [520, 40, 990, 480], problem: "none", holder: "sleeve" },

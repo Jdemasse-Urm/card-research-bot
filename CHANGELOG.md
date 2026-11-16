@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.21.4 — the right set for an insert, no tilt warning on a slab, and sales dated the day they happened
+
+Joseph's first card through the phone from anywhere (11/15, a PSA 10 2023 Donruss Optic Victor Wembanyama My House #6)
+came in, was read right and priced from the right page ($140). But its set check said "#6 in 2023 Donruss Optic
+Splash also comes as Holo — tilt the card under a light".
+- **An insert is checked against its own set.** The price site lists every insert as a set of its own, all sharing
+  card numbers: #6 is in My House, in Splash and in the base set (Luguentz Dort). The reader wrote "My House" in its
+  price search but not in the set, and the closest-name tie went to Splash. The words the reader saw that the set
+  name left out now decide it. Grade, grader and rookie words never do. Tested on the price site's real results.
+- **No "tilt it under a light" on a graded slab.** PSA, BGS, SGC and CGC print the parallel on the label
+  ("MY HOUSE-HOLO"), so a label read as the base is the base. Raw cards still get the check.
+- **Sales, purchases, expenses and grading dates are the day here, not the UTC day.** They were stamped from the UTC
+  clock, so after about 7 PM Detroit time a sale got tomorrow's date. Then the books counted it as still in stock
+  that evening, and a sale on the evening of December 31 would have landed in the next tax year. Internal day keys
+  (counters, backups) are unchanged. Found by the suite failing in the evening.
+
 ## 3.21.3 — the scanner says where pictures really go
 
 Joseph, 11/15: "I don't want it to reach the store, I want it to reach the TCRB." It already did. But the

@@ -29,7 +29,7 @@ const store = {
 const _fetch = window.fetch.bind(window);
 window.fetch = (url, opts = {}) => {
   const headers = new Headers(opts.headers || {});
-  if (store.get("who")) headers.set("x-user", store.get("who"));
+  if (store.get("who") && !headers.has("x-user")) headers.set("x-user", store.get("who")); // a phone's ＋ Add names its own person
   return _fetch(url, { ...opts, headers });
 };
 

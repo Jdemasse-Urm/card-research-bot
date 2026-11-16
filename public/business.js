@@ -1124,6 +1124,21 @@ async function loadScanAccuracy() {
 }
 
 /** Phone → this computer: a QR code signs the phone in; its pictures land in the scan. */
+/**
+ * The direct way (3.22): this computer's Tailscale address. Nothing in between: a phone with Tailscale on sends its
+ * pictures straight here from anywhere, and can open the whole bot. The cloud link stays the one for everyone else.
+ */
+const directHtml = (d) => !d ? "" : `
+  <h3 style="margin:18px 0 6px">Or straight to this computer, with Tailscale</h3>
+  <div class="row" style="align-items:flex-start;flex-wrap:wrap">
+    <div class="qr">${d.svg}</div>
+    <ol class="small" style="flex:1 1 240px;margin-top:0">
+      <li>On your phone, install the <b>Tailscale</b> app, sign in with the same account as this computer (it's <b>${esc(d.host)}</b> on your Tailscale network) and turn it on.</li>
+      <li>Scan this code and add it to the Home Screen too. Its pictures go straight into Card Research Bot on this computer, with nothing in between. With Tailscale off, or this computer asleep, they wait on the phone.</li>
+      <li><b>The whole Card Research Bot on your phone:</b> open <b>${esc(d.app)}</b> in the same browser. After this code it's already signed in; anywhere else it asks for this computer's PIN.</li>
+    </ol></div>
+  <p class="small muted">This code works for 15 minutes and signs that phone in to this computer, so scan it only with your own phone.</p>`;
+
 async function openPhoneLink() {
   let j;
   try {
@@ -1144,7 +1159,8 @@ async function openPhoneLink() {
           <li>On the phone, <b>＋ Add</b> puts the cards that read cleanly into your inventory here (both computers see them); ⚠ ones wait for a check in Bulk scan. Nothing goes on the website until you choose it here, as always.</li>
         </ol></div>
       ${j.pageReady ? "" : `<p class="small warnText">The scanner page is being set up in your MJC cloud — give it a minute before opening the link.</p>`}
-      <p class="small muted">The code and the icon only send pictures, show what was read and add cards — they can't open costs, customers, settings or the website. Lost a phone? <button class="small" data-newlink>New link</button> stops every saved icon; scan the new code on your phones.</p>`);
+      <p class="small muted">The code and the icon only send pictures, show what was read and add cards — they can't open costs, customers, settings or the website. Lost a phone? <button class="small" data-newlink>New link</button> stops every saved icon; scan the new code on your phones.</p>
+      ${directHtml(j.direct)}`);
     $("[data-newlink]", body).onclick = async () => {
       if (!confirm("Make a new phone link? Every phone's Card Scanner icon stops working until it scans the new code.")) return;
       try {
@@ -1177,7 +1193,8 @@ async function openPhoneLink() {
         <li>The pictures show up here in a few seconds and are read like scanned files.</li>
       </ol></div>
     <p class="small"><b>📲 Skip this code next time:</b> once the camera page is open on the phone, tap <b>Share</b> (on newer iPhones it's under <b>⋯</b>) → <b>Add to Home Screen</b>. The <b>Card Scanner</b> icon then opens the camera straight away, whenever the phone is on this Wi-Fi.</p>
-    <p class="small muted">The code works for 15 minutes. The Home Screen icon can only send pictures and see what was read — it can't open inventory, customers or settings — and it keeps working until the PIN is changed. It goes to this computer's address on the Wi-Fi, <b>${esc(new URL(j.url).host)}</b>: if that ever changes, scan the code again and add the icon again.</p>`);
+    <p class="small muted">The code works for 15 minutes. The Home Screen icon can only send pictures and see what was read — it can't open inventory, customers or settings — and it keeps working until the PIN is changed. It goes to this computer's address on the Wi-Fi, <b>${esc(new URL(j.url).host)}</b>: if that ever changes, scan the code again and add the icon again.</p>
+    ${directHtml(j.direct)}`);
 }
 
 /**
@@ -1220,7 +1237,8 @@ function pollInbox() {
       s.push(...got.filter((f, i) => f && !mate(i))); // half a pair still gets read, on its own
       if (s.length) addScanFiles(s, { quiet: true, duplex: false });
       if (p.length) addScanFiles(p, { quiet: true, duplex: true });
-      if (s.length || p.length) toast(`📱 ${plural(s.length + p.length / 2, "picture")} from the phone — reading ${s.length + p.length / 2 === 1 ? "it" : "them"}`, { ms: 1800 });
+      const from = [...new Set(list.filter((x) => [...s, ...p].some((f) => f.name === x.name)).map((x) => x.by).filter(Boolean))];
+      if (s.length || p.length) toast(`📱 ${plural(s.length + p.length / 2, "picture")} from ${from.length ? from.join(" and ") + "'s phone" : "the phone"} — reading ${s.length + p.length / 2 === 1 ? "it" : "them"}`, { ms: 1800 });
     } catch {
       /* the next tick tries again */
     } finally {
@@ -1237,6 +1255,8 @@ pollInbox();
  * phone shows how many. Pictures still being read wait; ones the other computer read are left to it (after 15 minutes
  * the ones here go in on their own).
  */
+/** A request made for a phone's ＋ Add carries that phone's person ("Dad"), so the inventory and activity say who. */
+const asPhone = (opts, by) => (by ? { ...opts, headers: { ...opts.headers, "x-user": by } } : opts);
 async function phoneAdds() {
   if (scan.running) return;
   const asks = await getJSON("/api/scan/phone-adds").catch(() => []);
@@ -1245,10 +1265,10 @@ async function phoneAdds() {
     const mine = pages.filter(Boolean), missing = a.names.filter((_n, i) => !pages[i]);
     if (!mine.length || (missing.length && Date.now() - a.at < 15 * 60000)) continue;
     const ok = mine.flatMap((p) => p.cards).filter((c) => c.include && c.name && !needsCheck(c));
-    const r = ok.length ? await addScanned(null, { cards: ok, paid: a.paid }) : { added: 0, doneCards: new Set() };
+    const r = ok.length ? await addScanned(null, { cards: ok, paid: a.paid, by: a.by }) : { added: 0, doneCards: new Set() };
     if (!r) return; // a scan started meanwhile: the next tick
     const left = Object.fromEntries(mine.map((p) => [p.file.name, p.cards.filter((c) => !r.doneCards.has(c)).length]));
-    await fetch(`/api/scan/phone-adds/${encodeURIComponent(a.id)}/done`, json("POST", { left, missing, added: r.doneCards.size })).catch(() => {});
+    await fetch(`/api/scan/phone-adds/${encodeURIComponent(a.id)}/done`, asPhone(json("POST", { left, missing, added: r.doneCards.size }), a.by)).catch(() => {});
   }
 }
 
@@ -1764,11 +1784,11 @@ async function addScanned(btn, phone = null) {
           facts: factsOf(c),
           // the reader's condition estimate (scale, corners, edges, surface, centering) — raw cards only
           ...(c.condition && /^raw$/i.test(c.grade || "Raw") ? { condition: c.condition } : {}),
-          notes: [`Scanned ${today()}${phone ? " · added from the phone" : ""}`, c.condition_note, c.cert ? `cert ${c.cert}${c.certVerified ? " (matches PSA)" : ""}` : "", c.parallel_check ? `check: ${c.parallel_check}` : ""].filter(Boolean).join(" · "),
+          notes: [`Scanned ${today()}${phone ? ` · added from the phone${phone.by ? ` (${phone.by})` : ""}` : ""}`, c.condition_note, c.cert ? `cert ${c.cert}${c.certVerified ? " (matches PSA)" : ""}` : "", c.parallel_check ? `check: ${c.parallel_check}` : ""].filter(Boolean).join(" · "),
           photos,
         });
       }
-      const r = await fetch("/api/inventory/many", json("POST", { items }));
+      const r = await fetch("/api/inventory/many", asPhone(json("POST", { items }), phone?.by));
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "Couldn't add them");
       added += j.added;

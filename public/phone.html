@@ -159,6 +159,8 @@
 
     .dock { position: fixed; left: 0; right: 0; bottom: calc(var(--tabbar) + var(--sb)); z-index: 15; padding: 10px 16px 12px; background: color-mix(in srgb, var(--bg) 90%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border-top: 1px solid var(--line); animation: rise .2s ease-out; }
     .dock .in { max-width: 608px; margin: 0 auto; display: grid; gap: 8px; }
+    .whoIn { flex: 0 1 150px; min-width: 0; min-height: 40px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: inherit; font: inherit; }
+    .sheet .whoIn { display: block; width: 100%; flex: none; margin: 6px 0 4px; font-size: 17px; }
     .paid { display: flex; align-items: center; gap: 10px; }
     .paid label { display: flex; align-items: center; gap: 6px; flex: 0 1 190px; min-height: 44px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; }
     .paid input { flex: 1; min-width: 0; min-height: 40px; border: 0; background: transparent; outline: none; font-family: var(--num); font-variant-numeric: tabular-nums; }
@@ -263,11 +265,11 @@
         <div class="grow"></div>
         <div class="seg" id="modeSeg" role="radiogroup" aria-label="Pictures per card">
           <button type="button" role="radio" data-mode="both">Front + back</button>
-          <button type="button" role="radio" data-mode="one">One side</button>
+          <button type="button" role="radio" data-mode="one">Front only</button>
         </div>
         <p class="modeHint" id="modeHint"></p>
         <div class="shutterRow">
-          <div class="slot"><button class="aside" id="undoBtn" type="button" hidden>Undo</button></div>
+          <div class="slot"><button class="aside" id="undoBtn" type="button" hidden>Undo</button><button class="aside" id="photosBtn" type="button" aria-label="Pick pictures from the photo library">Photos</button></div>
           <button class="shutter" id="shoot" type="button" aria-label="Take a picture"><span class="halo"></span><span class="core" id="shootLbl">#1</span></button>
           <div class="slot"><button class="aside" id="noBackBtn" type="button" hidden>No back</button></div>
         </div>
@@ -307,7 +309,8 @@
         <h1 class="title">Settings</h1>
         <h2 class="sec">Taking pictures</h2>
         <div class="group">
-          <div class="item"><div class="txt">Pictures per card<small>Front + back reads the number, year and set off the back. One side for slabs.</small></div>
+          <label class="item"><span class="txt">Whose phone<small>The computer shows it on every card this phone scans and adds.</small></span><input class="whoIn" id="whoSet" maxlength="40" placeholder="Your name" autocomplete="given-name" enterkeyhint="done" /></label>
+          <div class="item"><div class="txt">Pictures per card<small>Front only reads most cards, and every slab (its label names the card). Front + back also reads the number off a raw card's back.</small></div>
             <div class="seg" id="modeSeg2" role="radiogroup" aria-label="Pictures per card"><button type="button" role="radio" data-mode="both">2</button><button type="button" role="radio" data-mode="one">1</button></div></div>
           <label class="item"><span class="txt">Sound when a picture is read<small>A low tone if it can't be, a chime when cards go into inventory.</small></span><input type="checkbox" role="switch" class="switch" id="sound" /></label>
           <label class="item"><span class="txt">Keep the screen on while scanning<small>The phone doesn't lock in the middle of a binder.</small></span><input type="checkbox" role="switch" class="switch" id="awake" /></label>

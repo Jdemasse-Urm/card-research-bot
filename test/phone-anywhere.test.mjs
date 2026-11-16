@@ -16,7 +16,7 @@ const TOKEN = "z".repeat(64);
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.alloc(4000, 9), Buffer.from([0xff, 0xd9])]);
 
 // ---- the stand-in store: the scanner's admin side, as the real one answers it
-const S = { key: "k".repeat(32), waiting: [], files: new Map(), claims: [], deleted: [], statuses: [], page: null, adds: [], addsDone: [], newKeys: 0 };
+const S = { by: {}, key: "k".repeat(32), waiting: [], files: new Map(), claims: [], deleted: [], statuses: [], page: null, adds: [], addsDone: [], newKeys: 0 };
 const stub = http.createServer((req, res) => {
   const chunks = [];
   req.on("data", (c) => chunks.push(c));
@@ -29,7 +29,7 @@ const stub = http.createServer((req, res) => {
     if (url.pathname.startsWith("/dl/")) return res.writeHead(200, { "content-type": "image/jpeg" }).end(S.files.get(decodeURIComponent(url.pathname.slice(4))));
     if (req.headers.authorization !== `Bearer ${TOKEN}`) return send(401, { error: "Not authorized." });
     if (req.method === "GET" && url.pathname === "/admin/scan") {
-      return send(200, { key: S.key, waiting: S.waiting.map((name) => ({ name, at: new Date(Date.now() - 5000).toISOString() })), adds: S.adds, activeAt: new Date().toISOString(), pageVersion: S.page?.version || null, reading: url.searchParams.get("reading") });
+      return send(200, { key: S.key, waiting: S.waiting.map((name) => ({ name, at: new Date(Date.now() - 5000).toISOString(), by: S.by[name] || "" })), adds: S.adds, activeAt: new Date().toISOString(), pageVersion: S.page?.version || null, reading: url.searchParams.get("reading") });
     }
     let m;
     if (req.method === "POST" && (m = url.pathname.match(/^\/admin\/scan\/claim\/(.+)$/))) {
@@ -82,7 +82,7 @@ async function startBot() {
     return { status: r.status, body: b, text };
   };
   const stop = () => new Promise((r) => (child.once("exit", r), child.kill()));
-  return { call, home, stop, out: () => out };
+  return { call, base, home, stop, out: () => out };
 }
 /** wait until fn() is truthy, while the bot's window "is open" (Bulk scan looks at the inbox every 3 s, as the page does) */
 async function until(bot, fn, ms = 25000) {
@@ -114,9 +114,11 @@ test("a picture sent from anywhere lands in this computer's scan inbox; what was
 
   // a picture waiting in the store → taken (by this computer, named), downloaded into the inbox, off the store
   S.files.set("phone-c1-0001-s.jpg", JPEG);
+  S.by["phone-c1-0001-s.jpg"] = "Dad"; // 3.22: whose phone rides with the picture (11/15: Dad's scan was taken for Joseph's)
   S.waiting.push("phone-c1-0001-s.jpg");
   const inbox = await until(bot, (list) => list.find((x) => x.name === "phone-c1-0001-s.jpg"));
   assert.ok(inbox);
+  assert.equal(inbox.by, "Dad", "Bulk scan knows whose phone it came from");
   assert.deepEqual(S.claims.map((c) => c.name), ["phone-c1-0001-s.jpg"]);
   assert.equal(S.claims[0].device, "This computer");
   assert.ok(fs.readFileSync(path.join(bot.home, "data", "scan-inbox", "phone-c1-0001-s.jpg")).equals(JPEG));
@@ -134,13 +136,16 @@ test("a picture sent from anywhere lands in this computer's scan inbox; what was
   assert.ok(!fs.existsSync(path.join(bot.home, "data", "scan-inbox", "phone-c1-0001-s.jpg")), "still only the one in done/");
 
   // ＋ Add on the phone: Bulk scan sees it, adds what it trusts, says how many it left; the store's request is done
-  S.adds.push({ id: "A1", names: ["phone-c1-0001-s.jpg"], paid: 25, at: new Date().toISOString() });
+  S.adds.push({ id: "A1", names: ["phone-c1-0001-s.jpg"], paid: 25, by: "Dad", at: new Date().toISOString() });
   const asks = await until(bot, async () => {
     const a = (await bot.call("GET", "/api/scan/phone-adds")).body;
     return a.length ? a : null;
   });
-  assert.deepEqual(asks.map((a) => [a.id, a.names, a.paid, a.cloud]), [["A1", ["phone-c1-0001-s.jpg"], 25, true]]);
-  assert.equal((await bot.call("POST", "/api/scan/phone-adds/A1/done", { left: { "phone-c1-0001-s.jpg": 1 }, missing: [], added: 2 })).status, 200);
+  assert.deepEqual(asks.map((a) => [a.id, a.names, a.paid, a.by, a.cloud]), [["A1", ["phone-c1-0001-s.jpg"], 25, "Dad", true]]);
+  // Bulk scan sends the add's own person (x-user), so the activity says who added it
+  const done = await fetch(bot.base + "/api/scan/phone-adds/A1/done", { method: "POST", headers: { "content-type": "application/json", "x-user": "Dad" }, body: JSON.stringify({ left: { "phone-c1-0001-s.jpg": 1 }, missing: [], added: 2 }) });
+  assert.equal(done.status, 200);
+  assert.ok((await bot.call("GET", "/api/activity")).body.some((x) => x.who === "Dad" && /added 2 cards from the phone/.test(x.text)), "Dad's add is logged as Dad's");
   assert.deepEqual(S.addsDone, ["A1"]);
   const after = await until(bot, () => S.statuses.map((s) => s.c1?.["phone-c1-0001-s.jpg"]).filter((x) => x?.addLeft === 1).pop());
   assert.ok(after.addDoneAt > 0, "the phone stops showing 'adding…'");
@@ -168,9 +173,13 @@ test("a computer whose window isn't open leaves the store's pictures for one tha
 
 test("the phone on the home Wi-Fi can ask for ＋ Add too (no store needed for that)", { timeout: 30000 }, async () => {
   const bot = await startBot();
-  assert.equal((await bot.call("POST", "/api/scan/phone-add", { names: ["phone-c3-0002-s.jpg", "../../etc"], paid: "abc" })).status, 200);
+  assert.equal((await bot.call("POST", "/api/scan/phone-add", { names: ["phone-c3-0002-s.jpg", "../../etc"], paid: "abc", by: " Joseph\t" })).status, 200);
   const a = (await bot.call("GET", "/api/scan/phone-adds")).body.find((x) => x.names.includes("phone-c3-0002-s.jpg"));
-  assert.deepEqual([a.names, a.paid, a.cloud], [["phone-c3-0002-s.jpg"], 0, false]);
+  assert.deepEqual([a.names, a.paid, a.by, a.cloud], [["phone-c3-0002-s.jpg"], 0, "Joseph", false]);
+  // and a picture sent straight to this computer (home Wi-Fi or Tailscale) carries its person too
+  const pic = await fetch(bot.base + "/api/scan/inbox?name=phone-c3-0003-s&by=Joseph", { method: "POST", headers: { "content-type": "image/jpeg" }, body: JPEG });
+  assert.equal(pic.status, 200);
+  assert.equal((await bot.call("GET", "/api/scan/inbox")).body.find((x) => x.name === "phone-c3-0003-s.jpg")?.by, "Joseph");
   assert.equal((await bot.call("POST", "/api/scan/phone-add", { names: [] })).status, 400);
   await bot.stop();
 });

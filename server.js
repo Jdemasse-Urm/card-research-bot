@@ -599,6 +599,8 @@ try {
   /* none yet */
 }
 let phoneSaveTimer = null;
+/** Whose phone took a picture ("Joseph", "Dad"): set once on each phone, carried with its pictures and its ＋ Adds (3.22). */
+const phoneBy = (v) => store.clean.str(v, 40);
 const phoneName = (key) => String(key || "").split("|")[0].split("/").pop().match(/^phone-[\w-]+\.jpg$/)?.[0] || null;
 function setPhone(key, patch) {
   const n = phoneName(key);
@@ -647,23 +649,37 @@ app.get("/api/scan/phone-status", (req, res) => {
 });
 let inboxSeenAt = 0; // when the computer's Bulk scan last looked for phone pictures (the phone says if nobody is)
 const qr = (url) => QRCode.toString(url, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
-/** The phone's link: through the MJC store when it's connected (works anywhere), else this computer on the home Wi-Fi. */
+/** This computer's Tailscale address (100.64.0.0/10), if it's on a tailnet — a phone with Tailscale on reaches it there
+ * from anywhere, the same as on the home Wi-Fi. */
+const tailscaleUrl = () => lanUrls().find((u) => /^http:\/\/100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(u)) || null;
+/** A 15-minute sign-in code for a phone: opens this computer's scanner (and, in that browser, the whole bot). */
+function directLink(base) {
+  const k = crypto.randomBytes(16).toString("hex");
+  phoneKeys.set(k, Date.now() + 15 * 60000);
+  return `${base}/phone?k=${k}`;
+}
+/**
+ * The phone's link: through the MJC store when it's connected (works anywhere, any phone), else this computer on the
+ * home Wi-Fi. When this computer is on Tailscale (and shares on the network), also the direct one: straight to this
+ * computer from anywhere, for a phone that has Tailscale on (11/15: Joseph RDPs into it over Tailscale already).
+ */
 async function phoneLink() {
+  const ts = SHARE ? tailscaleUrl() : null;
+  const direct = ts ? { url: directLink(ts), app: `${ts}/`, host: new URL(ts).host, expires: Date.now() + 15 * 60000 } : null;
+  if (direct) direct.svg = await qr(direct.url);
   if (mjc.configured()) {
     try {
       if (!relay.key) relay.key = (await mjc.call("GET", "/admin/scan")).key;
       const url = `${mjc.apiUrl()}/scan/?s=${relay.key}`;
-      return { share: true, cloud: true, url, svg: await qr(url), pageReady: relay.pageSent === VERSION };
+      return { share: true, cloud: true, url, svg: await qr(url), pageReady: relay.pageSent === VERSION, direct };
     } catch (err) {
       // a store from before 3.20 has no scanner yet: the home-Wi-Fi link, if this computer shares on the network
       if (!SHARE) return { share: false, error: `The MJC store's phone scanner didn't answer (${err.message}).` };
     }
   }
   if (!SHARE) return { share: false };
-  const k = crypto.randomBytes(16).toString("hex");
-  phoneKeys.set(k, Date.now() + 15 * 60000);
-  const url = `${lanUrls()[0]}/phone?k=${k}`;
-  return { share: true, url, svg: await qr(url), expires: Date.now() + 15 * 60000 };
+  const url = directLink(lanUrls()[0]);
+  return { share: true, url, svg: await qr(url), expires: Date.now() + 15 * 60000, direct: direct && !url.startsWith(direct.app) ? direct : null };
 }
 app.get("/api/scan/phone-link", async (req, res) => {
   if (!isLoopback(req.socket.remoteAddress)) return res.status(403).json({ error: "Only on the computer running the bot." });
@@ -715,10 +731,10 @@ async function relayTick() {
     // the phone's adds: the store's list is the list (an add another computer finished drops off here too)
     const live = new Set((s.adds || []).map((a) => a.id));
     for (const [id, a] of relay.adds) if (a.cloud && !live.has(id)) relay.adds.delete(id);
-    for (const a of s.adds || []) if (!relay.adds.has(a.id)) relay.adds.set(a.id, { id: a.id, names: a.names || [], paid: a.paid || 0, at: Date.parse(a.at) || Date.now(), cloud: true });
+    for (const a of s.adds || []) if (!relay.adds.has(a.id)) relay.adds.set(a.id, { id: a.id, names: a.names || [], paid: a.paid || 0, by: phoneBy(a.by), at: Date.parse(a.at) || Date.now(), cloud: true });
     if (reading) {
       const first = team.runsJobs();
-      for (const w of (s.waiting || []).slice(0, 12)) if (first || Date.now() - Date.parse(w.at) > 60000) await takeFromStore(w.name);
+      for (const w of (s.waiting || []).slice(0, 12)) if (first || Date.now() - Date.parse(w.at) > 60000) await takeFromStore(w.name, w.by);
     }
     relay.error = null;
   } catch (err) {
@@ -727,8 +743,8 @@ async function relayTick() {
     relay.busy = false;
   }
 }
-/** One waiting picture: claimed (or another computer has it), downloaded into the inbox, then off the store. */
-async function takeFromStore(given) {
+/** One waiting picture: claimed (or another computer has it), downloaded into the inbox, then off the store. by = whose phone. */
+async function takeFromStore(given, by) {
   const name = inboxName(given);
   if (!/^phone-\w+-\d+-[asb]\.jpg$/.test(name)) return;
   let url;
@@ -746,7 +762,7 @@ async function takeFromStore(given) {
     if (buf.length >= 1000 && buf[0] === 0xff && buf[1] === 0xd8) {
       fs.mkdirSync(INBOX, { recursive: true });
       fs.writeFileSync(path.join(INBOX, name), buf);
-      setPhone(name, { stage: "sent", error: null });
+      setPhone(name, { stage: "sent", error: null, by: phoneBy(by) });
     } else setPhone(name, { stage: "error", error: "That wasn't a photo." });
   }
   await mjc.call("DELETE", `/admin/scan/pic/${encodeURIComponent(name)}`);
@@ -787,7 +803,7 @@ app.post("/api/scan/phone-add", (req, res) => {
   if (!names.length) return res.status(400).json({ error: "Which pictures?" });
   const paid = Number.isFinite(+req.body?.paid) && +req.body.paid > 0 ? Math.round(+req.body.paid * 100) / 100 : 0;
   const id = "L" + crypto.randomBytes(5).toString("hex");
-  relay.adds.set(id, { id, names, paid, at: Date.now(), cloud: false });
+  relay.adds.set(id, { id, names, paid, by: phoneBy(req.body?.by), at: Date.now(), cloud: false });
   res.json({ ok: true, id });
 });
 app.get("/api/scan/phone-adds", (req, res) => {
@@ -824,14 +840,14 @@ app.post("/api/scan/inbox", express.raw({ type: "image/jpeg", limit: "16mb" }), 
   // the same name again (a retry after a dropped answer) replaces the picture — never a second copy
   if (fs.existsSync(path.join(TAKEN, name)) || fs.existsSync(path.join(FINISHED, name))) return res.json({ ok: true, name, already: true });
   fs.writeFileSync(path.join(INBOX, name), buf);
-  setPhone(name, { stage: "sent", error: null });
+  setPhone(name, { stage: "sent", error: null, by: phoneBy(req.query.by) });
   res.json({ ok: true, name });
 });
 app.get("/api/scan/inbox", (_req, res) => {
   inboxSeenAt = Date.now();
   let files = [];
   try {
-    files = fs.readdirSync(INBOX).filter((f) => f.endsWith(".jpg")).map((f) => ({ name: f, at: fs.statSync(path.join(INBOX, f)).mtimeMs }));
+    files = fs.readdirSync(INBOX).filter((f) => f.endsWith(".jpg")).map((f) => ({ name: f, at: fs.statSync(path.join(INBOX, f)).mtimeMs, by: phoneStatus.get(f)?.by || "" }));
     // finished pictures are kept a week (a dropped answer re-sent by the phone is recognised), then deleted
     for (const dir of [FINISHED, TAKEN]) if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir)) if (Date.now() - fs.statSync(path.join(dir, f)).mtimeMs > 7 * 86400000) fs.unlinkSync(path.join(dir, f));
   } catch {}

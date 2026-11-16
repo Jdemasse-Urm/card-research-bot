@@ -30,6 +30,8 @@ const thumbOf = (p) => p.thumb || NO_THUMB;
 const PROBLEM = { glare: "glare", blurry: "blurry", cut_off: "cut off by the edge", too_small: "too small", covered: "covered" };
 
 const CLOUD = location.pathname.startsWith("/scan");
+// straight to the computer through its Tailscale address (100.64.0.0/10) — from anywhere while Tailscale is on (3.22)
+const TAILSCALE = !CLOUD && /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(location.hostname);
 // the scanner key is in the address the QR code or Home Screen icon opened (kept, should the page open without it)
 const KEY = CLOUD ? (() => { const k = new URLSearchParams(location.search).get("s"); if (k) ls.set("scanKey", k); return k || ls.get("scanKey", ""); })() : "";
 const json = (body) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -46,9 +48,13 @@ const when = (t) => new Date(t).toLocaleString(undefined, new Date(t).toDateStri
 
 // ---------------------------------------------------------------- this phone's settings (kept on the phone)
 
-const PREF_KEY = { both: "phoneBoth", sound: "phoneSound", awake: "phoneAwake", theme: "phoneTheme", tab: "phoneTab", view: "phoneView", filter: "phoneFilter", sort: "phoneSort" };
+const PREF_KEY = { who: "phoneWho", both: "phoneBoth", sound: "phoneSound", awake: "phoneAwake", theme: "phoneTheme", tab: "phoneTab", view: "phoneView", filter: "phoneFilter", sort: "phoneSort" };
 const prefs = {
-  both: ls.get("phoneBoth", true), // the back has the number, year and set — on unless this phone turned it off
+  // whose phone ("Joseph", "Dad"): asked once, sent with every picture and ＋ Add so the computers can tell (3.22)
+  who: ls.get("phoneWho", ""),
+  // 3.22 (Dad, 11/15: "can we have it just read the front?"): front only unless this phone picks Front + back. A slab's
+  // label names the card; a raw card's number comes from the set's checklist when the player has one number in it.
+  both: ls.get("phoneBoth", false),
   sound: ls.get("phoneSound", false),
   awake: ls.get("phoneAwake", true),
   theme: ls.get("phoneTheme", "auto"),
@@ -322,7 +328,7 @@ function xhr(method, url, { headers = {}, body, onProgress } = {}) {
  */
 async function upload(item, name, onProgress) {
   if (!CLOUD) {
-    if (item.blob) return xhr("POST", "/api/scan/inbox?name=" + encodeURIComponent(name), { headers: { "content-type": "image/jpeg" }, body: item.blob, onProgress });
+    if (item.blob) return xhr("POST", "/api/scan/inbox?name=" + encodeURIComponent(name) + "&by=" + encodeURIComponent(prefs.who), { headers: { "content-type": "image/jpeg" }, body: item.blob, onProgress });
     return fetch("/api/scan/inbox", json({ name, image: item.image }));
   }
   if (!item.blob) return new Response(JSON.stringify({ error: "An old picture from before 3.20 — take it again." }), { status: 400 });
@@ -339,7 +345,7 @@ async function upload(item, name, onProgress) {
   if (!up.ok) return up;
   const { url, headers } = await up.json();
   await putPicture(url, headers, body, onProgress);
-  return api("/scan/sent", json({ name: name + ".jpg" }));
+  return api("/scan/sent", json({ name: name + ".jpg", by: prefs.who }));
 }
 /** Into the store's private folder: the watched way first (progress), then once more the plain way if that fails */
 async function putPicture(url, headers, body, onProgress) {
@@ -599,7 +605,7 @@ async function addPictures(list) {
   const paid = Math.max(0, parseFloat($("#paid").value) || 0);
   $("#addBtn").disabled = true;
   try {
-    const r = await api(API.add, json({ names: list.map((p) => p.name), paid }));
+    const r = await api(API.add, json({ names: list.map((p) => p.name), paid, by: prefs.who }));
     const j = await r.json().catch(() => ({}));
     if (r.status === 401) linkGone = true;
     if (!r.ok) throw new Error(j.error || `The computer said ${r.status}`);
@@ -784,12 +790,13 @@ function drawScan(m) {
     return `<button type="button" data-name="${esc(x.name)}" aria-label="Picture ${x.n}: ${esc(text)}"${x.replacedBy ? ' class="replaced"' : ""}><img alt="" src="${thumbOf(x)}"><span class="no">#${x.n}</span><span class="s ${s}"></span></button>`;
   }).join("") : "");
   for (const seg of [$("#modeSeg"), $("#modeSeg2")]) for (const b of $$("[data-mode]", seg)) b.setAttribute("aria-checked", String((b.dataset.mode === "both") === prefs.both));
-  $("#modeHint").textContent = retakeOf ? `Retake: the next picture replaces #${byName(retakeOf)?.n ?? ""}.` : prefs.both ? (waitingBack != null ? `Now flip #${waitingBack} over and take its back.` : "Take the front, then flip it and take the back.") : "One picture for each card or page.";
+  $("#modeHint").textContent = retakeOf ? `Retake: the next picture replaces #${byName(retakeOf)?.n ?? ""}.` : prefs.both ? (waitingBack != null ? `Now flip #${waitingBack} over and take its back.` : "Take the front, then flip it and take the back.") : "One picture of each card's front, or a binder page.";
   const next = prefs.both ? (waitingBack != null ? [waitingBack, "back"] : [card + 1, "front"]) : [card + 1, ""];
   setHTML($("#shootLbl"), `#${next[0]}${next[1] ? `<small>${next[1]}</small>` : ""}`);
   $("#shoot").setAttribute("aria-label", `Take picture ${next[0]}${next[1] ? ", " + next[1] : ""}`);
   const u = lastUndoable();
   $("#undoBtn").hidden = !u;
+  $("#photosBtn").hidden = Boolean(u); // the same spot: Undo while there's one, Photos the rest of the time
   if (u) $("#undoBtn").textContent = `Undo #${u.n}${u.side === "b" ? " back" : ""}`;
   $("#noBackBtn").hidden = !(prefs.both && waitingBack != null);
   $("#noBackBtn").textContent = `No back for #${waitingBack ?? ""}`;
@@ -956,13 +963,16 @@ function forgetPast() {
 function drawSettings(m) {
   for (const b of $$("#modeSeg2 [data-mode]")) b.setAttribute("aria-checked", String((b.dataset.mode === "both") === prefs.both));
   for (const b of $$("#themeSeg [data-theme]")) b.setAttribute("aria-checked", String(b.dataset.theme === prefs.theme));
+  if (document.activeElement !== $("#whoSet")) $("#whoSet").value = prefs.who;
   $("#sound").checked = prefs.sound;
   $("#awake").checked = prefs.awake;
   $("#awake").disabled = !("wakeLock" in navigator);
   const reading = computerAge != null && computerAge < (CLOUD ? 60 : 20);
   setHTML($("#connText"), CLOUD
-    ? `Straight to Card Research Bot, from anywhere<small>Each picture goes through a private folder in your MJC cloud that only your computers can open — never the website — and is deleted the moment Card Research Bot has it. Works on any Wi-Fi or cell data; with no signal, pictures wait on this phone. ${reading ? `${esc(computerName || "Your computer")} is reading right now.` : "No computer is reading right now — pictures wait in your store until one is open."}</small>`
-    : `Home Wi-Fi, straight to the computer<small>Works on the same Wi-Fi as the computer.${reading ? " It's reading right now." : " It isn't picking up right now — is Card Research Bot open?"}</small>`);
+    ? `Straight to Card Research Bot, from anywhere<small>Each picture goes through a private folder in your MJC cloud that only your computers can open — never the website — and is deleted the moment Card Research Bot has it. Works on any Wi-Fi or cell data; with no signal, pictures wait on this phone. ${reading ? `${esc(computerName || "Your computer")} is reading right now.` : "No computer is reading right now — pictures wait safely in your private cloud folder until one is open."}</small>`
+    : TAILSCALE
+      ? `Straight to the computer, through Tailscale<small>Works anywhere while Tailscale is on, on this phone and the computer.${reading ? " It's reading right now." : " It isn't picking up right now — is Tailscale on, and Card Research Bot open?"}</small>`
+      : `Home Wi-Fi, straight to the computer<small>Works on the same Wi-Fi as the computer.${reading ? " It's reading right now." : " It isn't picking up right now — is Card Research Bot open?"}</small>`);
   setHTML($("#queueText"), m.waiting ? `${plural(m.waiting, "picture")} waiting on this phone<small>${(navigator.onLine === false || sendTrouble === "no signal" || sendTrouble === "can't reach the computer") ? "They go by themselves when there's a signal." : sendTrouble ? `Upload trouble: ${esc(sendTrouble)}. It keeps trying by itself.` : "Sending now."}</small>` : "Nothing waiting on this phone");
   setHTML($("#aboutText"), `What ＋ Add does<small>Cards that read cleanly go into the shared inventory from here. ⚠ ones wait for a check in Bulk scan on a computer. The website changes only from a computer. Lost this phone? On the computer: Bulk scan → 📱 Phone → New link.</small>`);
 }
@@ -1026,16 +1036,20 @@ function retake(p) {
 // ---- first open: how it works (once)
 
 function openWelcome(force) {
-  if (!force && ls.get("phoneWelcome", false)) return;
+  if (!force && ls.get("phoneWelcome", false) && prefs.who) return;
   const homeApp = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
   const apple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const steps = [];
   if (!homeApp) steps.push(`<li><b>Put it on your Home Screen.</b> ${apple ? "Tap Share (on newer iPhones it's under ⋯), then Add to Home Screen → Add." : "Open the browser menu ⋮, then Add to Home screen."} Next time it's one tap, no QR code.</li>`);
-  steps.push(`<li><b>Shoot.</b> Cards on something dark, the phone straight above, then the gold button. Front + back reads the number and set off the back.</li>`);
+  steps.push(`<li><b>Shoot.</b> Cards on something dark, the phone straight above, then the gold button — or <b>Photos</b> for pictures already on the phone. One picture of the front is enough for most cards and every slab; <b>Front + back</b> also reads a raw card's number off its back.</li>`);
   steps.push(`<li><b>Watch them come back.</b> ${CLOUD ? "Your computer reads each picture, from any Wi-Fi or cell data. With no signal they wait here." : "The computer reads each picture over the home Wi-Fi."} Name and value show up in seconds.</li>`);
   steps.push(`<li><b>Add.</b> On the Cards tab, ＋ Add puts the cleanly read cards into the shared inventory. ⚠ ones wait for a check on a computer.</li>`);
-  $("#welcomeBody").innerHTML = `<h2 id="welcomeTitle">Card Scanner</h2><ol class="steps">${steps.join("")}</ol><div class="actions"><button type="button" class="btn gold" id="welcomeGo">Start scanning</button></div>`;
-  $("#welcomeGo").onclick = () => $("#welcome").close();
+  $("#welcomeBody").innerHTML = `<h2 id="welcomeTitle">Card Scanner</h2>
+    <label for="whoFirst"><b>Whose phone is this?</b></label><input class="whoIn" id="whoFirst" maxlength="40" placeholder="Your name" autocomplete="given-name" enterkeyhint="done" value="${esc(prefs.who)}" />
+    <p class="small muted" style="margin:0">The computer shows it on every card scanned and added from this phone.</p>
+    <ol class="steps">${steps.join("")}</ol><div class="actions"><button type="button" class="btn gold" id="welcomeGo">Start scanning</button></div>`;
+  $("#welcomeGo").onclick = () => { setWho($("#whoFirst").value); $("#welcome").close(); };
+  $("#whoFirst").onkeydown = (e) => { if (e.key === "Enter") $("#welcomeGo").click(); };
   $("#welcome").showModal();
 }
 
@@ -1079,7 +1093,7 @@ $(".tabbar [role=tablist]").addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 $("#shoot").onclick = () => { if (!busy) $("#cam").click(); };
-$("#pickBtn").onclick = () => $("#pick").click();
+$("#pickBtn").onclick = $("#photosBtn").onclick = () => $("#pick").click();
 $("#cam").onchange = (e) => takeAll(e.target);
 $("#pick").onchange = (e) => { setTab("scan"); takeAll(e.target); };
 $("#undoBtn").onclick = undoLast;
@@ -1092,7 +1106,7 @@ for (const seg of [$("#modeSeg"), $("#modeSeg2")]) {
     waitingBack = null;
     save();
     draw();
-    say(prefs.both ? "Front + back: the front, then flip it over and take the back." : "One side: one picture for each card or page.");
+    say(prefs.both ? "Front + back: the front, then flip it over and take the back." : "Front only: one picture of each card. Slabs and most cards read from the front.");
   };
 }
 $("#sound").onchange = (e) => { setPref("sound", e.target.checked); if (e.target.checked) beep(880); };
@@ -1117,11 +1131,19 @@ function sendNow() {
 $("#newBtn").onclick = confirmNew;
 $("#forgetBtn").onclick = forgetPast;
 $("#welcomeBtn").onclick = () => openWelcome(true);
+/** The phone's person: trimmed, at most 40 characters, kept on this phone */
+function setWho(v) {
+  const who = String(v || "").replace(/\s+/g, " ").trim().slice(0, 40);
+  if (who === prefs.who) return;
+  setPref("who", who);
+  if (who) say(`Cards from this phone show as ${who}'s.`, "good");
+}
+$("#whoSet").onchange = (e) => setWho(e.target.value);
 $("#addBtn").onclick = () => addPictures(pics.filter(canAdd));
 $("#paid").oninput = drawEst;
 $("#toast").onclick = () => say("");
 $("#shareClose").onclick = () => $("#shareSheet").close();
-$("#welcome").addEventListener("close", () => ls.set("phoneWelcome", true));
+$("#welcome").addEventListener("close", () => { ls.set("phoneWelcome", true); if ($("#whoFirst")) setWho($("#whoFirst").value); }); // swiped away: the name typed still counts
 // a picture, wherever it's shown (the card just read, a card row, a picture tile) opens its sheet
 for (const el of [$("#just"), $("#strip"), $("#cardList"), $("#picGrid")]) el.onclick = (e) => { const b = e.target.closest("[data-name]"); if (b) openDetail(byName(b.dataset.name)); };
 $("#mini").onclick = (e) => { if (e.target.closest("[data-go]")) setTab("cards"); };
